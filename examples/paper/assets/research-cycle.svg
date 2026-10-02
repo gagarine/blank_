@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="280" viewBox="0 0 900 280">
+<rect width="900" height="280" rx="20" fill="#f0f2eb"/>
+<g fill="#ffffff" stroke="#cad4c5" stroke-width="2"><rect x="40" y="80" width="220" height="115" rx="12"/><rect x="340" y="80" width="220" height="115" rx="12"/><rect x="640" y="80" width="220" height="115" rx="12"/></g>
+<g stroke="#748b68" stroke-width="3" fill="none"><path d="M270 137H326m-10-8 10 8-10 8"/><path d="M570 137H626m-10-8 10 8-10 8"/></g>
+<g fill="#3d5540" font-family="Helvetica, Arial, sans-serif" font-size="25" text-anchor="middle"><text x="150" y="145">Observation</text><text x="450" y="145">Evidence</text><text x="750" y="145">Argument</text></g>
+<text x="450" y="244" font-family="Helvetica, Arial, sans-serif" font-size="15" fill="#7c8776" text-anchor="middle">An idea becomes a question. A question becomes a contribution.</text>
+</svg>

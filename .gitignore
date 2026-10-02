@@ -1,0 +1,14 @@
+.tools/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+helper/target/
+build/bin/
+build/helpers/
+.writer-cache/
+*.log
+.DS_Store
+test-results/
+playwright-report/
+
+*.tsbuildinfo
