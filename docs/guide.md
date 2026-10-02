@@ -86,7 +86,7 @@ Agent transactions appear live and record their origin. **Undo latest agent edit
 
 ## Build and check
 
-macOS 15+, Apple Silicon, Xcode Command Line Tools, Node.js 22.12+ (or a compatible newer LTS), npm and Python 3 are needed. Bootstrap installs Go 1.27.1 and Rust 1.98.1 inside ignored `.tools/`, without changing system toolchains:
+macOS 15+, Apple Silicon or Intel, Xcode Command Line Tools, Node.js 22.12+ (or a compatible newer LTS), npm and Python 3 are needed. Bootstrap installs Go 1.27.1 and Rust 1.98.1 inside ignored `.tools/`, without changing system toolchains:
 
 ```sh
 bash scripts/bootstrap.sh
@@ -112,12 +112,14 @@ It contains exactly 150,000 body words, 20 chapters and 1,000 citation entries. 
 
 | Location | Responsibility |
 | --- | --- |
+| `cmd/blank_` | Desktop executable, native macOS bridge and app orchestration |
+| `frontend/assets.go`, `examples/embed.go` | Embedded interface and tutorial assets |
 | `internal/document` | Revisions, validated transactions, selective undo, merge, atomic saving, recovery and directory watching |
 | `internal/engine`, `helper` | Restartable JSON-RPC helper, Typst CST ranges, source cache, compiler, PDF output |
 | `frontend/src/projection.ts` | Conservative rich projection, source serialization and UTF-8/UTF-16 mapping |
 | `frontend/src/RichEditor.tsx` | One ProseMirror document, stable editable DOM, continuous chapter sections |
 | `frontend/src/SourceEditor.tsx`, `PdfPreview.tsx` | CodeMirror, PDF.js and PDF-figure thumbnails |
-| `internal/zotero`, `app.go` | Local Zotero access, stable bibliography entries, shared app operations |
-| `assets.go`, `rpc.go` | Project-local image import, Unix RPC and stdio MCP |
+| `internal/zotero`, `cmd/blank_/app.go` | Local Zotero access, stable bibliography entries, shared app operations |
+| `cmd/blank_/assets.go`, `cmd/blank_/rpc.go` | Project-local image import, Unix RPC and stdio MCP |
 
 Pandoc exchange, cloud collaboration, Word review, visual equation construction, built-in AI chat and Windows/Linux releases remain outside this build.

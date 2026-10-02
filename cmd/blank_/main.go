@@ -1,14 +1,14 @@
 package main
 
 import (
-	"embed"
 	"fmt"
 	"os"
 	"strings"
+
+	"writer/frontend"
 )
 
-//go:embed all:frontend/dist
-var assets embed.FS
+var assets = frontend.Assets
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {

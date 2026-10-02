@@ -84,7 +84,10 @@ func TestTutorialCopiesAreIndependentAndCompileOffline(t *testing.T) {
 	if err != nil || value.(document.Snapshot).Unsaved {
 		t.Fatal(value, err)
 	}
-	packaged, _ := os.ReadFile("examples/Tutorial.typ")
+	packaged, err := os.ReadFile(filepath.Join(repositoryRoot(t), "examples/Tutorial.typ"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(packaged) != tutorialSource {
 		t.Fatal("packaged source changed")
 	}

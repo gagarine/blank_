@@ -29,7 +29,7 @@ var desktop *Desktop
 func runDesktop(first *App) error {
 	d := &Desktop{sessions: make(map[uint]*App)}
 	desktop = d
-	content, err := fs.Sub(assets, "frontend/dist")
+	content, err := fs.Sub(assets, "dist")
 	if err != nil {
 		return err
 	}

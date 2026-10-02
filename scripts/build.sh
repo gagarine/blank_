@@ -3,8 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/env.sh
 npm run build --prefix frontend
-cargo build --release --manifest-path helper/Cargo.toml
-go build -tags desktop,production -trimpath -o build/bin/blank_ .
+cargo build --release --locked --manifest-path helper/Cargo.toml
+go build -tags desktop,production -trimpath -o build/bin/blank_ ./cmd/blank_
 mkdir -p build/bin/blank_.app/Contents/MacOS build/bin/blank_.app/Contents/Resources
 cp build/bin/blank_ build/bin/blank_.app/Contents/MacOS/blank_
 cp helper/target/release/writer-helper build/bin/blank_.app/Contents/MacOS/writer-helper

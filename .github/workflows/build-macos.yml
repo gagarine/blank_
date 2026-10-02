@@ -1,0 +1,85 @@
+name: Build macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build macOS (${{ matrix.artifact }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+            artifact: arm64
+          - runner: macos-26-intel
+            arch: x86_64
+            artifact: intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '2'
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      ARCHIVE_NAME: blank_-macos-${{ matrix.artifact }}.zip
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify runner architecture
+        run: |
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          sw_vers
+          xcodebuild -version
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Cache toolchains and dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .tools/go
+            .tools/gopath/pkg/mod
+            .tools/gocache
+            .tools/cargo
+            .tools/rustup
+            .tools/npm-cache
+            helper/target
+          key: ${{ runner.os }}-${{ runner.arch }}-v1-${{ hashFiles('scripts/bootstrap.sh', 'helper/rust-toolchain.toml', 'go.sum', 'frontend/package-lock.json', 'helper/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: bash scripts/bootstrap.sh
+
+      - name: Build app
+        run: bash scripts/build.sh
+
+      - name: Verify and archive app
+        run: |
+          app=build/bin/blank_.app
+          test "$(lipo -archs "$app/Contents/MacOS/blank_")" = "$EXPECTED_ARCH"
+          test "$(lipo -archs "$app/Contents/MacOS/writer-helper")" = "$EXPECTED_ARCH"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "build/bin/$ARCHIVE_NAME"
+
+      - name: Upload app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: blank_-macos-${{ matrix.artifact }}-${{ github.ref_name }}
+          path: build/bin/${{ env.ARCHIVE_NAME }}
+          if-no-files-found: error
+          compression-level: 0

@@ -21,19 +21,19 @@ func testApp(t *testing.T, text string) *App {
 	}
 	t.Setenv("WRITER_DATA_DIR", t.TempDir())
 	a := NewApp("")
-	a.helper = engine.New(filepath.Join(mustCwd(t), "helper/target/release/writer-helper"))
+	a.helper = engine.New(filepath.Join(repositoryRoot(t), "helper/target/release/writer-helper"))
 	if _, e := a.docs.Open(root); e != nil {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { a.docs.Close(); a.helper.Close() })
 	return a
 }
-func mustCwd(t *testing.T) string {
+func repositoryRoot(t *testing.T) string {
 	s, e := os.Getwd()
 	if e != nil {
 		t.Fatal(e)
 	}
-	return s
+	return filepath.Clean(filepath.Join(s, "..", ".."))
 }
 func dispatchTest(t *testing.T, a *App, method string, args any, agent bool) (any, error) {
 	t.Helper()
@@ -74,7 +74,7 @@ func TestAgentContract(t *testing.T) {
 	}
 }
 func TestCompileSnapshotFailureAndRestart(t *testing.T) {
-	if _, e := os.Stat("helper/target/release/writer-helper"); e != nil {
+	if _, e := os.Stat(filepath.Join(repositoryRoot(t), "helper/target/release/writer-helper")); e != nil {
 		t.Skip("build the helper first")
 	}
 	a := testApp(t, "= Disk title\n\nOriginal.\n")
@@ -105,7 +105,7 @@ func TestCompileSnapshotFailureAndRestart(t *testing.T) {
 	a.docs.Undo("")
 	a.helper.Close()
 	// A replacement helper reuses authoritative buffers, never a separate document session.
-	a.helper = engine.New(filepath.Join(mustCwd(t), "helper/target/release/writer-helper"))
+	a.helper = engine.New(filepath.Join(repositoryRoot(t), "helper/target/release/writer-helper"))
 	recovered, e := a.compile()
 	if e != nil || recovered["pdf"] == nil {
 		t.Fatal("restart", e)
@@ -165,7 +165,7 @@ func TestCitationTransactionOfflineAndStableKeys(t *testing.T) {
 	if _, e = a.docs.Apply(document.Transaction{ProjectID: before.ID, Expected: map[string]uint64{"main.typ": before.Files["main.typ"].Revision}, Edits: []document.Edit{{Path: "main.typ", Start: 0, End: 0, Text: "Still writing.\n"}}, Origin: "user"}); e != nil {
 		t.Fatal("editing while Zotero is unavailable", e)
 	}
-	if _, e = os.Stat("helper/target/release/writer-helper"); e == nil {
+	if _, e = os.Stat(filepath.Join(repositoryRoot(t), "helper/target/release/writer-helper")); e == nil {
 		result, e := a.compile()
 		if e != nil || result["pdf"] == nil {
 			t.Fatal("offline compile", result, e)

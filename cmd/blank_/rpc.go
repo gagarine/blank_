@@ -204,7 +204,7 @@ func (a *App) serveDev() error {
 			}
 		}
 	})
-	sub, e := fs.Sub(assets, "frontend/dist")
+	sub, e := fs.Sub(assets, "dist")
 	if e != nil {
 		return e
 	}

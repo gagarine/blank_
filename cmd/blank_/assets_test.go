@@ -42,7 +42,7 @@ func TestImportFiguresPreservesOriginals(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = os.Stat("helper/target/release/writer-helper"); e == nil {
+	if _, e = os.Stat(filepath.Join(repositoryRoot(t), "helper/target/release/writer-helper")); e == nil {
 		out, e := a.compile()
 		if e != nil || out["pdf"] == nil {
 			t.Fatal("image compile", out, e)
@@ -61,7 +61,7 @@ func TestImportFiguresPreservesOriginals(t *testing.T) {
 	}
 }
 func TestNewTemplatesCompile(t *testing.T) {
-	if _, e := os.Stat("helper/target/release/writer-helper"); e != nil {
+	if _, e := os.Stat(filepath.Join(repositoryRoot(t), "helper/target/release/writer-helper")); e != nil {
 		t.Skip("build helper")
 	}
 	for _, kind := range []string{"article", "thesis"} {

@@ -1,16 +1,15 @@
 package main
 
 import (
-	_ "embed"
 	"encoding/json"
 	"os"
 	"path/filepath"
 
+	"writer/examples"
 	"writer/internal/document"
 )
 
-//go:embed examples/Tutorial.typ
-var tutorialSource string
+var tutorialSource = examples.Tutorial
 
 func (a *App) openDemo() (document.Snapshot, error) {
 	return a.openDraft("Tutorial.typ", tutorialSource, "tutorial-")
