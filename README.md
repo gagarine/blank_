@@ -6,7 +6,7 @@ We couldn’t resist adding [one more Typst editor](https://days-since-last-typs
 
 A quiet macOS app for academic writing in [Typst](https://typst.app). Write comfortably, edit the source, and preview the typeset PDF. Your documents stay ordinary `.typ` files on your computer.
 
-![Five-second demo: add a title, bold text, toggle contents, search Zotero, and preview](docs/media/demo.gif)
+![Quiet demo: start a new document, type bold and italic markup, insert a Zotero citation, and preview](docs/media/demo.gif)
 
 - Rich writing, Typst source editing, and PDF preview with shortcuts to switch views.
 - Multi-file manuscripts, a table of contents, images, tables, and PDF export.
@@ -23,7 +23,7 @@ bash scripts/build.sh
 open build/bin/blank_.app
 ```
 
-Version tags such as `v0.1.0` trigger the [macOS build workflow](https://github.com/gagarine/blank_/actions/workflows/build-macos.yml) on GitHub’s latest stable macOS runners for Apple Silicon and Intel. Download the `blank_-macos-arm64-<tag>` or `blank_-macos-intel-<tag>` artifact from its run and unzip the app. Branch pushes and pull requests do not trigger builds.
+Version tags such as `v0.1.0` trigger the [macOS build workflow](https://github.com/gagarine/blank_/actions/workflows/build-macos.yml) on GitHub’s latest stable macOS runners for Apple Silicon and Intel. The workflow generates checksums and publishes both app ZIPs to [GitHub Releases](https://github.com/gagarine/blank_/releases). Download the ZIP for your Mac and unzip the app. Branch pushes and pull requests do not trigger builds.
 
 Start with **New Document**, open an existing `.typ` file, or try **Tutorial**. Use `⌘1` to write, `⌘2` for source, `⌘3` for preview, and `⌘K` for commands.
 
