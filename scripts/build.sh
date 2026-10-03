@@ -17,7 +17,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "Built target/$native_profile/blank_"
   exit 0
 fi
-native_bundle="build/bin/blank_.app"
+native_bundle="target/$native_profile/bundle/blank_.app"
 mkdir -p "$native_bundle/Contents/MacOS"
 cp "target/$native_profile/blank_" "$native_bundle/Contents/MacOS/blank_"
 cp target/release/writer-helper "$native_bundle/Contents/MacOS/writer-helper"

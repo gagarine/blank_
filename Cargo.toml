@@ -21,7 +21,7 @@ arboard = { version = "3", default-features = false }
 [workspace]
 members = [".", "crates/document", "crates/typst-helper"]
 default-members = ["."]
-exclude = ["tools/library-assessment"]
+exclude = ["crates/library-assessment"]
 resolver = "3"
 
 [profile.dev]

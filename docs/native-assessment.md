@@ -4,12 +4,12 @@ The Rust desktop application on `codex/rust-native-prototype`. No JavaScript, em
 
 ```sh
 scripts/dev.sh --demo
-scripts/build.sh         # build/bin/blank_.app on macOS
+scripts/build.sh         # target/release/bundle/blank_.app on macOS
 scripts/build.sh --debug # faster iteration
 scripts/check.sh
 ```
 
-The first build downloads dependencies. Subsequent checks can use Cargo's `--offline` flag. The build scripts use the repository-local Rust/Cargo setup.
+The first build downloads dependencies. Subsequent checks can use Cargo's `--offline` flag. The build scripts use a normal Rust/Cargo installation, with an optional ignored repository-local toolchain.
 
 ## Current behavior
 
@@ -51,7 +51,7 @@ Core timing includes the source patch, incremental parser and rebuilding the par
 ```sh
 source scripts/env.sh
 cargo run --release --manifest-path crates/document/Cargo.toml --locked --example measure -- 1000
-cargo test --manifest-path tools/library-assessment/Cargo.toml --locked
+cargo test --manifest-path crates/library-assessment/Cargo.toml --locked
 ```
 
 A real idle redraw bug was found: sending the Cocoa window title on every frame caused a feedback loop. Before the fix the debug tutorial window consumed approximately 45–52% CPU. Caching title changes brought the sampled debug Write window to approximately 3.6% CPU; that intermediate build still occupied about 132 MiB of physical memory. Those are intermediate measurements, not the final release numbers.
@@ -66,7 +66,7 @@ Compare complete process trees, using the same Activity Monitor metric. The user
 |---|---|---|
 | eframe/egui + egui_richedit 0.7.0 | Implemented, compiled, exercised real input and actual macOS windows | Best current prototype fit: fast iteration, default controls, editor transactions target our own model. Production choice remains provisional. |
 | GPUI + gpui-component 0.7 | Source and documented Editor/TextView APIs inspected; not built or benchmarked | Strong source editor and retained UI. Its rich TextView displays formatted content; it does not remove the need for a structured WYSIWYG editor. Worth a second GUI spike if egui's input/layout limits become blocking. |
-| text-document 1.12.5 + text-typeset | text-document built in isolated `tools/library-assessment/`; two tests cover Unicode cursors/change events/undo and formatting/table undo. Companion typesetter docs inspected, not integrated | Promising richer structure and table ecosystem. No Qt runtime dependency despite Qt-inspired API. Would need a lossless Typst adapter. Baseline model pulls in substantial import/export dependencies: 212 resolved packages in this isolated test. |
+| text-document 1.12.5 + text-typeset | text-document built in isolated `crates/library-assessment/`; two tests cover Unicode cursors/change events/undo and formatting/table undo. Companion typesetter docs inspected, not integrated | Promising richer structure and table ecosystem. No Qt runtime dependency despite Qt-inspired API. Would need a lossless Typst adapter. Baseline model pulls in substantial import/export dependencies: 212 resolved packages in this isolated test. |
 | Parley 0.11.1 | Source and official docs inspected | Strong shaping/layout foundation and basic plain editor; a structured editing UI, tables and source adapter still have to be built. Good candidate for future typography and multilingual input work. |
 | Iced text_editor | Official API inspected | Useful default multiline source editor; no ready-made structured document editor established in this assessment. Changing toolkit alone does not solve the rich editor model. |
 

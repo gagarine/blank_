@@ -1,8 +1,6 @@
 .tools/
 /target/
 **/target/
-build/bin/
-build/helpers/
 .writer-cache/
 *.log
 .DS_Store

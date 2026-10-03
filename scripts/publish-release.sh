@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 : "${GH_REPO:?Set GH_REPO to the intended repository}"
 : "${RELEASE_TAG:?Set RELEASE_TAG to the release version tag}"
 
-assets="${1:-build/bin/releases}"
+assets="${1:-target/releases}"
 files=("$assets/blank_-macos-arm64.zip" "$assets/blank_-macos-intel.zip" "$assets/SHA256SUMS")
 for file in "${files[@]}"; do
   test -f "$file"
