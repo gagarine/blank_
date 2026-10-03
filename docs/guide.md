@@ -14,7 +14,9 @@ Type `/` to open a menu beside the insertion point. Continue typing to filter, u
 
 ## Source and preview
 
-Source (⌘2) fills the editing area with syntax-colored Typst. Parentheses, brackets, braces and quotes pair, selected text can be wrapped, closing characters can be skipped and Backspace removes an empty pair. Pairing is basic; language-context-sensitive completion and IME composition remain work to validate.
+Source (⌘2) fills the editing area with syntax-colored Typst. Headings are larger, and literal bold/italic markup uses the corresponding font faces, including nested marks and `#strong[...]` / `#emph[...]` content. All syntax remains visible; copying a selection puts only its exact plain Typst text on the clipboard. Presentation follows parsed literal markup rather than evaluating arbitrary Typst style code.
+
+Parentheses, brackets, braces and quotes pair, selected text can be wrapped, closing characters can be skipped and Backspace removes an empty pair. Pairing is basic; language-context-sensitive completion and IME composition remain work to validate.
 
 Preview (⌘3) compiles through the bundled Rust Typst helper. Invalid source shows diagnostics and preserves the last successful preview. Clicking preview text chooses the nearest source anchor. Export PDF requires a successful current document revision. Write and Source do not rasterize previews.
 

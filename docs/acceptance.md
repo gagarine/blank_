@@ -7,10 +7,10 @@ The application now lives in a Rust Cargo workspace. The previous Go/Wails and f
 ## Evidence
 
 - Document transaction tests cover exact source preservation, Unicode boundaries, nested formatting, empty insertion slots, Return, list continuation/exit, source grouping, block moves/duplication/deletion and shared history.
-- Actual egui input tests cover typing and undo, character-by-character heading/list spacing, repeated Return and joins, formatting shortcuts, slash filtering and cancellation, command navigation, source pair insertion/deletion and accessibility focus-node validity.
+- Actual egui input tests cover typing and undo, character-by-character heading/list spacing, repeated Return and joins, formatting shortcuts, slash filtering and cancellation, command navigation, source pair insertion/deletion and accessibility focus-node validity. Source layout tests cover heading sizes and nested bold/italic faces without styling code literals. A copy-and-replace input test checks exact plain Typst clipboard output across Unicode text and different source font sizes, followed by shared undo.
 - Compiler integration checks exercise the exact original tutorial, PDF bytes, native PNG pages, source maps, invalid-source diagnostics and compatibility of requests without native rendering.
 - The macOS packaged application has been launched and visually inspected for the tutorial typography/sidebar, caret-anchored slash menu and full-area colored source view and successful two-page tutorial preview. Native menus, keyboard Undo, slash-to-heading conversion, heading spacing, block command popup and Option-arrow block movement have been exercised. The pointer-drag regression passes through actual egui input; native automation did not establish a completed pointer drag, which remains a manual acceptance item.
-- All 33 application/document tests and both isolated library-assessment tests pass. Clippy runs with warnings denied. Standard Cargo checks and tests use the root workspace. `bash scripts/check.sh` is the reproducible validation entry point.
+- All 35 application/document tests and both isolated library-assessment tests pass. Clippy runs with warnings denied. Standard Cargo checks and tests use the root workspace. `bash scripts/check.sh` is the reproducible validation entry point.
 
 ## Current boundaries
 

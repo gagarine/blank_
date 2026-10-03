@@ -1,26 +1,46 @@
-use blank_document::{HighlightTag as Tag, highlights};
+use blank_document::{HighlightTag as Tag, source_highlights};
 use eframe::egui::{
     self, Color32, FontId, Id, Key, Modifiers, TextFormat,
     text::{CCursor, CCursorRange, CharIndex, LayoutJob},
 };
 
 pub fn layout(text: &str) -> LayoutJob {
-    let base = TextFormat::simple(FontId::monospace(14.0), Color32::from_rgb(52, 58, 55));
+    let base = TextFormat::simple(
+        FontId::new(14.0, egui::FontFamily::Name("source".into())),
+        Color32::from_rgb(52, 58, 55),
+    );
     let mut job = LayoutJob::default();
     let mut at = 0;
-    for (range, tag) in highlights(text) {
+    for run in source_highlights(text) {
+        let range = run.range;
         if range.start > at {
             job.append(&text[at..range.start], 0.0, base.clone());
         }
         let mut format = base.clone();
-        format.color = match tag {
-            Tag::Comment => Color32::from_rgb(142, 149, 136),
-            Tag::Keyword | Tag::Error => Color32::from_rgb(151, 83, 71),
-            Tag::Number | Tag::MathDelimiter => Color32::from_rgb(114, 97, 139),
-            Tag::String | Tag::Function | Tag::Heading | Tag::Strong | Tag::Emph => {
+        format.font_id.size = match run.style.heading {
+            0 => 14.0,
+            1 => 24.0,
+            2 => 20.0,
+            3 => 17.0,
+            _ => 15.0,
+        };
+        format.font_id.family = egui::FontFamily::Name(
+            match (run.style.bold || run.style.heading > 0, run.style.italic) {
+                (false, false) => "source",
+                (true, false) => "source-bold",
+                (false, true) => "source-italic",
+                (true, true) => "source-bold-italic",
+            }
+            .into(),
+        );
+        format.color = match run.tag {
+            Some(Tag::Comment) => Color32::from_rgb(142, 149, 136),
+            Some(Tag::Keyword | Tag::Error) => Color32::from_rgb(151, 83, 71),
+            Some(Tag::Number | Tag::MathDelimiter) => Color32::from_rgb(114, 97, 139),
+            Some(Tag::String | Tag::Function | Tag::Heading | Tag::Strong | Tag::Emph) => {
                 Color32::from_rgb(66, 104, 84)
             }
-            Tag::Ref | Tag::Label | Tag::Link | Tag::Interpolated => {
+            Some(Tag::Ref | Tag::Label | Tag::Link | Tag::Interpolated) => {
                 Color32::from_rgb(69, 105, 129)
             }
             _ => base.color,
@@ -76,6 +96,45 @@ pub fn pairs(ctx: &egui::Context, id: Id, text: &str) -> Option<CCursorRange> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn format_at<'a>(job: &'a LayoutJob, needle: &str) -> &'a TextFormat {
+        let byte = job.text.find(needle).unwrap();
+        &job.sections
+            .iter()
+            .find(|section| section.byte_range.contains(&egui::text::ByteIndex(byte)))
+            .unwrap()
+            .format
+    }
+
+    #[test]
+    fn source_typography_follows_nested_markup_without_styling_code_literals() {
+        let text = "= Title *bold _nested_*\n== Section\n=== Detail\n\nPlain *bold* _italic_ #strong[call #emph[both]]\n`*literal*`\n// *comment*\n#let x = \"*string*\"";
+        let job = layout(text);
+        assert_eq!(job.text, text);
+        for (needle, size) in [("Title", 24.0), ("Section", 20.0), ("Detail", 17.0)] {
+            assert_eq!(format_at(&job, needle).font_id.size, size);
+        }
+        for (needle, family) in [
+            ("Plain", "source"),
+            ("bold", "source-bold"),
+            ("italic", "source-italic"),
+            ("nested", "source-bold-italic"),
+            ("call", "source-bold"),
+            ("both", "source-bold-italic"),
+            ("literal", "source"),
+            ("comment", "source"),
+            ("string", "source"),
+        ] {
+            assert_eq!(
+                format_at(&job, needle).font_id.family,
+                egui::FontFamily::Name(family.into()),
+                "{needle}"
+            );
+        }
+        assert_eq!(format_at(&job, "Plain").font_id.size, 14.0);
+        // Syntax delimiters remain visible and present in the exact source.
+        assert_eq!(format_at(&job, "= Title").font_id.size, 24.0);
+    }
+
     #[test]
     fn highlighting_preserves_unicode_and_every_source_byte() {
         let text = "// café\n#set text(size: 11pt)\n= Heading\n*bold* and $x + 2$";

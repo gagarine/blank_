@@ -679,6 +679,17 @@ fn edit_nodes(nodes: &[Inline], source: &str, from: usize, to: usize, insert: &s
 
 // Recognize only literal strong/emph content calls. Dynamic calls stay opaque.
 fn static_style(node: &SyntaxNode, start: usize) -> Option<Inline> {
+    let (mark, body, offset) = static_style_body(node, start)?;
+    let children = collect_inline(body, offset);
+    let len = children.iter().map(|n| n.len).sum();
+    Some(Inline {
+        range: start..start + node.len(),
+        kind: InlineKind::Styled(mark, children, offset..offset + body.len()),
+        len,
+    })
+}
+
+fn static_style_body(node: &SyntaxNode, start: usize) -> Option<(Mark, &SyntaxNode, usize)> {
     if node.kind() != SyntaxKind::FuncCall {
         return None;
     }
@@ -712,13 +723,7 @@ fn static_style(node: &SyntaxNode, start: usize) -> Option<Inline> {
     if offset != start + prefix.len() || offset + body.len() + 1 != start + node.len() {
         return None;
     }
-    let children = collect_inline(body, offset);
-    let len = children.iter().map(|n| n.len).sum();
-    Some(Inline {
-        range: start..start + node.len(),
-        kind: InlineKind::Styled(mark, children, offset..offset + body.len()),
-        len,
-    })
+    Some((mark, body, offset))
 }
 
 fn collect_inline(node: &SyntaxNode, start: usize) -> Vec<Inline> {
@@ -1164,27 +1169,82 @@ fn project(source: &Source) -> (Vec<Paragraph>, Vec<Block>) {
     (ps, grouped)
 }
 
-/// Disjoint syntax runs for a source editor, using Typst's own highlight tags.
-pub fn highlights(text: &str) -> Vec<(Range<usize>, typst_syntax::Tag)> {
+/// Literal markup typography, independent of syntax-token color. Nested marks
+/// retain their parent style even when a child has a different highlight tag.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub heading: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct SourceHighlight {
+    pub range: Range<usize>,
+    pub tag: Option<typst_syntax::Tag>,
+    pub style: SourceStyle,
+}
+
+/// Disjoint, lossless syntax runs with presentation derived from Typst's AST.
+/// This styles literal markup; it does not evaluate arbitrary Typst code.
+pub fn source_highlights(text: &str) -> Vec<SourceHighlight> {
     fn visit(
         node: typst_syntax::LinkedNode<'_>,
         parent: Option<typst_syntax::Tag>,
-        out: &mut Vec<(Range<usize>, typst_syntax::Tag)>,
+        mut style: SourceStyle,
+        mut styled_body: Option<(Range<usize>, Mark)>,
+        out: &mut Vec<SourceHighlight>,
     ) {
         let tag = typst_syntax::highlight(&node).or(parent);
-        if node.get().children().next().is_none() {
-            if let Some(tag) = tag {
-                out.push((node.range(), tag));
+        if let Some((range, mark)) = &styled_body
+            && *range == node.range()
+        {
+            match mark {
+                Mark::Bold => style.bold = true,
+                Mark::Italic => style.italic = true,
             }
+            styled_body = None;
+        }
+        match node.kind() {
+            SyntaxKind::Strong => style.bold = true,
+            SyntaxKind::Emph => style.italic = true,
+            SyntaxKind::Heading => {
+                style.heading = node.get().cast::<ast::Heading>().unwrap().depth().get();
+            }
+            _ => {}
+        }
+        if let Some((mark, body, offset)) = static_style_body(node.get(), node.range().start) {
+            styled_body = Some((offset..offset + body.len(), mark));
+        }
+        if node.get().children().next().is_none() {
+            out.push(SourceHighlight {
+                range: node.range(),
+                tag,
+                style,
+            });
         } else {
             for child in node.children() {
-                visit(child, tag, out);
+                visit(child, tag, style, styled_body.clone(), out);
             }
         }
     }
     let root = typst_syntax::parse(text);
     let mut out = vec![];
-    visit(typst_syntax::LinkedNode::new(&root), None, &mut out);
+    visit(
+        typst_syntax::LinkedNode::new(&root),
+        None,
+        SourceStyle::default(),
+        None,
+        &mut out,
+    );
     out
+}
+
+/// Syntax-color-only compatibility view.
+pub fn highlights(text: &str) -> Vec<(Range<usize>, typst_syntax::Tag)> {
+    source_highlights(text)
+        .into_iter()
+        .filter_map(|run| run.tag.map(|tag| (run.range, tag)))
+        .collect()
 }
 pub use typst_syntax::Tag as HighlightTag;

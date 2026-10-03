@@ -84,8 +84,73 @@ pub fn install(ctx: &egui::Context) -> bool {
             .unwrap()
             .insert(0, "interface".into());
     }
+    install_source_faces(&mut fonts);
     ctx.set_fonts(fonts);
     real_faces
+}
+
+fn install_source_faces(fonts: &mut egui::FontDefinitions) {
+    let faces = if let Ok(bytes) = std::fs::read("/System/Library/Fonts/Menlo.ttc") {
+        Some(
+            (0..4)
+                .map(|index| {
+                    let mut data = egui::FontData::from_owned(bytes.clone());
+                    data.index = index;
+                    data
+                })
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        [
+            [
+                "C:/Windows/Fonts/consola.ttf",
+                "C:/Windows/Fonts/consolab.ttf",
+                "C:/Windows/Fonts/consolai.ttf",
+                "C:/Windows/Fonts/consolaz.ttf",
+            ],
+            [
+                "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf",
+                "/usr/share/fonts/truetype/liberation2/LiberationMono-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation2/LiberationMono-Italic.ttf",
+                "/usr/share/fonts/truetype/liberation2/LiberationMono-BoldItalic.ttf",
+            ],
+            [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Oblique.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-BoldOblique.ttf",
+            ],
+        ]
+        .iter()
+        .find_map(|paths| {
+            paths
+                .iter()
+                .map(|path| std::fs::read(path).map(egui::FontData::from_owned))
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+        })
+    };
+    let fallback = fonts.families[&egui::FontFamily::Monospace].clone();
+    for (index, name) in [
+        "source",
+        "source-bold",
+        "source-italic",
+        "source-bold-italic",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut family = fallback.clone();
+        if let Some(faces) = &faces {
+            fonts
+                .font_data
+                .insert(name.into(), faces[index].clone().into());
+            family.insert(0, name.into());
+        }
+        fonts
+            .families
+            .insert(egui::FontFamily::Name(name.into()), family);
+    }
 }
 
 pub fn paragraph(p: &Paragraph, width: f32, real_faces: bool, number: usize) -> ParagraphJob {

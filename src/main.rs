@@ -1901,6 +1901,44 @@ mod app_tests {
         assert_eq!(app.model.document.text(), "First\n\nSecond");
     }
     #[test]
+    fn source_copy_keeps_plain_typst_across_heading_sizes_and_nested_marks() {
+        let text = "// note\n= Héading\n\n*bold _nested_* and #strong[call]\n";
+        let (ctx, mut app) = setup(text);
+        app.switch_mode(Mode::Source, &ctx);
+        frame(&ctx, &mut app, vec![]);
+        let from = text.find('H').unwrap();
+        let to = text.find(" and").unwrap();
+        let start = text[..from].chars().count();
+        let end = text[..to].chars().count();
+        let id = Id::new(SOURCE_ID);
+        let mut state = egui::TextEdit::load_state(&ctx, id).unwrap();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(egui::text::CharIndex(start)),
+                egui::text::CCursor::new(egui::text::CharIndex(end)),
+            )));
+        state.store(&ctx, id);
+        let output = frame(&ctx, &mut app, vec![egui::Event::Copy]);
+        assert!(output.platform_output.commands.iter().any(|command| {
+            matches!(command, egui::OutputCommand::CopyText(copied) if copied == &text[from..to])
+        }));
+        assert_eq!(app.model.document.text(), text);
+
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Text("Replacement".into())],
+        );
+        assert_eq!(
+            app.model.document.text(),
+            format!("{}Replacement{}", &text[..from], &text[to..])
+        );
+        app.history(false);
+        assert_eq!(app.model.document.text(), text);
+    }
+
+    #[test]
     fn source_pair_insertion_skip_and_backspace_use_shared_history() {
         let (ctx, mut app) = setup("#let x = ");
         app.mode = Mode::Source;
