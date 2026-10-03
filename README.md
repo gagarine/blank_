@@ -18,7 +18,7 @@ bash scripts/build.sh --debug    # faster app iteration
 bash scripts/check.sh
 ```
 
-On macOS the packaged app is `build/bin/blank-native.app`. Its separate name allows existing builds to remain usable during evaluation. On other platforms, the build script places both executables in `target/release/` (or the app in `target/debug/` with `--debug`). macOS is the platform currently exercised.
+On macOS the packaged app is `build/bin/blank_.app`. On other platforms, the build script places both executables in `target/release/` (or the app in `target/debug/` with `--debug`). macOS is the platform currently exercised.
 
 Standard Cargo commands work from the repository root:
 

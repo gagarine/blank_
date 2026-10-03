@@ -4,7 +4,7 @@ The Rust desktop application on `codex/rust-native-prototype`. No JavaScript, em
 
 ```sh
 scripts/dev.sh --demo
-scripts/build.sh         # build/bin/blank-native.app on macOS
+scripts/build.sh         # build/bin/blank_.app on macOS
 scripts/build.sh --debug # faster iteration
 scripts/check.sh
 ```

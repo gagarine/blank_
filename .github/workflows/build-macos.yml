@@ -65,8 +65,8 @@ jobs:
 
       - name: Verify and archive app
         run: |
-          app=build/bin/blank-native.app
-          test "$(lipo -archs "$app/Contents/MacOS/blank-native")" = "$EXPECTED_ARCH"
+          app=build/bin/blank_.app
+          test "$(lipo -archs "$app/Contents/MacOS/blank_")" = "$EXPECTED_ARCH"
           test "$(lipo -archs "$app/Contents/MacOS/writer-helper")" = "$EXPECTED_ARCH"
           codesign --verify --deep --strict --verbose=2 "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" "build/bin/$ARCHIVE_NAME"

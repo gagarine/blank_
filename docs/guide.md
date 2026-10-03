@@ -1,6 +1,6 @@
 # Using the Rust prototype
 
-Open `build/bin/blank-native.app`, or run `bash scripts/dev.sh --demo`. File → Open accepts a `.typ` file. New Document creates an unsaved document in the current window; replacing unsaved writing prompts first. Multi-window sessions are not yet ported.
+Open `build/bin/blank_.app`, or run `bash scripts/dev.sh --demo`. File → Open accepts a `.typ` file. New Document creates an unsaved document in the current window; replacing unsaved writing prompts first. Multi-window sessions are not yet ported.
 
 ## Writing
 
