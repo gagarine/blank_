@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import json, pathlib, subprocess, time, statistics, argparse
-p=argparse.ArgumentParser();p.add_argument('project',nargs='?',default='.tools/thesis-fixture');p.add_argument('--helper',default='helper/target/release/writer-helper');args=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('project',nargs='?',default='.tools/thesis-fixture');p.add_argument('--helper',default='target/release/writer-helper');args=p.parse_args()
 root=pathlib.Path(args.project).resolve();files={str(f.relative_to(root)):f.read_text() for f in root.rglob('*') if f.suffix in ['.typ','.bib']}
 proc=subprocess.Popen([args.helper],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
 def request(method,params):

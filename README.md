@@ -2,35 +2,49 @@
 
 **Made using AI (OpenAI Codex). Open source under the [MIT license](LICENSE).**
 
-We couldn’t resist adding [one more Typst editor](https://days-since-last-typst-editor.samake.se).
+A quiet native Rust app for writing in Typst. Write, edit source, and preview typeset pages; documents stay ordinary local `.typ` files. This branch uses egui/eframe without a webview, JavaScript or Qt.
 
-A quiet macOS app for academic writing in [Typst](https://typst.app). Write comfortably, edit the source, and preview the typeset PDF. Your documents stay ordinary `.typ` files on your computer.
-
-![Quiet demo: start a new document, type bold and italic markup, insert a Zotero citation, and preview](docs/media/demo.gif)
-
-- Rich writing, Typst source editing, and PDF preview with shortcuts to switch views.
-- Multi-file manuscripts, a table of contents, images, tables, and PDF export.
-- Optional local Zotero citations and an MCP adapter for agents.
-- Offline compilation with a bundled Typst helper and fonts.
+The Rust implementation is a prototype. It includes a structured, source-preserving editor, shared undo, macOS menus, a contents sidebar, inline `/` commands, Cmd-K, syntax-colored source editing, and PDF preview/export. Some features of the earlier application still need porting; see [current validation and boundaries](docs/acceptance.md).
 
 ## Build and run
 
-Requires macOS 15+ on Apple Silicon or Intel, Xcode Command Line Tools, Node.js 22.12+ (or a compatible newer LTS), npm, and Python 3. Bootstrap installs local Go and Rust toolchains.
+Requires Rust 1.98 or newer. On macOS, install Xcode Command Line Tools; Python 3 is used for the compiler integration check. No separate Typst installation is needed.
 
 ```sh
 bash scripts/bootstrap.sh
-bash scripts/build.sh
-open build/bin/blank_.app
+bash scripts/dev.sh --demo       # debug app, optimized compiler
+bash scripts/build.sh            # release app bundle
+bash scripts/build.sh --debug    # faster app iteration
+bash scripts/check.sh
 ```
 
-Version tags such as `v0.1.0` trigger the [macOS build workflow](https://github.com/gagarine/blank_/actions/workflows/build-macos.yml) on GitHub’s latest stable macOS runners for Apple Silicon and Intel. The workflow generates checksums and publishes both app ZIPs to [GitHub Releases](https://github.com/gagarine/blank_/releases). Download the ZIP for your Mac and unzip the app. Branch pushes and pull requests do not trigger builds.
+On macOS the packaged app is `build/bin/blank-native.app`. Its separate name allows existing builds to remain usable during evaluation. On other platforms, the build script places both executables in `target/release/` (or the app in `target/debug/` with `--debug`). macOS is the platform currently exercised.
 
-Start with **New Document**, open an existing `.typ` file, or try **Tutorial**. Use `⌘1` to write, `⌘2` for source, `⌘3` for preview, and `⌘K` for commands.
+Standard Cargo commands work from the repository root:
 
-This is an early development build, signed ad hoc for local use. See the [guide](docs/guide.md) for setup and features and the [acceptance notes](docs/acceptance.md) for validation and remaining work. The GIF shows the same editor running in browser development mode.
+```sh
+cargo check
+cargo test --workspace
+cargo run -- --demo
+cargo run -- path/to/document.typ
+```
 
-## Contribute
+Build the helper with `cargo build --release -p writer-helper` before previewing. The development script does this automatically; `BLANK_HELPER` can specify an explicit helper executable.
 
-The Go executable lives in `cmd/blank_/`, with shared packages in `internal/`; `frontend/` contains the web interface and `helper/` the Rust compiler helper.
+Use ⌘1 / ⌘2 / ⌘3 for Write / Source / Preview and ⌘K for commands. Tutorial in the native Help menu opens an editable copy of [the original tutorial](examples/Tutorial.typ). The tutorial is preserved exactly and includes instructions for features still awaiting a Rust port.
 
-Issues and pull requests are welcome. Run `bash scripts/check.sh` before submitting code changes. Contributions use the [MIT license](LICENSE); third-party dependencies retain their own licenses.
+## Project structure
+
+| Path | Purpose |
+|---|---|
+| `src/` | Native desktop UI, rich editor adapter, menus, typography and preview worker |
+| `crates/document/` | GUI-independent Typst source model and editing transactions |
+| `crates/typst-helper/` | Background Typst compiler, PDF/PNG rendering and source maps |
+| `tests/` | Compiler protocol and rendering integration checks |
+| `examples/` | Original tutorial and sample document assets |
+| `tools/library-assessment/` | Isolated alternative editor-model evaluation, outside the application workspace |
+| `docs/` | Usage, validation and GUI/editor library assessment |
+
+One root Cargo workspace, lockfile and toolchain configuration cover the application and compiler. Go/Wails, the web frontend, and their build/test configuration are removed from this branch; the previous implementation is preserved on `codex/legacy-go` and in Git history.
+
+Read [the guide](docs/guide.md) and [library assessment](docs/native-assessment.md). Contributions are welcome; run `bash scripts/check.sh` before submitting changes. Dependencies retain their own licenses.

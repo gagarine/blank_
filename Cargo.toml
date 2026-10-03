@@ -1,0 +1,33 @@
+[package]
+name = "blank-native"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+
+[dependencies]
+eframe = { version = "=0.36.2", default-features = false, features = ["default_fonts", "glow", "x11", "wayland", "accesskit"] }
+egui_richedit = "=0.7.0"
+blank-document = { path = "crates/document" }
+rfd = "0.17"
+serde_json = "1"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "=0.21.0", default-features = false }
+arboard = { version = "3", default-features = false }
+
+[workspace]
+members = [".", "crates/document", "crates/typst-helper"]
+default-members = ["."]
+exclude = ["tools/library-assessment"]
+resolver = "3"
+
+[profile.dev]
+debug = 1
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true

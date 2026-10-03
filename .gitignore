@@ -1,14 +1,9 @@
 .tools/
-node_modules/
-frontend/node_modules/
-frontend/dist/
-helper/target/
+/target/
+**/target/
 build/bin/
 build/helpers/
 .writer-cache/
 *.log
 .DS_Store
-test-results/
-playwright-report/
-
-*.tsbuildinfo
+__pycache__/

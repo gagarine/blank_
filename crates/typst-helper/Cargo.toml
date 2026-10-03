@@ -1,0 +1,20 @@
+[package]
+name = "writer-helper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+typst = "=0.15.1"
+typst-syntax = "=0.15.1"
+typst-pdf = "=0.15.1"
+typst-layout = "=0.15.1"
+typst-kit = { version = "=0.15.1", features = ["embedded-fonts", "scan-fonts", "system-packages", "datetime"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+comemo = "0.5"
+typst-render = { version = "=0.15.1", optional = true }
+
+[features]
+default = ["native-preview"]
+native-preview = ["dep:typst-render"]

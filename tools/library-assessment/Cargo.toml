@@ -1,0 +1,11 @@
+[package]
+name = "blank-library-assessment"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# An independent workspace keeps alternative engines out of the app's build.
+[workspace]
+
+[dependencies]
+text-document = "=1.12.5"
