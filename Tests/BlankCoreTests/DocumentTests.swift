@@ -76,6 +76,81 @@ final class DocumentTests {
         XCTAssertTrue(b.source.hasPrefix("= Second")); XCTAssertTrue(b.source.contains("== Child\n\n#custom"))
         b.undo(); XCTAssertEqual(b.source,original)
     }
+    func testFormatTogglePreservesOtherMarks() {
+        let b = DocumentBuffer("plain *bold and _italic_* tail")
+        let range = NSRange(location:6,length:15)
+        b.format(range,italic:false)
+        XCTAssertEqual(b.projection.text,"plain bold and italic tail")
+        XCTAssertFalse(b.projection.blocks[0].inlines.flatMap(\.runs).contains { $0.style.bold })
+        XCTAssertTrue(b.projection.blocks[0].inlines.flatMap(\.runs).contains { $0.style.italic })
+        b.format(range,italic:false)
+        XCTAssertTrue(b.projection.blocks[0].inlines.flatMap(\.runs).contains { $0.style.bold })
+    }
+    func testIncrementalSpacesAndUnicode() {
+        let b = DocumentBuffer()
+        let text = "A quiet café 👩🏽‍💻"
+        for character in text.unicodeScalars {
+            let at = b.projection.displayOffset(at:b.selection.focus)
+            b.editWrite(NSRange(location:at,length:0),text:String(character))
+        }
+        XCTAssertEqual(b.projection.text,text)
+        b.undo(); XCTAssertEqual(b.source,"")
+    }
+    func testLocalProjectionMatchesFullParse() {
+        let original = "// keep\n#set text(size: 11pt)\n\n= Heading\n\nA *bold* paragraph.\n\n- An _item_\n\n#custom(1)\n\nLast 👋 paragraph."
+        let b = DocumentBuffer(original)
+        for index in [2,3,5] {
+            guard b.projection.blocks.indices.contains(index), b.projection.blocks[index].editable else { continue }
+            let block = b.projection.blocks[index]
+            b.editWrite(NSRange(location:block.display.location+min(2,block.display.length),length:0),text:"café")
+            let full = DocumentBuffer(b.source)
+            XCTAssertEqual(b.projection.text,full.projection.text)
+            XCTAssertEqual(b.projection.blocks.map(\.source),full.projection.blocks.map(\.source))
+            for offset in 0...b.projection.text.utf16.count { XCTAssertEqual(b.projection.sourceOffset(at:offset),full.projection.sourceOffset(at:offset)) }
+        }
+        XCTAssertTrue(b.source.hasPrefix("// keep\n#set text(size: 11pt)"))
+        XCTAssertEqual(b.parsed.tree.end,b.source.utf8.count)
+    }
+    func testTypingInsideFormattingKeepsWrappers() {
+        let b = DocumentBuffer("A *bold* and #link(\"https://typst.app\")[café].")
+        b.editWrite(NSRange(location:4,length:0),text:"X")
+        XCTAssertEqual(b.source,"A *boXld* and #link(\"https://typst.app\")[café].")
+        XCTAssertFalse(b.parsed.erroneous)
+        let link = (b.projection.text as NSString).range(of:"café")
+        b.editWrite(NSRange(location:link.location+3,length:1),text:"è")
+        XCTAssertTrue(b.source.contains("[cafè]")); XCTAssertFalse(b.parsed.erroneous)
+        b.undo(); b.undo(); XCTAssertEqual(b.source,"A *bold* and #link(\"https://typst.app\")[café].")
+    }
+    func testEmptyStructuredBlockInsertion() {
+        for (kind,level,prefix) in [("heading",2,"== "),("bullet",0,"- "),("number",0,"+ ")] {
+            let b = DocumentBuffer(); b.setKind(0,kind:kind,level:level)
+            for c in "A café" { b.editWrite(NSRange(location:b.projection.text.utf16.count,length:0),text:String(c)) }
+            XCTAssertEqual(b.source,prefix+"A café"); XCTAssertEqual(b.projection.blocks[0].kind,kind)
+            XCTAssertEqual(b.projection.text,"A café")
+        }
+    }
+    func testExplicitFormattingInsideWords() {
+        let b = DocumentBuffer("word")
+        b.format(NSRange(location:1,length:2),italic:false)
+        XCTAssertEqual(b.projection.text,"word"); XCTAssertFalse(b.parsed.erroneous)
+        var style = TextStyle(); style.bold = true
+        let empty = DocumentBuffer(); empty.editWrite(NSRange(location:0,length:0),text:"A",styleOverride:style)
+        XCTAssertEqual(empty.projection.text,"A"); XCTAssertTrue(empty.projection.blocks[0].editable)
+        empty.editWrite(NSRange(location:1,length:0),text:"B",styleOverride:style)
+        style.bold = false; empty.editWrite(NSRange(location:2,length:0),text:"C",styleOverride:style)
+        XCTAssertEqual(empty.projection.text,"ABC"); XCTAssertFalse(empty.parsed.erroneous)
+        XCTAssertFalse(empty.projection.blocks[0].inlines.flatMap(\.runs).last!.style.bold)
+    }
+    func testIncludesAndStatistics() {
+        let b = DocumentBuffer("// #include \"ignored.typ\"\n#include \"chapters/one.typ\"\n\n= Title\n\nHello *café* 👋\n\n#let hidden = \"not prose\"\n\n#table(columns: 2, [One], [Two])")
+        XCTAssertEqual(b.includes.map(\.path),["chapters/one.typ"])
+        XCTAssertEqual(b.counts.words,5); XCTAssertEqual(b.counts.headings,1)
+        XCTAssertEqual(b.counts.characters,"TitleHello café 👋OneTwo".unicodeScalars.count)
+        b.editSource(NSRange(location:b.source.utf16.count,length:0),text:"\n\nMore words")
+        XCTAssertEqual(b.counts.words,7); b.undo(); XCTAssertEqual(b.counts.words,5)
+        let cell = DocumentBuffer("#table(columns: 1, [#link(\"https://typst.app\")[A]])")
+        XCTAssertEqual(cell.projection.blocks[0].tableCells.count,1)
+    }
     func testRandomUnicodePatchRoundtrip() {
         let pool = ["a","é","😀","中","e\u{301}","\n","*","\\"]
         for i in 0..<200 {
@@ -93,6 +168,7 @@ func XCTAssertFalse(_ value: Bool,file: StaticString = #file,line: UInt = #line)
 func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,line: UInt = #line) { XCTAssertTrue(a < b,file:file,line:line) }
 @main enum CoreChecks {
     static func main() {
+        setbuf(stdout,nil)
         let t = DocumentTests()
         let tests: [(String,()->Void)] = [
             ("Unicode source mapping",t.testUnicodeSourceOffsets),
@@ -104,6 +180,13 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Cross-mark deletion",t.testCrossMarkupDeletionRemainsValid),
             ("Consecutive code",t.testConsecutiveCodeBlocksStayTogether),
             ("Section movement",t.testMoveSectionPreservesNestedSource),
+            ("Formatting toggles",t.testFormatTogglePreservesOtherMarks),
+            ("Incremental spaces and Unicode",t.testIncrementalSpacesAndUnicode),
+            ("Local projection equals full parsing",t.testLocalProjectionMatchesFullParse),
+            ("Typing inside formatting",t.testTypingInsideFormattingKeepsWrappers),
+            ("Empty headings and lists",t.testEmptyStructuredBlockInsertion),
+            ("Formatting inside words",t.testExplicitFormattingInsideWords),
+            ("Literal includes and prose statistics",t.testIncludesAndStatistics),
             ("Unicode patch round trips",t.testRandomUnicodePatchRoundtrip)
         ]
         for (name,test) in tests { test(); print("PASS: \(name)") }

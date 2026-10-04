@@ -26,6 +26,7 @@ public struct SyntaxStyle: Codable {
 public struct ParsedSource: Codable {
     public var tree: SyntaxNode
     public var styles: [SyntaxStyle]
+    public var erroneous: Bool = false
     public static func parse(_ source: String) -> ParsedSource {
         // NUL is valid document content; JSON transport must not truncate it.
         if source.contains("\0") {

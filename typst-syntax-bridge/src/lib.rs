@@ -35,7 +35,7 @@ pub unsafe extern "C" fn blank_parse(source: *const c_char) -> *mut c_char {
         let root = typst_syntax::parse(text);
         let mut runs = vec![];
         styles(LinkedNode::new(&root), &mut runs);
-        CString::new(json!({"tree":node(&root,0),"styles":runs}).to_string())
+        CString::new(json!({"tree":node(&root,0),"styles":runs,"erroneous":!root.errors_and_warnings().0.is_empty()}).to_string())
             .unwrap()
             .into_raw()
     });

@@ -41,7 +41,26 @@ public struct RichFragment: Codable {
 }
 public final class DocumentBuffer {
     public private(set) var source: String
-    public private(set) var parsed: ParsedSource
+    private var parsedCache: ParsedSource?
+    private var hasSyntaxErrors = false
+    public private(set) var includes: [LiteralInclude] = []
+    private var countsRevision = -1
+    private var countsCache = TextCounts()
+    public var counts: TextCounts {
+        if countsRevision == revision { return countsCache }
+        var counts = TextCounts()
+        func add(_ text: String) { let next = TextCounts.count(text); counts.words += next.words; counts.characters += next.characters }
+        for block in projection.blocks {
+            if block.editable { add(block.text); if block.kind == "heading" { counts.headings += 1 } }
+            else if block.kind == "table" { for cell in block.tableCells { add(DocumentBuffer(source.bytes(cell)).projection.text) } }
+        }
+        countsCache = counts; countsRevision = revision; return countsCache
+    }
+    public var parsed: ParsedSource {
+        if let cache = parsedCache { return cache }
+        let parsed = ParsedSource.parse(source); parsedCache = parsed; return parsed
+    }
+    public private(set) var lastEditWasLocal = false
     public private(set) var projection: Projection
     public private(set) var revision: Int = 0
     public var selection = EditSelection(0, 0)
@@ -50,7 +69,8 @@ public final class DocumentBuffer {
     public var canRedo: Bool { !redoSteps.isEmpty }
     public var historyBytes: Int { (undoSteps + redoSteps).reduce(0) { $0+$1.bytes } }
     public init(_ text: String = "") {
-        source = text; parsed = ParsedSource.parse(text); projection = Projection(source: text, parsed: parsed)
+        source = text; let parsed = ParsedSource.parse(text); parsedCache = parsed; hasSyntaxErrors = parsed.erroneous; projection = Projection(source: text, parsed: parsed)
+        includes = literalIncludes(text,parsed)
     }
     public func breakUndoGroup() { if !undoSteps.isEmpty { undoSteps[undoSteps.count-1].group = "" } }
     @discardableResult public func commit(_ text: String, selection after: EditSelection, group: String = "", now: TimeInterval = Date.timeIntervalSinceReferenceDate) -> Bool {
@@ -62,13 +82,36 @@ public final class DocumentBuffer {
         } else { undoSteps.append(HistoryStep(patches: [patch], before: before, after: after, group: group, time: now)) }
         redoSteps.removeAll()
         while undoSteps.count > 1 && (undoSteps.count > 200 || historyBytes > 8*1024*1024) { undoSteps.removeFirst() }
-        assign(text); selection = after; return true
+        assign(text,patch:patch); selection = after; return true
     }
     public func loadExternal(_ text: String) {
         guard text != source else { return }; undoSteps.removeAll(); redoSteps.removeAll(); assign(text)
         selection = EditSelection(min(selection.anchor, source.utf8.count), min(selection.focus, source.utf8.count))
     }
-    private func assign(_ text: String) { source = text; parsed = ParsedSource.parse(text); projection = Projection(source: text, parsed: parsed); revision += 1 }
+    private func assign(_ text: String, patch: SourcePatch? = nil) {
+        lastEditWasLocal = false
+        // Conservative local reparse: one text block, no newline or structural
+        // boundary change. Unknown code and cross-block edits always take the full path.
+        if !hasSyntaxErrors, let patch, !patch.inserted.contains("\n"), !patch.removed.contains("\n"),
+           let index = projection.blocks.firstIndex(where:{ $0.editable && patch.start >= $0.body.start && patch.start+patch.removed.utf8.count <= $0.body.end }) {
+            let old = projection.blocks[index], delta = patch.inserted.utf8.count-patch.removed.utf8.count
+            let raw = text.bytes(ByteSpan(old.source.start,old.source.end+delta))
+            if !raw.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && !raw.contains("#include") && !source.bytes(old.source).contains("#include") {
+                let parsed = ParsedSource.parse(raw), local = Projection(source:raw,parsed:parsed)
+                if !parsed.erroneous, local.blocks.count == 1, local.blocks[0].kind == old.kind, local.blocks[0].level == old.level {
+                    var blocks = projection.blocks
+                    blocks[index] = local.blocks[0].shifted(by:old.source.start)
+                    for i in blocks.indices where i > index { blocks[i] = blocks[i].shifted(by:delta) }
+                    source = text; parsedCache = nil; projection = Projection(blocks:blocks)
+                    includes = includes.map { item in var item = item; if item.source.start >= patch.start { item.source = ByteSpan(item.source.start+delta,item.source.end+delta) }; return item }
+                    revision += 1; lastEditWasLocal = true; return
+                }
+            }
+        }
+        source = text; let fresh = ParsedSource.parse(text); parsedCache = fresh; hasSyntaxErrors = fresh.erroneous
+        includes = literalIncludes(text,fresh)
+        projection = Projection(source:text,parsed:fresh); revision += 1
+    }
     public func undo() {
         guard let step = undoSteps.popLast() else { return }
         var text = source
@@ -86,7 +129,7 @@ public final class DocumentBuffer {
         let end = span.start+text.utf8.count
         commit(source.replacingBytes(span, with: text), selection: EditSelection(end,end), group: text.contains("\n") ? "" : group)
     }
-    public func editWrite(_ range: NSRange, text: String, raw: Bool = false, group: String = "write") {
+    public func editWrite(_ range: NSRange, text: String, raw: Bool = false, group: String = "write", styleOverride: TextStyle? = nil) {
         let first = projection.blockIndex(at: range.location), last = projection.blockIndex(at: NSMaxRange(range))
         let a = projection.blocks[first], b = projection.blocks[last]
         let from = max(0, range.location-a.display.location), to = min(b.display.length, max(0, NSMaxRange(range)-b.display.location))
@@ -96,6 +139,23 @@ public final class DocumentBuffer {
             commit(source.replacingBytes(ByteSpan(start,end), with: insert), selection: EditSelection(start+insert.utf8.count,start+insert.utf8.count), group: group)
             return
         }
+        // A replacement inside one literal run keeps its existing wrappers in
+        // place. Splitting a bold run into adjacent *...* chunks is not valid
+        // Typst markup at every word boundary.
+        if first == last, !raw, !text.contains("\n"), !text.contains("\r") {
+            var offset = 0
+            for run in a.inlines.flatMap(\.runs) {
+                let end = offset+run.text.utf16.count
+                if run.literal, from >= offset, to <= end, styleOverride == nil || (styleOverride!.bold == run.style.bold && styleOverride!.italic == run.style.italic) {
+                    let start = run.source.start+run.text.byteOffset(utf16:from-offset)
+                    let finish = run.source.start+run.text.byteOffset(utf16:to-offset), inserted = escapeTypst(text)
+                    let caret = start+inserted.utf8.count
+                    commit(source.replacingBytes(ByteSpan(start,finish),with:inserted),selection:EditSelection(caret,caret),group:group)
+                    return
+                }
+                offset = end
+            }
+        }
         let prefix = sliceInlines(a.inlines, 0, min(from,a.display.length), source: source)
         let suffix = sliceInlines(b.inlines, to, b.display.length, source: source)
         var inserted = raw ? text : escapeTypst(text)
@@ -104,14 +164,19 @@ public final class DocumentBuffer {
             inserted = inserted.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
             let delimiter = a.kind == "bullet" ? "\n- " : a.kind == "number" ? "\n+ " : "\n\n"
             inserted = inserted.replacingOccurrences(of: "\n", with: delimiter)
-            if !text.contains("\n"), let style = styleAt(a, offset: from), !text.isEmpty {
-                if style.italic { inserted = "_" + inserted + "_" }
-                if style.bold { inserted = "*" + inserted + "*" }
+            if !text.contains("\n"), let style = styleOverride ?? styleAt(a, offset: from), !text.isEmpty {
+                if style.italic { inserted = styleOverride == nil ? "_"+inserted+"_" : "#emph["+inserted+"]" }
+                if style.bold { inserted = styleOverride == nil ? "*"+inserted+"*" : "#strong["+inserted+"]" }
             }
         }
-        let replacement = prefix + inserted + suffix
+        var replacement = prefix + inserted + suffix
+        let expectedText = (a.text as NSString).substring(to:min(from,a.display.length))+text+(b.text as NSString).substring(from:to)
+        if styleOverride != nil && (ParsedSource.parse(replacement).erroneous || first == last && Projection(source:replacement,parsed:ParsedSource.parse(replacement)).text != expectedText) {
+            replacement = sliceInlines(a.inlines,0,min(from,a.display.length),source:source,explicitMarks:true)+inserted+sliceInlines(b.inlines,to,b.display.length,source:source,explicitMarks:true)
+        }
         let span = ByteSpan(a.body.start,b.body.end)
-        let caret = span.start + prefix.utf8.count + inserted.utf8.count
+        let prefixLength = replacement == prefix+inserted+suffix ? prefix.utf8.count : sliceInlines(a.inlines,0,min(from,a.display.length),source:source,explicitMarks:true).utf8.count
+        let caret = span.start + prefixLength + inserted.utf8.count
         commit(source.replacingBytes(span, with: replacement), selection: EditSelection(caret,caret), group: text.contains("\n") || raw ? "" : group)
     }
     private func styleAt(_ b: ProjectedBlock, offset: Int) -> TextStyle? {
@@ -144,11 +209,20 @@ public final class DocumentBuffer {
             let a = max(0,range.location-b.display.location), z = min(b.display.length,NSMaxRange(range)-b.display.location)
             guard z > a else { continue }
             let wrapper = italic ? "_" : "*"
-            let middle = sliceInlines(b.inlines,a,z,source: source)
-            let selectedRuns = b.inlines.flatMap(\.runs)
-            let remove = selectedRuns.allSatisfy { italic ? $0.style.italic : $0.style.bold }
-            let styled = remove && middle.hasPrefix(wrapper) && middle.hasSuffix(wrapper) ? String(middle.dropFirst().dropLast()) : wrapper+middle+wrapper
-            let replacement = sliceInlines(b.inlines,0,a,source:source)+styled+sliceInlines(b.inlines,z,b.display.length,source:source)
+            var offset = 0
+            let selectedRuns = b.inlines.flatMap(\.runs).filter { run in
+                defer { offset += run.text.utf16.count }
+                return offset < z && offset+run.text.utf16.count > a
+            }
+            let remove = !selectedRuns.isEmpty && selectedRuns.allSatisfy { italic ? $0.style.italic : $0.style.bold }
+            let unmarked = sliceInlines(b.inlines,a,z,source:source,removingMark:italic ? 2 : 1)
+            let styled = remove ? unmarked : wrapper+unmarked+wrapper
+            var replacement = sliceInlines(b.inlines,0,a,source:source)+styled+sliceInlines(b.inlines,z,b.display.length,source:source)
+            let styledParsed = ParsedSource.parse(replacement)
+            if styledParsed.erroneous || Projection(source:replacement,parsed:styledParsed).text != b.text {
+                let explicit = remove ? unmarked : (italic ? "#emph[" : "#strong[")+unmarked+"]"
+                replacement = sliceInlines(b.inlines,0,a,source:source,explicitMarks:true)+explicit+sliceInlines(b.inlines,z,b.display.length,source:source,explicitMarks:true)
+            }
             text = text.replacingBytes(b.body,with:replacement)
         }
         let oldStart = projection.sourceOffset(at: range.location), oldEnd = projection.sourceOffset(at: NSMaxRange(range))

@@ -4,7 +4,7 @@ import PDFKit
 import BlankCore
 
 // The macOS 27 CLT SDK exposes a State macro without its plugin.
-// Name the stable property-wrapper type explicitly; supports macOS 14+.
+// Name the stable property-wrapper type explicitly.
 typealias NativeState<Value> = SwiftUI.State<Value>
 
 struct SlashCommand: Identifiable {
@@ -61,31 +61,20 @@ struct EditorRoot: View {
     @ObservedObject var session: DocumentSession
     @NativeState private var collapsed = Set<Int>()
     @NativeState private var draggingHeading: Int?
+    var chrome: Color { Color(nsColor:.windowBackgroundColor) }
     var body: some View {
         VStack(spacing:0) {
-            HStack(spacing:16) {
-                Text("blank_").font(.system(size:24,weight:.semibold,design:.serif)).tracking(-1.3)
-                Rectangle().fill(Color.primary.opacity(0.12)).frame(width:1,height:15)
-                Text(session.title).font(.system(size:12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).frame(maxWidth:.infinity,alignment:.leading)
-                HStack(spacing:2) {
-                    ForEach(EditorMode.allCases,id:\.self) { mode in
-                        Button { session.switchMode(mode) } label: { Text(mode.rawValue).font(.system(size:11,weight:session.mode == mode ? .medium : .regular)).padding(.horizontal,14).padding(.vertical,7).background(session.mode == mode ? Color.white : .clear).clipShape(RoundedRectangle(cornerRadius:5)) }.buttonStyle(.plain)
-                    }
-                }.padding(3).background(Color.black.opacity(0.035)).clipShape(RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(Color.black.opacity(0.10),lineWidth:0.5))
-                Spacer().frame(width:16)
-                Button { session.exportPDF() } label: { Image(systemName:"square.and.arrow.up").font(.system(size:13)) }.buttonStyle(.plain).help("Export PDF")
-            }.padding(.horizontal,26).frame(height:62).background(Color.white)
-            Divider().opacity(0.6)
             if session.searchVisible { searchBar }
+            if session.mode == .preview { previewControls }
             HStack(spacing:0) {
                 if session.sidebar { contents.frame(width:235); Divider() }
                 ZStack(alignment:.leading) {
                     if session.mode == .preview { PreviewView(session:session) }
-                    else { NativeEditor(session:session) }
+                    else { NativeEditor(session:session).ignoresSafeArea(.container,edges:.top) }
                     if !session.sidebar {
                         Color.clear.frame(width:18).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
                         if session.sidebarHover && !session.headings.isEmpty {
-                            contents.frame(width:235).background(Color.white).shadow(color:.black.opacity(0.07),radius:12,x:4).onHover { session.sidebarHover = $0 }.transition(.opacity)
+                            contents.frame(width:235).background(chrome).shadow(color:.black.opacity(0.07),radius:12,x:4).onHover { session.sidebarHover = $0 }.transition(.opacity)
                         }
                     }
                 }
@@ -104,8 +93,8 @@ struct EditorRoot: View {
                 Spacer()
                 Button { session.sheet = .statistics } label: { Text("\(wordCount) words").font(.system(size:10)).foregroundStyle(.secondary) }.buttonStyle(.plain)
                 Text("⌘K").font(.system(size:10)).foregroundStyle(.tertiary).padding(.leading,18)
-            }.padding(.horizontal,26).frame(height:30).background(Color.white)
-        }.frame(minWidth:660,minHeight:420).background(Color.white).preferredColorScheme(.light)
+            }.padding(.horizontal,26).frame(height:30).background(chrome)
+        }.frame(minWidth:660,minHeight:420).background(chrome).preferredColorScheme(session.dark ? .dark : nil)
         .sheet(item:$session.sheet) { sheet in
             switch sheet {
             case .commands: CommandsSheet(session:session)
@@ -114,10 +103,23 @@ struct EditorRoot: View {
             case .insertion: InsertionSheet(session:session)
             case .object: ObjectSheet(session:session)
             case .conflict: ConflictSheet(session:session)
+            case .rename: RenameSheet(session:session)
             }
         }
+        .onChange(of:session.dark) { _,dark in session.window?.appearance = dark ? NSAppearance(named:.darkAqua) : nil }
     }
-    var wordCount: Int { session.buffer.projection.text.split { $0.isWhitespace || $0.isNewline }.count }
+    var wordCount: Int { session.buffer.counts.words }
+    var previewControls: some View {
+        HStack(spacing:12) {
+            if session.compiling { ProgressView().controlSize(.mini); Text("Typesetting…").font(.system(size:10)).foregroundStyle(.secondary) }
+            Spacer()
+            Button { session.goPage(session.previewPage-1) } label: { Image(systemName:"chevron.left") }.disabled(session.previewPage <= 1)
+            TextField("Page",value:$session.previewPage,format:.number).frame(width:36).textFieldStyle(.roundedBorder).onSubmit { session.goPage(session.previewPage) }
+            Text("of \(session.pdf?.pageCount ?? 0)").foregroundStyle(.secondary)
+            Button { session.goPage(session.previewPage+1) } label: { Image(systemName:"chevron.right") }.disabled(session.previewPage >= (session.pdf?.pageCount ?? 0))
+            Spacer()
+        }.font(.system(size:11)).controlSize(.small).padding(.horizontal,24).frame(height:35)
+    }
     var searchBar: some View {
         HStack(spacing:8) {
             Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
@@ -125,12 +127,13 @@ struct EditorRoot: View {
             Button { session.find(next:false) } label: { Image(systemName:"chevron.up") }
             Button { session.find() } label: { Image(systemName:"chevron.down") }
             Toggle("Aa",isOn:$session.caseSensitive).toggleStyle(.button).help("Match case")
+            Toggle("Project",isOn:$session.projectSearch).toggleStyle(.button).help("Search included files")
             Divider().frame(height:18)
             TextField("Replace",text:$session.replaceText).frame(maxWidth:170)
             Button("Replace") { session.replace() }; Button("All") { session.replace(all:true) }
             Spacer()
             Button { session.searchVisible = false; session.window?.makeFirstResponder(session.editor) } label: { Image(systemName:"xmark") }
-        }.font(.system(size:11)).controlSize(.small).padding(.horizontal,24).padding(.vertical,9).background(Color.white)
+        }.font(.system(size:11)).controlSize(.small).padding(.horizontal,24).padding(.vertical,9).background(chrome)
     }
     var visibleHeadings: [(Int,ProjectedBlock)] {
         var hiddenLevel: Int?
@@ -169,7 +172,7 @@ struct EditorRoot: View {
                 }.padding(.horizontal,16)
             }
             Spacer(minLength:0)
-        }.background(Color.white)
+        }.background(chrome)
     }
 }
 struct PreviewView: NSViewRepresentable {
@@ -198,7 +201,7 @@ final class NavigablePDFView: PDFView {
         let height = page.bounds(for:.mediaBox).height
         let pageNumber = document.index(for:page)+1
         if let nearest = session.sourceMap.filter({ ($0["page"] as? Int) == pageNumber }).min(by: {
-            abs(($0["y"] as? Double ?? 0)-(height-point.y)) < abs(($1["y"] as? Double ?? 0)-(height-point.y))
+            abs(($0["y"] as? Double ?? 0)-(height-point.y)/height) < abs(($1["y"] as? Double ?? 0)-(height-point.y)/height)
         }), let path = nearest["path"] as? String, let byte = nearest["start"] as? Int, let buffer = session.buffers[path] {
             session.active = path; buffer.selection = EditSelection(byte,byte)
         }

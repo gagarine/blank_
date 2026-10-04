@@ -22,6 +22,12 @@ public indirect enum Inline {
         case let .group(_, _, _, nodes): return nodes.reduce(0) { $0 + $1.length }
         }
     }
+    public func shifted(by delta: Int) -> Inline {
+        switch self {
+        case let .text(t,s,style,literal): return .text(t,ByteSpan(s.start+delta,s.end+delta),style,literal)
+        case let .group(s,prefix,suffix,nodes): return .group(ByteSpan(s.start+delta,s.end+delta),prefix,suffix,nodes.map { $0.shifted(by:delta) })
+        }
+    }
     public var runs: [TextRun] {
         switch self {
         case let .text(t, s, style, literal): return [TextRun(text: t, source: s, style: style, literal: literal)]
@@ -29,7 +35,7 @@ public indirect enum Inline {
         }
     }
     // Slice only affected inline syntax. Completely retained nodes keep their original bytes.
-    public func slice(_ start: Int, _ end: Int, source: String) -> String {
+    public func slice(_ start: Int, _ end: Int, source: String, removingMark: Int? = nil, explicitMarks: Bool = false) -> String {
         guard start < end else { return "" }
         switch self {
         case let .text(t, span, _, literal):
@@ -40,17 +46,20 @@ public indirect enum Inline {
             }
             return escapeTypst((t as NSString).substring(with: NSRange(location: start, length: end-start)))
         case let .group(span, prefix, suffix, nodes):
-            if start == 0 && end == length { return source.bytes(span) }
-            let body = sliceInlines(nodes, start, end, source: source)
-            return body.isEmpty ? "" : prefix + body + suffix
+            if start == 0 && end == length && removingMark == nil && !explicitMarks { return source.bytes(span) }
+            let body = sliceInlines(nodes, start, end, source: source, removingMark: removingMark,explicitMarks:explicitMarks)
+            let remove = removingMark == 1 && (prefix == "*" || prefix.hasPrefix("#strong")) || removingMark == 2 && (prefix == "_" || prefix.hasPrefix("#emph"))
+            let head = explicitMarks && prefix == "*" ? "#strong[" : explicitMarks && prefix == "_" ? "#emph[" : prefix
+            let tail = explicitMarks && (prefix == "*" || prefix == "_") ? "]" : suffix
+            return body.isEmpty ? "" : remove ? body : head + body + tail
         }
     }
 }
-public func sliceInlines(_ nodes: [Inline], _ start: Int, _ end: Int, source: String) -> String {
+public func sliceInlines(_ nodes: [Inline], _ start: Int, _ end: Int, source: String, removingMark: Int? = nil, explicitMarks: Bool = false) -> String {
     var offset = 0, result = ""
     for node in nodes {
         let a = max(0, start-offset), b = min(node.length, end-offset)
-        if b > a { result += node.slice(a, b, source: source) }
+        if b > a { result += node.slice(a, b, source: source, removingMark: removingMark,explicitMarks:explicitMarks) }
         offset += node.length
     }
     return result
@@ -65,6 +74,14 @@ public struct ProjectedBlock {
     public var tableCells: [ByteSpan] = []
     public var columns: Int = 0
     public var text: String { inlines.flatMap(\.runs).map(\.text).joined() }
+    public func shifted(by delta: Int) -> ProjectedBlock {
+        var copy = self
+        copy.source = ByteSpan(source.start+delta,source.end+delta)
+        copy.body = ByteSpan(body.start+delta,body.end+delta)
+        copy.inlines = inlines.map { $0.shifted(by:delta) }
+        copy.tableCells = tableCells.map { ByteSpan($0.start+delta,$0.end+delta) }
+        return copy
+    }
     public var editable: Bool { !["source", "table", "image", "equation"].contains(kind) }
     public func sourceOffset(_ position: Int, endBias: Bool = false) -> Int {
         var at = 0
@@ -83,12 +100,22 @@ public struct ProjectedBlock {
 public struct Projection {
     public var blocks: [ProjectedBlock]
     public var text: String
+    public init(blocks: [ProjectedBlock]) {
+        var blocks = blocks, text = "", offset = 0
+        for index in blocks.indices {
+            if index > 0 { text += "\n"; offset += 1 }
+            let body = blocks[index].text, length = body.utf16.count
+            blocks[index].display = NSRange(location:offset,length:length)
+            text += body; offset += length
+        }
+        self.blocks = blocks; self.text = text
+    }
     public init(source: String, parsed: ParsedSource) {
         var result: [ProjectedBlock] = [], pending: [SyntaxNode] = []
         func block(_ n: SyntaxNode, kind: String, body: SyntaxNode? = nil, level: Int = 0) -> ProjectedBlock {
             let body = body ?? n
             return ProjectedBlock(kind: kind, level: level, source: n.span, body: body.span,
-                inlines: inline(body.children.isEmpty ? [body] : body.children, source: source))
+                inlines: body.span.count == 0 ? [] : inline(body.children.isEmpty ? [body] : body.children, source: source))
         }
         func flush() {
             if pending.allSatisfy({ source.bytes($0.span).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { pending.removeAll(); return }
@@ -107,7 +134,17 @@ public struct Projection {
             if ["Heading", "ListItem", "EnumItem"].contains(n.kind), let body = n.markup {
                 flush()
                 let level = source.bytes(n.span).prefix { $0 == "=" }.count
-                result.append(block(n, kind: n.kind == "Heading" ? "heading" : n.kind == "ListItem" ? "bullet" : "number", body: body, level: level))
+                var projected = block(n, kind: n.kind == "Heading" ? "heading" : n.kind == "ListItem" ? "bullet" : "number", body: body, level: level)
+                if i+1 < nodes.count, nodes[i+1].kind == "Space" {
+                    let spaces = String(source.bytes(nodes[i+1].span).prefix { $0 == " " || $0 == "\t" }), padding = spaces.utf8.count
+                    projected.source.end += padding
+                    if body.span.count == 0 { projected.body = ByteSpan(body.start+padding,body.end+padding) }
+                    else if padding > 0 {
+                        projected.body.end += padding
+                        projected.inlines.append(.text(spaces,ByteSpan(n.end,n.end+padding),TextStyle(),true))
+                    }
+                }
+                result.append(projected)
                 i += 1; continue
             }
             if ["LineComment", "BlockComment"].contains(n.kind) {
@@ -117,6 +154,9 @@ public struct Projection {
             if n.kind == "Hash", i+1 < nodes.count {
                 let next = nodes[i+1]
                 let span = ByteSpan(n.start, next.end)
+                if next.kind == "FuncCall", let name = next.children.first, ["strong","emph","link","footnote"].contains(source.bytes(name.span)) {
+                    pending += [n,next]; i += 2; continue
+                }
                 let before = source.bytes(ByteSpan(0, n.start)).components(separatedBy: "\n").last ?? ""
                 let after = source.bytes(ByteSpan(next.end, source.utf8.count)).components(separatedBy: "\n").first ?? ""
                 if before.trimmingCharacters(in: .whitespaces).isEmpty && after.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -128,10 +168,13 @@ public struct Projection {
                         b = block(n, kind: "quote", body: content)
                     }
                     if b.kind == "table" {
-                        b.tableCells = next.descendants("ContentBlock").compactMap { $0.markup?.span }
+                        b.tableCells = next.children.first { $0.kind == "Args" }?.children.filter { $0.kind == "ContentBlock" }.compactMap { $0.markup?.span } ?? []
                         if let regex = try? NSRegularExpression(pattern: "columns:\\s*(\\d+)"), let match = regex.firstMatch(in: raw, range: NSRange(location: 0, length: raw.utf16.count)) {
                             b.columns = Int((raw as NSString).substring(with: match.range(at: 1))) ?? 0
                         }
+                    }
+                    if b.kind == "image" || (b.kind == "table" && b.columns > 0 && !b.tableCells.isEmpty && b.tableCells.count % b.columns == 0) {
+                        b.inlines = [.text("\u{FFFC}", span, TextStyle(), false)]
                     }
                     // Adjacent setup/custom expressions remain one opaque source region.
                     if b.kind == "source", let last = result.last, last.kind == "source",
@@ -157,13 +200,7 @@ public struct Projection {
             let end = source.utf8.count
             result.append(ProjectedBlock(kind: "paragraph", source: ByteSpan(end, end), body: ByteSpan(end, end), inlines: []))
         }
-        var display = ""
-        for index in result.indices {
-            if index > 0 { display += "\n" }
-            result[index].display = NSRange(location: display.utf16.count, length: result[index].text.utf16.count)
-            display += result[index].text
-        }
-        blocks = result; text = display
+        self.init(blocks:result)
     }
     public func blockIndex(at utf16: Int) -> Int {
         blocks.lastIndex { $0.display.location <= utf16 } ?? 0

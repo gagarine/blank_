@@ -4,7 +4,7 @@ import PDFKit
 import BlankCore
 
 enum EditorMode: String, CaseIterable { case write = "Write", source = "Source", preview = "Preview" }
-enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict; var id: String { rawValue } }
+enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict, rename; var id: String { rawValue } }
 struct Recovery: Codable {
     var id: String
     var entry: String
@@ -27,6 +27,7 @@ struct Recovery: Codable {
     @Published var searchQuery = ""
     @Published var replaceText = ""
     @Published var caseSensitive = false
+    @Published var projectSearch = false
     @Published var compiling = false
     @Published var pdf: PDFDocument?
     @Published var previewPage = 1
@@ -34,14 +35,16 @@ struct Recovery: Codable {
     @Published var typewriter = false
     @Published var fontFamily: String = UserDefaults.standard.string(forKey:"readingFont") ?? "Iowan Old Style"
     @Published var fontSize: Double = UserDefaults.standard.object(forKey:"readingSize") as? Double ?? 18
-    @Published var paper: Color = .white
-    @Published var ink: Color = Color(nsColor:NSColor(calibratedWhite:0.20,alpha:1))
+    @Published var paper: Color = EditorPreferences.color("paper",fallback:.white)
+    @Published var ink: Color = EditorPreferences.color("ink",fallback:NSColor(calibratedWhite:0.20,alpha:1))
+    @Published var dark = UserDefaults.standard.bool(forKey:"dark")
     var buffers: [String:DocumentBuffer] = ["Untitled.typ":DocumentBuffer()]
     var bases: [String:String] = [:]
     var assets: [String:Data] = [:]
     var root: URL?
     var entry = "Untitled.typ"
     var conflictDisk: [String:String] = [:]
+    var deletedFiles = Set<String>()
     var buffer: DocumentBuffer { buffers[active]! }
     var title: String { entry.replacingOccurrences(of:".typ",with:"") }
     var onTitle: (() -> Void)?
@@ -58,11 +61,18 @@ struct Recovery: Codable {
     var watch: DispatchSourceFileSystemObject?
     var watchers: [DispatchSourceFileSystemObject] = []
     var writing = false
+    let recoveryQueue = DispatchQueue(label:"blank.recovery",qos:.utility)
     var recoveryURL: URL {
         AppController.dataDirectory.appendingPathComponent("recovery/\(id).json")
     }
     var includes: [String] {
-        buffers.keys.filter { $0.hasSuffix(".typ") }.sorted { $0 == entry || ($1 != entry && $0 < $1) }
+        var ordered: [String] = [], seen = Set<String>()
+        func visit(_ path: String) {
+            guard let model = buffers[path], !seen.contains(path) else { return }; seen.insert(path); ordered.append(path)
+            for include in model.includes { if let next = projectAssetPath(include.path,file:path) { visit(next) } }
+        }
+        visit(entry)
+        return ordered+buffers.keys.filter { $0.hasSuffix(".typ") && !seen.contains($0) }.sorted()
     }
     var headings: [(Int, ProjectedBlock)] {
         buffer.projection.blocks.enumerated().filter { $0.element.kind == "heading" }.map { ($0.offset,$0.element) }
@@ -78,7 +88,7 @@ struct Recovery: Codable {
     func switchMode(_ next: EditorMode) {
         guard next != mode else { return }
         editor?.finishComposition()
-        editor?.captureReadingPosition()
+        if mode == .preview { capturePreviewPosition() } else { editor?.captureReadingPosition() }
         buffer.breakUndoGroup(); mode = next
         if next == .preview { compile() }
         else { DispatchQueue.main.async { [weak self] in self?.editor?.refresh(reveal:true); self?.window?.makeFirstResponder(self?.editor) } }
@@ -89,7 +99,20 @@ struct Recovery: Codable {
         editor?.refresh(reveal:true)
     }
     func undo(_ redo: Bool = false) {
+        var cell: (Int,Int)?
+        if let editor, editor.objectEditing {
+            for (index,table) in editor.tableViews { if let field = table.value?.fields.first(where:{ $0.currentEditor() != nil }) { cell = (index,field.index); break } }
+            editor.objectEditing = false; window?.makeFirstResponder(editor)
+        }
         editor?.finishComposition(); if redo { buffer.redo() } else { buffer.undo() }; changed(); editor?.refresh(reveal:true)
+        if let (index,fieldIndex) = cell, let table = editor?.tableViews[index]?.value, table.fields.indices.contains(fieldIndex), buffer.projection.blocks.indices.contains(index) {
+            let field = table.fields[fieldIndex], span = buffer.projection.blocks[index].tableCells[fieldIndex]
+            window?.makeFirstResponder(field)
+            if let view = field.currentEditor() as? NSTextView {
+                let a = field.model.projection.displayOffset(at:max(0,buffer.selection.anchor-span.start)), z = field.model.projection.displayOffset(at:max(0,buffer.selection.focus-span.start))
+                view.setSelectedRange(NSRange(location:min(a,z),length:abs(z-a)))
+            }
+        }
     }
     func format(italic: Bool) {
         guard mode == .write else { return }; synchronizeSelection()
@@ -109,9 +132,8 @@ struct Recovery: Codable {
             let target = project.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
             guard target.path.hasPrefix(project.resolvingSymlinksInPath().path+"/") else { throw CocoaError(.fileReadNoPermission) }
             let text = try String(contentsOf:target,encoding:.utf8); loaded[path] = DocumentBuffer(text)
-            let regex = try NSRegularExpression(pattern:"(?m)#include\\s+\"([^\"\\n]+)\"")
-            for match in regex.matches(in:text,range:NSRange(location:0,length:text.utf16.count)) {
-                let child = (text as NSString).substring(with:match.range(at:1))
+            for include in loaded[path]!.includes {
+                let child = include.path
                 let absolute = target.deletingLastPathComponent().appendingPathComponent(child).standardizedFileURL
                 guard absolute.path.hasPrefix(project.standardizedFileURL.path+"/") else { continue }
                 let relative = String(absolute.path.dropFirst(project.standardizedFileURL.path.count+1))
@@ -137,11 +159,18 @@ struct Recovery: Codable {
         }
     }
     func checkDisk(_ path: String) {
-        guard let root, let local = buffers[path], let base = bases[path], let disk = try? String(contentsOf:root.appendingPathComponent(path),encoding:.utf8), disk != base else { return }
+        guard let root, let local = buffers[path], let base = bases[path] else { return }
+        let target = root.appendingPathComponent(path)
+        guard let disk = try? String(contentsOf:target,encoding:.utf8) else {
+            if !FileManager.default.fileExists(atPath:target.path) { deletedFiles.insert(path); conflictDisk[path] = ""; error = "\(path) was deleted outside blank_. Your writing is retained in recovery."; sheet = .conflict; persistRecovery() }
+            return
+        }
+        guard disk != base else { installWatchers(); return }
         if disk == local.source { bases[path] = disk; return }
         if local.source == base {
             local.loadExternal(disk); bases[path] = disk; revision += 1; editor?.refresh()
         } else { conflictDisk[path] = disk; error = "\(path) changed outside blank_. Choose which version to keep before saving."; sheet = .conflict }
+        installWatchers()
     }
     func autosave() {
         persistRecovery()
@@ -151,9 +180,16 @@ struct Recovery: Codable {
         let payload = Recovery(id:id,entry:entry,root:root?.path,files:buffers.mapValues(\.source),assets:assets)
         guard let data = try? JSONEncoder().encode(payload) else { return }
         let target = recoveryURL
-        DispatchQueue.global(qos:.utility).async {
+        recoveryQueue.async {
             do { try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true); try data.write(to:target,options:.atomic) } catch { NSLog("Recovery: %@",error.localizedDescription) }
         }
+    }
+    func ensureRecovery() -> Bool {
+        do {
+            let payload = Recovery(id:id,entry:entry,root:root?.path,files:buffers.mapValues(\.source),assets:assets), data = try JSONEncoder().encode(payload), target = recoveryURL
+            try recoveryQueue.sync { try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true); try data.write(to:target,options:.atomic) }
+            return true
+        } catch { self.error = "Recovery could not be saved: "+error.localizedDescription; return false }
     }
     func save(_ saveAs: Bool = false, completion: ((Bool)->Void)? = nil) {
         editor?.finishComposition()
@@ -163,26 +199,12 @@ struct Recovery: Codable {
         panel.beginSheetModal(for:window) { [weak self] result in
             guard let self, result == .OK, let url = panel.url else { completion?(false); return }
             do {
-                let newRoot = url.deletingLastPathComponent(), oldRoot = self.root
-                // Copy dependency/asset files without replacing unrelated destination files.
-                for (path,data) in self.assets { try Self.writeDependency(data,path:path,root:newRoot) }
-                if let oldRoot {
-                    let paths = self.referencedAssets()
-                    for path in paths { if let data = try? Data(contentsOf:oldRoot.appendingPathComponent(path)) { try Self.writeDependency(data,path:path,root:newRoot) } }
-                }
-                for (path,buffer) in self.buffers where path != self.entry { try Self.writeDependency(Data(buffer.source.utf8),path:path,root:newRoot) }
-                try Data(self.buffers[self.entry]!.source.utf8).write(to:url,options:.atomic)
-                let oldEntry = self.entry
-                self.buffers[url.lastPathComponent] = self.buffers.removeValue(forKey:oldEntry)
-                if self.active == oldEntry { self.active = url.lastPathComponent }
-                self.entry = url.lastPathComponent; self.root = newRoot; self.bases = self.buffers.mapValues(\.source); self.dirty = false
-                self.installWatchers(); self.onTitle?(); self.persistRecovery(); completion?(true)
+                try self.saveCopy(to:url); completion?(true)
             } catch { self.error = error.localizedDescription; completion?(false) }
         }
     }
     static func writeDependency(_ data: Data,path: String,root: URL) throws {
-        let target = root.appendingPathComponent(path).standardizedFileURL
-        guard target.path.hasPrefix(root.standardizedFileURL.path+"/") else { throw CocoaError(.fileWriteNoPermission) }
+        let target = try dependencyTarget(path,root:root)
         if FileManager.default.fileExists(atPath:target.path) {
             if try Data(contentsOf:target) == data { return }
             throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"\(path) already exists with different content. Choose an empty folder."])
@@ -190,22 +212,40 @@ struct Recovery: Codable {
         try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true)
         try data.write(to:target,options:.atomic)
     }
+    static func dependencyTarget(_ path: String,root: URL) throws -> URL {
+        let target = root.appendingPathComponent(path).standardizedFileURL
+        guard target.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path+"/") else { throw CocoaError(.fileWriteNoPermission) }
+        return target
+    }
     func referencedAssets() -> Set<String> {
         var result = Set<String>()
         let regex = try! NSRegularExpression(pattern:"#?(?:image|bibliography|read)\\(\\s*\"([^\"]+)\"")
-        for buffer in buffers.values {
-            for m in regex.matches(in:buffer.source,range:NSRange(location:0,length:buffer.source.utf16.count)) { result.insert((buffer.source as NSString).substring(with:m.range(at:1))) }
+        for (file,buffer) in buffers {
+            for m in regex.matches(in:buffer.source,range:NSRange(location:0,length:buffer.source.utf16.count)) {
+                if let path = projectAssetPath((buffer.source as NSString).substring(with:m.range(at:1)),file:file) { result.insert(path) }
+            }
         }
         return result
     }
     func saveToDisk() throws {
         guard let root else { return }
         guard conflictDisk.isEmpty else { throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"Resolve external changes before saving."]) }
+        // Preflight every source before replacing any file.
         for (path,buffer) in buffers {
-            let target = root.appendingPathComponent(path)
+            let target = try Self.dependencyTarget(path,root:root)
+            if bases[path] != nil && !FileManager.default.fileExists(atPath:target.path) {
+                checkDisk(path); throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"A project file was deleted. Resolve the change before saving."])
+            }
             if let disk = try? String(contentsOf:target,encoding:.utf8), let base = bases[path], disk != base && disk != buffer.source {
                 checkDisk(path); throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"External changes detected. Your local recovery copy is safe."])
             }
+        }
+        for (path,data) in assets {
+            let target = try Self.dependencyTarget(path,root:root)
+            if FileManager.default.fileExists(atPath:target.path), try Data(contentsOf:target) != data { throw CocoaError(.fileWriteFileExists) }
+        }
+        for (path,buffer) in buffers {
+            let target = try Self.dependencyTarget(path,root:root)
             if bases[path] != buffer.source {
                 try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true)
                 try Data(buffer.source.utf8).write(to:target,options:.atomic); bases[path] = buffer.source
@@ -235,6 +275,20 @@ struct Recovery: Codable {
             }
         }
     }
+    func goPage(_ page: Int) {
+        guard let pdf, let target = pdf.page(at:page-1) else { return }
+        previewPage = page; pdfView?.go(to:target)
+    }
+    func capturePreviewPosition() {
+        guard let view = pdfView, let page = view.currentPage, let document = view.document else { return }
+        let number = document.index(for:page)+1
+        previewPage = number
+        let point = view.currentDestination?.point ?? NSPoint(x:0,y:page.bounds(for:.mediaBox).height)
+        let height = page.bounds(for:.mediaBox).height, y = max(0,min(1,1-point.y/height))
+        if let anchor = sourceMap.filter({ ($0["page"] as? Int) == number }).min(by:{ abs(($0["y"] as? Double ?? 0)-y) < abs(($1["y"] as? Double ?? 0)-y) }), let path = anchor["path"] as? String, let start = anchor["start"] as? Int, let buffer = buffers[path] {
+            active = path; buffer.selection = EditSelection(start,start)
+        }
+    }
     func exportPDF() {
         let panel = NSSavePanel(); panel.allowedContentTypes = [.pdf]; panel.nameFieldStringValue = title+".pdf"; panel.title = "Export PDF"
         guard let window else { return }
@@ -242,6 +296,7 @@ struct Recovery: Codable {
     }
     func find(next: Bool = true) {
         guard !searchQuery.isEmpty, let editor else { return }
+        if projectSearch { findInProject(next:next); return }
         let text = editor.string as NSString
         let selection = editor.selectedRange()
         let start = next ? NSMaxRange(selection) : selection.location
@@ -251,18 +306,40 @@ struct Recovery: Codable {
         if match.location == NSNotFound { match = text.range(of:searchQuery,options:next ? options : options.union(.backwards)) }
         if match.location != NSNotFound { editor.setSelectedRange(match); editor.scrollRangeToVisible(match); editor.captureSelection() }
     }
+    func findInProject(next: Bool) {
+        guard let editor, let initial = includes.firstIndex(of:active) else { return }
+        let paths = includes, selection = editor.selectedRange(), options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
+        for step in 0...paths.count {
+            let index = (initial+(next ? step : -step)+paths.count)%paths.count, path = paths[index], model = buffers[path]!
+            let text = (mode == .source ? model.source : model.projection.text) as NSString
+            let at = min(text.length,next ? NSMaxRange(selection) : selection.location)
+            let range: NSRange
+            if step == 0 { range = next ? NSRange(location:at,length:text.length-at) : NSRange(location:0,length:at) }
+            else if step == paths.count { range = next ? NSRange(location:0,length:at) : NSRange(location:at,length:text.length-at) }
+            else { range = NSRange(location:0,length:text.length) }
+            let match = text.range(of:searchQuery,options:next ? options : options.union(.backwards),range:range)
+            if match.location != NSNotFound {
+                switchFile(path)
+                model.selection = mode == .source ? EditSelection(model.source.byteOffset(utf16:match.location),model.source.byteOffset(utf16:NSMaxRange(match))) : EditSelection(model.projection.sourceOffset(at:match.location),model.projection.sourceOffset(at:NSMaxRange(match)))
+                self.editor?.refresh(reveal:true); return
+            }
+        }
+    }
     func replace(all: Bool = false) {
         guard let editor, !searchQuery.isEmpty else { return }
         if !all { editor.insertText(replaceText,replacementRange:editor.selectedRange()); find(); return }
-        let original = editor.string as NSString
+        let paths = projectSearch ? includes : [active]
         let options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
-        var matches: [NSRange] = [], at = 0
-        while at < original.length {
-            let m = original.range(of:searchQuery,options:options,range:NSRange(location:at,length:original.length-at))
-            if m.location == NSNotFound { break }; matches.append(m); at = NSMaxRange(m)
+        for path in paths {
+            let model = buffers[path]!, copy = DocumentBuffer(model.source), original = (mode == .source ? model.source : model.projection.text) as NSString
+            var matches: [NSRange] = [], at = 0
+            while at < original.length {
+                let m = original.range(of:searchQuery,options:options,range:NSRange(location:at,length:original.length-at))
+                if m.location == NSNotFound { break }; matches.append(m); at = NSMaxRange(m)
+            }
+            for m in matches.reversed() { if mode == .source { copy.editSource(m,text:replaceText) } else { copy.editWrite(m,text:replaceText) } }
+            model.breakUndoGroup(); model.commit(copy.source,selection:model.selection)
         }
-        buffer.breakUndoGroup()
-        for m in matches.reversed() { if mode == .source { buffer.editSource(m,text:replaceText,group:"replace") } else { buffer.editWrite(m,text:replaceText,group:"replace") } }
         changed()
     }
     func insertSource(_ text: String, block: Bool = false) {
@@ -279,6 +356,6 @@ struct Recovery: Codable {
         let path = "assets/\(UUID().uuidString.prefix(8))-\(url.lastPathComponent)"
         assets[path] = data
         if let root { try Self.writeDependency(data,path:path,root:root) }
-        return path
+        return relativeAssetPath(path)
     }
 }

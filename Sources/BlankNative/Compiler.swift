@@ -37,6 +37,10 @@ final class TypstCompiler {
         let request: [String:Any] = ["jsonrpc":"2.0", "protocolVersion":1, "id":sequence, "method":method, "params":params]
         var data = try JSONSerialization.data(withJSONObject:request); data.append(10)
         try input!.write(contentsOf:data)
+        let running = process!
+        let deadline = DispatchWorkItem { if running.isRunning { running.terminate() } }
+        DispatchQueue.global(qos:.utility).asyncAfter(deadline:.now()+90,execute:deadline)
+        defer { deadline.cancel() }
         // Blocking I/O is restricted to this compiler queue, never the UI thread.
         while true {
             if let newline = buffer.firstIndex(of:10) {
@@ -48,6 +52,7 @@ final class TypstCompiler {
             let data = output!.availableData
             if data.isEmpty { throw NSError(domain:"Typst",code:2,userInfo:[NSLocalizedDescriptionKey:"Typst compiler stopped."]) }
             buffer.append(data)
+            if buffer.count > 128*1024*1024 { throw NSError(domain:"Typst",code:3,userInfo:[NSLocalizedDescriptionKey:"Typst output exceeded 128 MiB. The previous preview is retained."]) }
         }
     }
 }

@@ -11,12 +11,13 @@ struct SheetFrame<Content: View>: View {
         VStack(alignment:.leading,spacing:20) {
             HStack { Text(title).font(.system(size:18,weight:.semibold)); Spacer(); Button { dismiss() } label: { Image(systemName:"xmark").font(.system(size:11)).foregroundStyle(.secondary) }.buttonStyle(.plain).keyboardShortcut(.cancelAction) }
             content
-        }.padding(28).frame(width:width).background(Color.white)
+        }.padding(28).frame(width:width).background(Color(nsColor:.windowBackgroundColor))
     }
 }
 struct CommandsSheet: View {
     @ObservedObject var session: DocumentSession
     @FocusState var focused: Bool
+    @NativeState var selectedCommand = 0
     var actions: [(String,String,()->Void)] {
         [
             ("Settings","⌘,",{ session.sheet = .settings }),
@@ -31,6 +32,9 @@ struct CommandsSheet: View {
             ("Preview mode","⌘3",{ session.sheet = nil; session.switchMode(.preview) }),
             ("Find in document","⌘F",{ session.sheet = nil; session.searchVisible = true }),
             ("New document","⌘N",{ session.sheet = nil; AppController.shared.newDocument(nil) }),
+            ("New paper","",{ session.sheet = nil; AppController.shared.newPaper(nil) }),
+            ("New thesis","",{ session.sheet = nil; AppController.shared.newThesis(nil) }),
+            ("Rename document","",{ session.sheet = .rename }),
             ("Tutorial","",{ session.sheet = nil; AppController.shared.tutorial(nil) }),
             ("Export PDF","⌘⇧E",{ session.sheet = nil; session.exportPDF() }),
             ("Fullscreen","⌃⌘F",{ session.sheet = nil; session.window?.toggleFullScreen(nil) }),
@@ -43,16 +47,33 @@ struct CommandsSheet: View {
     var matches: [(String,String,()->Void)] { actions.filter { session.commandQuery.isEmpty || $0.0.localizedCaseInsensitiveContains(session.commandQuery) } }
     var body: some View {
         SheetFrame(title:"Commands",dismiss:{ session.sheet = nil }) {
-            TextField("Search commands…",text:$session.commandQuery).textFieldStyle(.roundedBorder).focused($focused).onSubmit { matches.first?.2() }
+            TextField("Search commands…",text:$session.commandQuery).textFieldStyle(.roundedBorder).focused($focused).onSubmit { if matches.indices.contains(selectedCommand) { matches[selectedCommand].2() } }
+                .onKeyPress(.downArrow) { selectedCommand = min(selectedCommand+1,max(0,matches.count-1)); return .handled }
+                .onKeyPress(.upArrow) { selectedCommand = max(0,selectedCommand-1); return .handled }
+                .onChange(of:session.commandQuery) { _,_ in selectedCommand = 0 }
             ScrollView {
                 VStack(spacing:2) {
-                    ForEach(Array(matches.enumerated()),id:\.offset) { _,action in
-                        Button { action.2() } label: { HStack { Text(action.0).font(.system(size:12)); Spacer(); Text(action.1).font(.system(size:10)).foregroundStyle(.tertiary) }.padding(10).contentShape(Rectangle()) }.buttonStyle(.plain)
+                    ForEach(Array(matches.enumerated()),id:\.offset) { index,action in
+                        Button { action.2() } label: { HStack { Text(action.0).font(.system(size:12)); Spacer(); Text(action.1).font(.system(size:10)).foregroundStyle(.tertiary) }.padding(10).background(index == selectedCommand ? Color.primary.opacity(0.05) : .clear).clipShape(RoundedRectangle(cornerRadius:5)).contentShape(Rectangle()) }.buttonStyle(.plain)
                     }
                 }
             }.frame(height:340)
         }.onAppear { focused = true }
     }
+}
+struct RenameSheet: View {
+    @ObservedObject var session: DocumentSession
+    @NativeState var name = ""
+    @NativeState var failure = ""
+    @FocusState var focused: Bool
+    var body: some View {
+        SheetFrame(title:"Rename document",dismiss:{ session.sheet = nil }) {
+            TextField("Document name",text:$name).textFieldStyle(.roundedBorder).focused($focused).onSubmit { rename() }
+            if !failure.isEmpty { Text(failure).font(.system(size:11)).foregroundStyle(.red) }
+            HStack { Spacer(); Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction); Button("Rename") { rename() }.keyboardShortcut(.defaultAction) }
+        }.onAppear { name = (session.entry as NSString).lastPathComponent.replacingOccurrences(of:".typ",with:""); focused = true }
+    }
+    func rename() { do { try session.renameEntry(name); session.sheet = nil } catch { failure = error.localizedDescription } }
 }
 struct SettingsSheet: View {
     @ObservedObject var session: DocumentSession
@@ -64,29 +85,35 @@ struct SettingsSheet: View {
                 HStack { Text("Text size"); Slider(value:$session.fontSize,in:13...28,step:1); Text("\(Int(session.fontSize)) pt").monospacedDigit().frame(width:45) }
                 ColorPicker("Page",selection:$session.paper,supportsOpacity:false)
                 ColorPicker("Text",selection:$session.ink,supportsOpacity:false)
+                Toggle("Dark appearance",isOn:$session.dark).onChange(of:session.dark) { _,dark in session.paper = dark ? Color(nsColor:NSColor(calibratedWhite:0.11,alpha:1)) : .white; session.ink = dark ? Color(nsColor:NSColor(calibratedWhite:0.87,alpha:1)) : Color(nsColor:NSColor(calibratedWhite:0.20,alpha:1)) }
                 Toggle("Paragraph focus",isOn:$session.paragraphFocus)
                 Toggle("Typewriter scrolling",isOn:$session.typewriter)
-            }.formStyle(.grouped).frame(height:310)
+            }.formStyle(.grouped).frame(height:340)
             Text("Source uses the system monospace face. PDF typography is controlled by your Typst source.").font(.system(size:11)).foregroundStyle(.secondary)
-            HStack { Spacer(); Button("Done") { UserDefaults.standard.set(session.fontFamily,forKey:"readingFont"); UserDefaults.standard.set(session.fontSize,forKey:"readingSize"); session.sheet = nil; session.editor?.lastAppearance = ""; session.editor?.refresh() }.keyboardShortcut(.defaultAction) }
+            HStack { Spacer(); Button("Done") { UserDefaults.standard.set(session.fontFamily,forKey:"readingFont"); UserDefaults.standard.set(session.fontSize,forKey:"readingSize"); EditorPreferences.store(session.paper,key:"paper"); EditorPreferences.store(session.ink,key:"ink"); UserDefaults.standard.set(session.dark,forKey:"dark"); session.sheet = nil; session.editor?.lastAppearance = ""; session.editor?.refresh() }.keyboardShortcut(.defaultAction) }
         }
     }
 }
 struct StatisticsSheet: View {
     @ObservedObject var session: DocumentSession
+    var projectWords: Int { session.includes.reduce(0) { $0+(session.buffers[$1]?.counts.words ?? 0) } }
+    var dates: URLResourceValues? { session.root.flatMap { try? $0.appendingPathComponent(session.active).resourceValues(forKeys:[.creationDateKey,.contentModificationDateKey,.fileSizeKey]) } }
     var body: some View {
         SheetFrame(title:"Statistics & info",dismiss:{ session.sheet = nil }) {
             Grid(alignment:.leading,horizontalSpacing:70,verticalSpacing:14) {
-                GridRow { Text("Words"); Text("\(session.buffer.projection.text.split(whereSeparator:\.isWhitespace).count)").monospacedDigit() }
-                GridRow { Text("Characters"); Text("\(session.buffer.projection.text.count)").monospacedDigit() }
+                GridRow { Text("Words"); Text("\(session.buffer.counts.words)").monospacedDigit() }
+                GridRow { Text("Characters"); Text("\(session.buffer.counts.characters)").monospacedDigit() }
                 GridRow { Text("Source bytes"); Text("\(session.buffer.source.utf8.count)").monospacedDigit() }
                 GridRow { Text("Headings"); Text("\(session.headings.count)").monospacedDigit() }
                 GridRow { Text("Project files"); Text("\(session.buffers.count)").monospacedDigit() }
+                GridRow { Text("Project words"); Text("\(projectWords)").monospacedDigit() }
                 GridRow { Text("Reading time"); Text("\(max(1,session.buffer.projection.text.split(whereSeparator:\.isWhitespace).count/200)) min") }
                 GridRow { Text("Undo storage"); Text(ByteCountFormatter.string(fromByteCount:Int64(session.buffer.historyBytes),countStyle:.memory)) }
+                if let date = dates?.creationDate { GridRow { Text("Created"); Text(date.formatted(date:.abbreviated,time:.shortened)) } }
+                if let date = dates?.contentModificationDate { GridRow { Text("Last saved"); Text(date.formatted(date:.abbreviated,time:.shortened)) } }
             }.font(.system(size:12))
             if let root = session.root { Text(root.appendingPathComponent(session.entry).path).font(.system(size:11)).foregroundStyle(.secondary).textSelection(.enabled) }
-            Text("Text counts describe the active file. Custom expressions are counted literally.").font(.system(size:11)).foregroundStyle(.secondary)
+            Text("Text counts describe prose and table cells. Custom code is omitted. Project words include the open chapter files.").font(.system(size:11)).foregroundStyle(.secondary)
         }
     }
 }
@@ -247,12 +274,19 @@ struct ConflictSheet: View {
             HStack {
                 Button("Use disk version") {
                     session.persistRecovery()
-                    for (path,text) in session.conflictDisk { session.buffers[path]?.loadExternal(text); session.bases[path] = text }
+                    for (path,text) in session.conflictDisk {
+                        if session.deletedFiles.contains(path) {
+                            if path == session.entry { session.root = nil; session.buffers[path]?.loadExternal(""); session.bases.removeAll() }
+                            else { session.buffers.removeValue(forKey:path); session.bases.removeValue(forKey:path); if session.active == path { session.active = session.entry } }
+                        } else { session.buffers[path]?.loadExternal(text); session.bases[path] = text }
+                    }
+                    session.deletedFiles.removeAll()
                     session.conflictDisk.removeAll(); session.sheet = nil; session.error = nil; session.revision += 1; session.editor?.refresh()
                 }
                 Spacer()
                 Button("Keep my writing") {
-                    for (path,text) in session.conflictDisk { session.bases[path] = text }
+                    for (path,text) in session.conflictDisk { if session.deletedFiles.contains(path) { session.bases.removeValue(forKey:path) } else { session.bases[path] = text } }
+                    session.deletedFiles.removeAll()
                     session.conflictDisk.removeAll(); session.sheet = nil; session.error = nil; session.autosave()
                 }.keyboardShortcut(.defaultAction)
             }

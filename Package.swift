@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "blank_", platforms: [.macOS(.v14)],
+    name: "blank_", platforms: [.macOS("26.0")],
     products: [.executable(name: "blank_", targets: ["BlankNative"])],
     targets: [
         .systemLibrary(name: "CTypst", path: "Sources/CTypst"),

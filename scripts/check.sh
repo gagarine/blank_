@@ -7,4 +7,5 @@ cargo fmt --check --manifest-path typst-syntax-bridge/Cargo.toml
 cargo test --offline --locked --manifest-path typst-syntax-bridge/Cargo.toml
 swift run --disable-sandbox --cache-path .build/cache BlankCoreChecks
 bash scripts/build.sh
+python3 scripts/compiler-check.py
 BLANK_DATA_DIR="$(mktemp -d /tmp/blank-native-acceptance.XXXXXX)" build/blank_.app/Contents/MacOS/blank_ --self-test

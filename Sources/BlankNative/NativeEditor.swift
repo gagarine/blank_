@@ -22,6 +22,7 @@ struct NativeEditor: NSViewRepresentable {
         view.textContainer?.lineFragmentPadding = 0
         view.frame = NSRect(x:0,y:0,width:scroll.contentSize.width,height:scroll.contentSize.height)
         view.setAccessibilityLabel("\(session.mode.rawValue) editor")
+        view.registerForDraggedTypes([.fileURL,.png,.tiff])
         scroll.documentView = view
         view.refresh()
         DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
@@ -48,17 +49,25 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var dragPoint = NSPoint.zero
     var dragTarget = 0
     var draggingBlock = false
+    var dragImage: NSImage?
     var track: NSTrackingArea?
     var lastRevision = -1
     var lastMode: EditorMode?
     var lastPath = ""
     var lastAppearance = ""
-    var insertionBold = false
-    var insertionItalic = false
+    var objectEditing = false
+    var tableViews: [Int:WeakTableView] = [:]
+    var objectViews: [Int:NSView] = [:]
+    var positioningObjects = false
+    var fontCache: [String:NSFont] = [:]
+    var insertionBold: Bool?
+    var insertionItalic: Bool?
     private var undoProxy = UndoManager()
     override var undoManager: UndoManager? { undoProxy }
     override func setFrameSize(_ size: NSSize) {
+        let changedWidth = abs(size.width-frame.width) > 1
         super.setFrameSize(size); updatePadding()
+        if changedWidth, lastRevision >= 0 { lastRevision = -1; DispatchQueue.main.async { [weak self] in self?.refresh() } }
     }
     func updatePadding() {
         guard let session else { return }
@@ -74,12 +83,16 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         addTrackingArea(track!)
     }
     func readingFont(size: CGFloat, bold: Bool = false, italic: Bool = false) -> NSFont {
-        let base = NSFont(name:session?.fontFamily ?? "Iowan Old Style",size:size) ?? NSFont.systemFont(ofSize:size)
+        let key = "\(session?.fontFamily ?? "Iowan Old Style")/\(size)/\(bold)/\(italic)"
+        if let cached = fontCache[key] { return cached }
+        let base = NSFontManager.shared.font(withFamily:session?.fontFamily ?? "Iowan Old Style",traits:[],weight:5,size:size) ?? NSFont.systemFont(ofSize:size)
         var traits: NSFontTraitMask = []
         if bold { traits.insert(.boldFontMask) }; if italic { traits.insert(.italicFontMask) }
-        return traits.isEmpty ? base : NSFontManager.shared.convert(base,toHaveTrait:traits)
+        let font = traits.isEmpty ? base : NSFontManager.shared.convert(base,toHaveTrait:traits)
+        if fontCache.count > 100 { fontCache.removeAll() }
+        fontCache[key] = font; return font
     }
-    func rendered() -> NSAttributedString {
+    func rendered(onlyBlock: Int? = nil) -> NSAttributedString {
         guard let session else { return NSAttributedString(string:"") }
         let b = session.buffer
         let source = session.mode == .source
@@ -87,10 +100,12 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let all = NSRange(location:0,length:result.length)
         let size = CGFloat(session.fontSize)
         let style = NSMutableParagraphStyle()
-        style.lineHeightMultiple = source ? 1.45 : 1.65
-        style.paragraphSpacing = source ? 0 : 23
+        style.lineHeightMultiple = 1
+        style.lineSpacing = source ? 4 : size * 0.3
+        style.paragraphSpacingBefore = source ? 0 : 18
         let font = source ? NSFont.monospacedSystemFont(ofSize:14,weight:.regular) : readingFont(size:size)
-        result.addAttributes([.font:font,.foregroundColor:NSColor(session.ink),.paragraphStyle:style,.ligature:1],range:all)
+        let baseRange = onlyBlock.map { b.projection.blocks[$0].display } ?? all
+        result.addAttributes([.font:font,.foregroundColor:NSColor(session.ink),.paragraphStyle:style,.ligature:1],range:baseRange)
         if source {
             for run in b.parsed.styles {
                 let start = b.source.utf16Offset(byte:run.start), end = b.source.utf16Offset(byte:run.end)
@@ -119,22 +134,28 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             visit(b.parsed.tree)
         } else {
             for (index,block) in b.projection.blocks.enumerated() {
+                if let onlyBlock, index != onlyBlock { continue }
                 let p = style.mutableCopy() as! NSMutableParagraphStyle
+                if index == 0 { p.paragraphSpacingBefore = 0 }
                 var textSize = size
                 if block.kind == "heading" {
                     textSize = size * (block.level == 1 ? 1.89 : block.level == 2 ? 1.33 : 1.056)
-                    p.lineHeightMultiple = block.level == 1 ? 1.3 : 1.4
+                    p.lineSpacing = 2
                     p.paragraphSpacingBefore = index == 0 ? 0 : block.level == 1 ? 32 : 28
-                    p.paragraphSpacing = block.level == 1 ? 23 : 18
                 }
-                if ["bullet","number"].contains(block.kind) { p.firstLineHeadIndent = 25; p.headIndent = 25; p.paragraphSpacing = 5 }
+                if ["bullet","number"].contains(block.kind) { p.firstLineHeadIndent = 25; p.headIndent = 25; p.paragraphSpacingBefore = index == 0 ? 0 : 5 }
                 if block.kind == "quote" { p.firstLineHeadIndent = 24; p.headIndent = 24 }
                 let raw = !block.editable
-                if raw { p.lineHeightMultiple = 1.5; p.paragraphSpacingBefore = 12; p.paragraphSpacing = 26 }
+                if raw { p.lineSpacing = 4; p.paragraphSpacingBefore = index == 0 ? 0 : 12 }
                 let range = block.display
                 if range.length > 0 {
                     result.addAttributes([.paragraphStyle:p,.font:raw ? NSFont.monospacedSystemFont(ofSize:13,weight:.regular) : readingFont(size:textSize,bold:block.kind == "heading",italic:block.kind == "quote")],range:range)
                     if raw { result.addAttribute(.foregroundColor,value:NSColor.secondaryLabelColor,range:range) }
+                    if block.text == "\u{FFFC}" {
+                        let attachment = ObjectAttachment(editor:self,index:index,width:max(160,bounds.width-textContainerInset.width*2))
+                        result.addAttribute(.attachment,value:attachment,range:range)
+                        result.addAttribute(.baselineOffset,value:0,range:range)
+                    }
                     if session.paragraphFocus && !range.contains(selectedRange().location) { result.addAttribute(.foregroundColor,value:NSColor.tertiaryLabelColor,range:range) }
                     var at = range.location
                     for run in block.inlines.flatMap(\.runs) {
@@ -151,22 +172,32 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         return result
     }
     func refresh(reveal: Bool = false) {
-        guard !composing, !hasMarkedText(), let session, session.mode != .preview else { return }
+        guard !composing, !objectEditing, !hasMarkedText(), let session, session.mode != .preview else { return }
         updatePadding()
         let appearance = "\(session.fontFamily)/\(session.fontSize)/\(session.paragraphFocus)/\(session.paper)/\(session.ink)"
         guard reveal || lastRevision != session.buffer.revision || lastMode != session.mode || lastPath != session.active || lastAppearance != appearance else { return }
         refreshing = true; defer { refreshing = false }
-        let attributed = rendered(), old = string
+        let local = session.mode == .write && lastMode == .write && lastPath == session.active && lastAppearance == appearance && lastRevision == session.buffer.revision-1 && session.buffer.lastEditWasLocal
+        let localIndex = local ? session.buffer.projection.blockIndex(at:session.buffer.projection.displayOffset(at:session.buffer.selection.focus)) : nil
+        if !local { objectViews.values.forEach { $0.removeFromSuperview() }; objectViews.removeAll(); tableViews.removeAll() }
+        let attributed = rendered(onlyBlock:localIndex), old = string
+        // Insert text and attributes in one storage transaction. An attachment
+        // character inserted without its attachment can be laid out as plain text.
+        textStorage?.beginEditing()
         if let patch = SourcePatch.difference(old,attributed.string) {
             let a = old.utf16Offset(byte:patch.start), z = old.utf16Offset(byte:patch.start+patch.removed.utf8.count)
-            textStorage?.beginEditing()
-            textStorage?.replaceCharacters(in:NSRange(location:a,length:z-a),with:patch.inserted)
-            textStorage?.endEditing()
+            let start = attributed.string.utf16Offset(byte:patch.start)
+            let replacement = attributed.attributedSubstring(from:NSRange(location:start,length:patch.inserted.utf16.count))
+            textStorage?.replaceCharacters(in:NSRange(location:a,length:z-a),with:replacement)
         }
         if attributed.length > 0 {
-            textStorage?.beginEditing()
-            attributed.enumerateAttributes(in:NSRange(location:0,length:attributed.length)) { attrs,range,_ in self.textStorage?.setAttributes(attrs,range:range) }
-            textStorage?.endEditing()
+            let range = localIndex.map { session.buffer.projection.blocks[$0].display } ?? NSRange(location:0,length:attributed.length)
+            attributed.enumerateAttributes(in:range) { attrs,range,_ in self.textStorage?.setAttributes(attrs,range:range) }
+        }
+        textStorage?.endEditing()
+        if !local, let manager = textLayoutManager, let range = manager.textContentManager?.documentRange {
+            manager.invalidateLayout(for:range)
+            manager.ensureLayout(for:visibleRect)
         }
         let selected = session.buffer.selection
         let a = session.mode == .source ? session.buffer.source.utf16Offset(byte:selected.anchor) : session.buffer.projection.displayOffset(at:selected.anchor)
@@ -181,10 +212,37 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if reveal { scrollRangeToVisible(selectedRange()) }
         if session.typewriter { centerSelectionInVisibleArea(self) }
         updateSlash()
+        positionObjects()
+    }
+    override func layout() { super.layout(); positionObjects() }
+    func positionObjects() {
+        guard !positioningObjects, let session, session.mode == .write, window != nil else { return }
+        positioningObjects = true; defer { positioningObjects = false }
+        var visible = Set<Int>()
+        for (index,block) in session.buffer.projection.blocks.enumerated() where block.text == "\u{FFFC}" {
+            guard let attachment = textStorage?.attribute(.attachment,at:block.display.location,effectiveRange:nil) as? ObjectAttachment else { continue }
+            let rect = rectFor(block.display.location)
+            let frame = NSRect(x:textContainerInset.width,y:rect.minY,width:attachment.width,height:attachment.height)
+            guard frame.intersects(visibleRect.insetBy(dx:0,dy:-120)) || objectEditing && objectViews[index] != nil else { continue }
+            visible.insert(index)
+            if objectViews[index] == nil {
+                let view: NSView
+                if block.kind == "table" { let table = TableBlockView(editor:self,index:index,frame:frame); tableViews[index] = WeakTableView(table); view = table }
+                else { view = FigureBlockView(editor:self,index:index,frame:frame) }
+                objectViews[index] = view; addSubview(view)
+            }
+            objectViews[index]?.frame = frame
+        }
+        for index in Array(objectViews.keys) where !visible.contains(index) { objectViews.removeValue(forKey:index)?.removeFromSuperview(); tableViews.removeValue(forKey:index) }
     }
     func captureSelection() {
         guard !refreshing, !composing, let session else { return }
         let r = selectedRange()
+        if session.mode == .write {
+            let old = session.buffer.selection, projection = session.buffer.projection
+            if projection.displayOffset(at:old.anchor) == r.location && projection.displayOffset(at:old.focus) == NSMaxRange(r) { return }
+            insertionBold = nil; insertionItalic = nil
+        }
         let a = session.mode == .source ? string.byteOffset(utf16:r.location) : session.buffer.projection.sourceOffset(at:r.location)
         let z = session.mode == .source ? string.byteOffset(utf16:NSMaxRange(r)) : session.buffer.projection.sourceOffset(at:NSMaxRange(r))
         session.buffer.selection = EditSelection(a,z)
@@ -207,10 +265,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         captureSelection()
         if session.mode == .source { session.buffer.editSource(affectedCharRange,text:text) }
         else {
-            var insertion = text
-            if insertionBold && !text.isEmpty { insertion = "*"+escapeTypst(insertion)+"*" }
-            if insertionItalic && !text.isEmpty { insertion = "_"+escapeTypst(insertion)+"_" }
-            session.buffer.editWrite(affectedCharRange,text:insertion,raw:insertionBold || insertionItalic)
+            var style = caretStyle()
+            if let insertionBold { style.bold = insertionBold }; if let insertionItalic { style.italic = insertionItalic }
+            session.buffer.editWrite(affectedCharRange,text:text,styleOverride:insertionBold != nil || insertionItalic != nil ? style : nil)
         }
         session.changed(); scrollRangeToVisible(selectedRange())
         if text == "/", session.mode == .write { slashStart = selectedRange().location-1; slashIndex = 0; updateSlash() }
@@ -220,38 +277,33 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     func applyTypingShortcut(_ inserted: String) {
         guard let session, session.mode == .write, inserted == " " || inserted == "*" || inserted == "_" else { return }
         let index = session.buffer.projection.blockIndex(at:selectedRange().location), b = session.buffer.projection.blocks[index]
-        let shortcuts: [String:(String,Int)] = ["= ":("heading",1),"== ":("heading",2),"=== ":("heading",3),"- ":("bullet",0),"+ ":("number",0)]
-        if let (kind,level) = shortcuts[b.text], b.kind == "paragraph" {
-            // Typing the prefix is already part of the same typing group.
-            session.buffer.editWrite(b.display,text:"",group:"write")
+        let before = (b.text as NSString).substring(to:max(0,min(b.display.length,selectedRange().location-b.display.location))) as NSString
+        let prefix = before as String
+        var shortcut: (String,Int)?
+        if prefix.hasSuffix(" "), prefix.dropLast().allSatisfy({ $0 == "=" }), prefix.count > 1 { shortcut = ("heading",prefix.count-1) }
+        else if prefix == "- " { shortcut = ("bullet",0) } else if prefix == "+ " { shortcut = ("number",0) }
+        if let (kind,level) = shortcut, b.kind == "paragraph" {
+            session.buffer.editWrite(NSRange(location:b.display.location,length:before.length),text:"",group:"write")
             session.buffer.setKind(index,kind:kind,level:level); session.changed()
-        } else if inserted == "*" || inserted == "_" {
-            let marker = inserted
-            if b.text.hasPrefix(marker), b.text.hasSuffix(marker), b.text.utf16.count > 2 {
-                let body = String(b.text.dropFirst().dropLast())
-                let replacement = marker+escapeTypst(body)+marker
-                let caret = b.body.start+replacement.utf8.count
-                session.buffer.commit(session.buffer.source.replacingBytes(b.body,with:replacement),selection:EditSelection(caret,caret)); session.changed()
-            }
+        } else if (inserted == "*" || inserted == "_"), !caretStyle().code, before.length > 2 {
+            let close = before.length-1, open = before.range(of:inserted,options:.backwards,range:NSRange(location:0,length:close)).location
+            guard open != NSNotFound, close-open > 1, before.substring(with:NSRange(location:close-1,length:1)) != inserted else { return }
+            let preceding = open > 0 ? before.substring(with:NSRange(location:open-1,length:1)) : ""
+            let inner = before.substring(with:NSRange(location:open+1,length:close-open-1))
+            guard preceding != inserted, preceding != "\\", inner.first?.isWhitespace != true, inner.last?.isWhitespace != true, !inner.contains("\n"), !inner.contains("\u{FFFC}") else { return }
+            if preceding.unicodeScalars.contains(where:CharacterSet.alphanumerics.contains), inner.unicodeScalars.first.map(CharacterSet.alphanumerics.contains) == true { return }
+            let copy = DocumentBuffer(session.buffer.source), fragment = copy.copy(NSRange(location:b.display.location+open+1,length:inner.utf16.count))
+            copy.editWrite(NSRange(location:b.display.location+open,length:close-open+1),text:fragment.source,raw:true)
+            let marked = NSRange(location:b.display.location+open,length:inner.utf16.count)
+            copy.format(marked,italic:inserted == "_")
+            let caret = copy.projection.sourceOffset(at:NSMaxRange(marked))
+            session.buffer.commit(copy.source,selection:EditSelection(caret,caret),group:"write")
+            insertionBold = false; insertionItalic = false; session.changed()
         }
     }
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
-        let text = (insertString as? String) ?? (insertString as? NSAttributedString)?.string ?? ""
         if composing || hasMarkedText() {
             super.insertText(insertString,replacementRange:replacementRange); composing = false; commitComposition(); return
-        }
-        if session?.mode == .source, text.count == 1, let character = text.first {
-            let r = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
-            let pairs: [Character:Character] = ["(":")","[":"]","{":"}","\"":"\"","*":"*","_":"_","$":"$","`":"`"]
-            if r.length == 0, ")] }\"*_$`".contains(character), r.location < (string as NSString).length,
-               (string as NSString).substring(with:NSRange(location:r.location,length:1)) == text {
-                setSelectedRange(NSRange(location:r.location+1,length:0)); captureSelection(); return
-            }
-            if let closer = pairs[character] {
-                let selected = (string as NSString).substring(with:r)
-                super.insertText(text+selected+String(closer),replacementRange:r)
-                setSelectedRange(NSRange(location:r.location+1,length:selected.utf16.count)); captureSelection(); return
-            }
         }
         super.insertText(insertString,replacementRange:replacementRange)
     }
@@ -290,14 +342,29 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         super.keyDown(with:event)
     }
     func formatNative(_ italic: Bool) {
-        if selectedRange().length == 0 { if italic { insertionItalic.toggle() } else { insertionBold.toggle() }; return }
+        guard session?.mode == .write else { return }
+        if selectedRange().length == 0 { let style = caretStyle(); if italic { insertionItalic = !(insertionItalic ?? style.italic) } else { insertionBold = !(insertionBold ?? style.bold) }; return }
         session?.format(italic:italic)
+    }
+    func caretStyle() -> TextStyle {
+        guard let session else { return TextStyle() }
+        let block = session.buffer.projection.blocks[session.buffer.projection.blockIndex(at:selectedRange().location)]
+        var offset = block.display.location
+        for run in block.inlines.flatMap(\.runs) {
+            if selectedRange().location > offset && selectedRange().location <= offset+run.text.utf16.count { return run.style }
+            offset += run.text.utf16.count
+        }
+        return TextStyle()
     }
     override func insertNewline(_ sender: Any?) {
         guard let session else { return }
         finishComposition(); captureSelection()
         if session.mode == .write { session.buffer.split(selectedRange()); session.changed(); scrollRangeToVisible(selectedRange()) }
-        else { super.insertNewline(sender) }
+        else {
+            let range = selectedRange(), line = (string as NSString).substring(to:range.location).components(separatedBy:"\n").last ?? ""
+            let indent = String(line.prefix { $0 == " " || $0 == "\t" })
+            session.buffer.editSource(range,text:"\n"+indent); session.changed()
+        }
         dismissSlash()
     }
     override func copy(_ sender: Any?) {
@@ -317,6 +384,17 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let board = NSPasteboard.general
         if session.mode == .write, let data = board.data(forType:NSPasteboard.PasteboardType("local.blank.typst-fragment")), let fragment = try? JSONDecoder().decode(RichFragment.self,from:data) {
             captureSelection(); session.buffer.paste(fragment,range:selectedRange()); session.changed(); return
+        }
+        if session.mode == .write, let image = NSImage(pasteboard:board), let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data:tiff), let data = bitmap.representation(using:.png,properties:[:]) {
+            do {
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("blank-paste-"+UUID().uuidString)
+                try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+                let url = directory.appendingPathComponent("pasted-image.png"); try data.write(to:url)
+                let path = try session.importImage(url); try? FileManager.default.removeItem(at:directory)
+                captureSelection(); session.insertionAnchor = session.buffer.selection
+                session.insertSource("#figure(image(\(jsonString(path)), width: 85%))",block:true)
+            } catch { session.error = error.localizedDescription }
+            return
         }
         if session.mode == .write, let data = board.data(forType:.rtf), let rich = try? NSAttributedString(data:data,options:[.documentType:NSAttributedString.DocumentType.rtf],documentAttributes:nil) {
             var source = ""
@@ -361,7 +439,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow,from:nil)
         if let hoverBlock, point.x >= textContainerInset.width-38 && point.x <= textContainerInset.width-6 {
-            grabbed = hoverBlock; pressPoint = point; dragPoint = point; draggingBlock = false; NSCursor.closedHand.push(); needsDisplay = true; return
+            grabbed = hoverBlock; pressPoint = point; dragPoint = point; draggingBlock = false
+            let region = blockRect(hoverBlock)
+            if let bitmap = bitmapImageRepForCachingDisplay(in:region) { cacheDisplay(in:region,to:bitmap); let image = NSImage(size:region.size); image.addRepresentation(bitmap); dragImage = image }
+            NSCursor.closedHand.push(); needsDisplay = true; return
         }
         dismissSlash(); super.mouseDown(with:event)
     }
@@ -380,7 +461,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         NSCursor.pop(); grabbed = nil; needsDisplay = true
         if draggingBlock { session?.buffer.moveBlock(index,before:dragTarget); session?.changed() }
         else { showBlockMenu(index,event:event) }
-        draggingBlock = false
+        draggingBlock = false; dragImage = nil
     }
     func showBlockMenu(_ index: Int,event: NSEvent) {
         guard let session else { return }
@@ -388,7 +469,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let menu = NSMenu()
         if block.editable {
             let turn = NSMenuItem(title:"Turn into",action:nil,keyEquivalent:""); let submenu = NSMenu()
-            for command in SlashCommand.all.prefix(6) where command.kind != block.kind || command.level != block.level {
+            for command in SlashCommand.all.prefix(7) where command.kind != block.kind || command.level != block.level {
                 let item = BlockMenuItem(title:command.label,action:#selector(blockMenuAction(_:)),keyEquivalent:""); item.target = self; item.blockIndex = index; item.command = command; submenu.addItem(item)
             }
             turn.submenu = submenu; menu.addItem(turn)
@@ -409,6 +490,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        positionObjects()
         guard session?.mode == .write, let session else { return }
         for (index,b) in session.buffer.projection.blocks.enumerated() where ["bullet","number"].contains(b.kind) {
             let r = rectFor(b.display.location)
@@ -419,7 +501,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if let grabbed, draggingBlock {
             let raw = session.buffer.projection.blocks[grabbed].text
             let preview = NSAttributedString(string:raw,attributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:NSColor.labelColor.withAlphaComponent(0.45)])
-            preview.draw(in:NSRect(x:dragPoint.x+18,y:dragPoint.y+12,width:350,height:150))
+            if let dragImage { dragImage.draw(in:NSRect(x:dragPoint.x+18,y:dragPoint.y+12,width:min(550,dragImage.size.width),height:dragImage.size.height),from:.zero,operation:.sourceOver,fraction:0.45,respectFlipped:true,hints:nil) }
+            else { preview.draw(in:NSRect(x:dragPoint.x+18,y:dragPoint.y+12,width:350,height:150)) }
             let y: CGFloat
             if dragTarget == 0 { y = blockRect(0).minY-12 }
             else if dragTarget == session.buffer.projection.blocks.count { y = blockRect(dragTarget-1).maxY+12 }
@@ -436,6 +519,24 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         var n = 1, i = index-1
         while i >= 0 && blocks[i].kind == "number" { n += 1; i -= 1 }; return n
     }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if sender.draggingPasteboard.canReadObject(forClasses:[NSURL.self,NSImage.self],options:nil) { return .copy }
+        return super.draggingEntered(sender)
+    }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let session, session.mode == .write else { return super.performDragOperation(sender) }
+        let point = convert(sender.draggingLocation,from:nil), offset = characterIndexForInsertion(at:point)
+        setSelectedRange(NSRange(location:offset,length:0)); captureSelection()
+        session.insertionAnchor = session.buffer.selection
+        if let urls = sender.draggingPasteboard.readObjects(forClasses:[NSURL.self],options:[.urlReadingFileURLsOnly:true]) as? [URL] {
+            do {
+                let imports = try urls.map { try session.importImage($0) }
+                session.insertSource(imports.map { "#figure(image(\(jsonString($0)), width: 85%))" }.joined(separator:"\n\n"),block:true)
+                return true
+            } catch { session.error = error.localizedDescription; return false }
+        }
+        return false
+    }
     var slashMatches: [SlashCommand] { SlashCommand.all.filter { slashQuery.isEmpty || ($0.label+" "+$0.keywords).localizedCaseInsensitiveContains(slashQuery) } }
     func updateSlash() {
         guard let start = slashStart else { return }
@@ -449,8 +550,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if slashPopover == nil { let p = NSPopover(); p.behavior = .applicationDefined; p.animates = false; slashPopover = p }
         let choices = slashMatches, chosen = slashIndex
         let content = SlashMenu(commands:choices,index:chosen,choose:{ [weak self] index in self?.slashIndex = index; self?.chooseSlash() })
-        slashPopover?.contentViewController = NSHostingController(rootView:content)
-        slashPopover?.contentSize = NSSize(width:280,height:min(390,CGFloat(max(1,choices.count))*46+12))
+        let height = min(390,CGFloat(max(1,choices.count))*46+12)
+        // ScrollView has no intrinsic height. Constrain the hosted root so
+        // AppKit's automatic popover sizing cannot collapse its visible rows.
+        slashPopover?.contentViewController = NSHostingController(rootView:content.frame(width:280,height:height))
+        slashPopover?.contentSize = NSSize(width:280,height:height)
         if slashPopover?.isShown != true { slashPopover?.show(relativeTo:rectFor(slashStart ?? selectedRange().location),of:self,preferredEdge:.maxY) }
         window?.makeFirstResponder(self)
     }

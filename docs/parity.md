@@ -1,33 +1,33 @@
 # Go reference audit
 
-Reference: `codex/legacy-go`, inspected from a Git archive. Evidence comes from `frontend/src/App.tsx`, `RichEditor.tsx`, `SourceEditor.tsx`, `projection.ts`, `blockCommands.ts`, `ContentsSidebar.tsx`, `Settings.tsx`, `Statistics.tsx`, `sectionEditing.ts`, `internal/document`, `internal/zotero`, `cmd/blank_`, the original tutorial and acceptance notes. Rust README was not used as the feature specification.
+Reference: `codex/legacy-go`, inspected safely from a Git archive. Evidence comes from App.tsx, RichEditor.tsx, SourceEditor.tsx, projection.ts, blockCommands.ts, ContentsSidebar.tsx, Settings.tsx, Statistics.tsx, sectionEditing.ts, internal/document, internal/zotero, cmd/blank_, the unchanged tutorial, guide and acceptance notes. The Rust README supplied additional roadmap items; it was not treated as a complete feature specification.
 
-| Go feature | Swift state | Verification/gap |
+Native framework defaults take precedence over early Go presentation choices. MCP/agent access will be designed for the native app rather than reproducing the Go API.
+
+| Feature | Swift state | Evidence or remaining gap |
 |---|---|---|
-| Home/New/Open/recent files | Empty focused editor replaces Home intentionally; native New/Open | Native startup and focus passed; recent list pending |
-| Iowan Old Style reading, full-width Source, white appearance | Native system fonts/real faces and TextKit 2 | Visual typography under inspection |
-| Typing, selections, Unicode, shared history | Native NSTextView + source transactions | Native acceptance and model checks; real keyboard whitespace regression being retested |
-| Bold/italic typing and shortcuts | Inline AST formatting, native commands | Native selected bold passed; toggle/prefix cases need expanded checks |
-| Slash beside caret, filtering, arrows, Return/Escape | NSPopover + SwiftUI | Implemented; pointer/keyboard inspection pending |
-| Application commands | Native SwiftUI sheet | Implemented; arrow navigation pending |
-| Paragraph splitting/joining/list continuation/exit | Source-backed edits | Model checks passed |
-| Structured clipboard, RTF, exact Source copy | Native NSPasteboard | Internal fragment/native copy passed; external RTF checks pending |
-| Hover handles, Turn into/Duplicate/Delete, drag ghost/one line | Native drawing and NSMenu | Implemented; drag and chapter-boundary checks pending |
-| Heading hierarchy, collapse, title elision, section moves | Native sidebar | Model movement checked; pointer inspection pending |
-| Native scroller outside text padding | NSScrollView | Implemented; long-document scroll checks pending |
-| Source colors, styling, delimiters | Native attributed text, Typst syntax | Exact Source copy passed; expanded style/navigation checks pending |
-| Compile/Preview/navigation/PDF export, last good result | Rust helper + native PDFKit | Build passed; compile/export checks pending |
-| Tables, cell Tab/final Tab adds row, dimensions | Native editing sheet | Inline cell editing/Tab pending |
-| Images, PDF figures, width/alt/caption, drop/paste | Native importing/insertion + source block | Native visual figure display/drop/paste pending |
-| Link/footnote/equation/label/reference insertion | Native sheets and Typst source | Implemented; compile checks pending |
-| Zotero libraries/search/citations/offline metadata/refresh, CSL styles | Local API and bibliography files | Implemented; live Zotero/group picker/custom CSL verification pending |
-| Multi-file manuscripts, continuous/all/current chapters, includes movement | Literal include loading and file switching; section movement | Continuous view/include movement and live include refresh pending |
-| Find/replace/case matching | Native search bar, active file | Implemented; replacement grouping/project-wide search pending |
-| Font family/size/colors, dark theme, focus/typewriter | Settings/focus/typewriter | Font/size persistence; color persistence/dark theme pending |
-| Word/statistics info/disk dates/project counts | Active-file counts and undo storage | Project counts and filesystem dates pending |
-| Native document windows and Window menu | NSWindow + SwiftUI hosting | Native independent windows under inspection |
-| Autosave/recovery/conflicts/Save As dependencies | Native source recovery and guarded disk writes | Implemented; deletion/conflict/relaunch checks pending |
-| Templates (paper/thesis), rename, recents | Not yet implemented | Actual Go features from app.go/recents.go |
-| Agent access/MCP/selective agent undo | Not yet implemented | Actual Go feature; requires explicit integration work |
+| Launch/New/Open/recents/templates/rename | Empty focused launch, native menus and separate windows | Startup, include opening, rename and Save As checked; recent-menu/template pointer checks pending |
+| Reading typography and white paper | System-installed Iowan Old Style, real faces, native metrics | Native tutorial/new-document screenshots checked; ligature/complex wrapping matrix pending |
+| Native macOS window/toolbar | macOS 26+ standard Liquid Glass NSToolbar; macOS 27 tab role | Real Cmd-1/Cmd-2 tab synchronization/focus and scrolling beneath glass checked |
+| Typing/selection/Unicode/shared history | NSTextView/TextKit 2; range transactions | Model/native acceptance passes; physical latency, bidi and real IME candidates unverified |
+| Bold/italic and typing shortcuts | Syntax-backed commands and typed markup | Selected formatting, toggles inside words, repeated typing and nested shortcuts checked |
+| Slash/app commands | Caret popover and SwiftUI sheet, filtering/arrows/Return/Escape | Real slash filtering/keyboard choice checked; menu geometry corrected; app-command pointer inspection pending |
+| Splitting/joining/list continuation/empty exit | Source transactions retaining inline formatting | Model/native Return acceptance passes |
+| Clipboard | Exact Source text, structured internal Write, external RTF and images | Native internal/plain clipboard passes; external list/heading kinds unverified |
+| Block handles/menu/drag | Native cursors, translucent snapshot, one insertion line | Implemented; pointer acceptance and object-adjacent navigation pending |
+| Hierarchy/section movement | Collapsible outline with elision and source section moves | Movement checked; pointer and repeated-title identity checks pending |
+| Scrolling at viewport edge | NSScrollView independent of text padding | Implemented; all-view/secondary-window long-document scrolling pending |
+| Source characters/colors/fonts/delimiters | Native attributed full source, literal delimiters and indent continuation | Exact clipboard/native delimiters checked; large-file styling remains full-file |
+| Preview/PDF/navigation/error retention | Background official compiler, native PDFKit/source maps | Compiler protocol, error retention and export pass; passage navigation/scroll page field inspection pending |
+| Tables | Visible native cell controls, Tab/final Tab row, dimensions sheet | Mounting, Unicode typing, shared cell undo/redo/focus and valid row addition pass; all dimension cases pending |
+| Images/figures/captions/drop/paste | Native importing and NSImageView/PDF thumbnails, bounded cache | Native PNG/caption PDF export passes; PDF-page/size editing and SVG/multipage/drop variants pending |
+| Links/footnotes/math/labels/references | Native insertion sheets, conservative inline/source projection | Compiler fixture passes; existing-object editing needs refinement |
+| Zotero/citations/bibliography | Local API, stable keys, saved metadata/refresh, preset styles | Implemented; live integration, library picker, custom CSL and citation UI acceptance pending |
+| Multi-file manuscripts | Literal include loading and independent file editors | In-memory nested compilation/Save As passes; continuous view, live include refresh and chapter reordering pending |
+| Search/replace/statistics | Active/project search and per-file/project counts, file metadata | Implemented; includes parsed from AST, prose counts checked; project grouping and continuous occurrences pending |
+| Settings/focus/typewriter | Persisted installed fonts, size/colors, dark option and focus modes | Implemented; synchronization across windows and system-theme refinement pending |
+| Document windows/Window menu | Native independent NSWindow sessions | Implemented; expanded secondary-window/lifetime/accessibility acceptance pending |
+| Autosave/recovery/external changes | Debounced writes, guarded collisions/conflicts/deletions, recovery | Disposable file checks pass; disjoint merge, directory watch, relaunch/disk failure matrix pending |
+| Agent/MCP/selective agent undo | Planned native interface; disabled by default design | Not implemented; includes atomic revision-checked multi-file edits and per-window access |
 
-This is an implementation audit, not an assertion of full parity. Checked native input does not prove IME candidate-window, VoiceOver, or bidirectional acceptance.
+This records actual implementation and gaps. Automated input does not establish pointer, VoiceOver, real IME, bidirectional or release-distribution acceptance. Windows/Linux are outside the Swift frontend scope.
