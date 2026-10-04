@@ -20,13 +20,13 @@ On macOS, open `target/release/bundle/blank_.app`, or `target/debug/bundle/blank
 
 ## Editing
 
-Use ⌘1 / ⌘2 / ⌘3 for Write / Source / Preview, ⌘K for commands, ⌘⇧L for the table of contents, and ⌘S to save. Help → Tutorial opens an editable copy of [the original tutorial](examples/Tutorial.typ).
+Launch opens a focused empty document, ready to write. Use ⌘1 / ⌘2 / ⌘3 for Write / Source / Preview, ⌘K for commands, ⌘⇧L for the collapsible heading outline, and ⌘S to save. Help → Tutorial opens an editable copy of [the original tutorial](examples/Tutorial.typ).
 
 Write supports paragraphs, headings, simple lists, bold and italic. Return continues a list; Return on an empty item exits it. At the start of a paragraph, `= `, `== ` and `=== ` create headings; `- ` and `+ ` create lists. `*bold*` and `_italic_` apply inline formatting.
 
 Type `/` to open block commands beside the caret. Continue typing to filter, use arrow keys and Return to choose, or Escape to keep the literal text. Hover beside a block to reveal its handle; click for Turn into, Duplicate and Delete. ⌥↑ / ⌥↓ moves the current block.
 
-Source displays every Typst character, with syntax colors, heading sizes and bold/italic markup. Copying uses exact plain source text. Delimiters support basic pairing. Write and Source share undo/redo; custom expressions can be edited in Source.
+Copying in Write preserves heading levels, list kinds and inline formatting when pasted back into the editor. Source displays every Typst character, with syntax colors, heading sizes and bold/italic markup. Copying in Source uses exact plain source text. Delimiters support basic pairing. Write and Source share undo/redo; custom expressions can be edited in Source.
 
 Preview displays typeset pages. Compilation errors preserve the last successful preview. Export PDF requires a successful compilation of the current document; clicking preview text navigates to its source position.
 
@@ -49,11 +49,21 @@ The current GUI was selected for editor transactions and fast iteration. Alterna
 
 References: [egui_richedit](https://docs.rs/egui_richedit/0.7.0/egui_richedit/), [GPUI Editor](https://github.com/longbridge/gpui-component/blob/main/website/docs/components/editor.md), [text-document](https://github.com/FernTech-EU/text-document), [Parley](https://github.com/linebender/parley), [Iced text_editor](https://docs.iced.rs/iced/widget/text_editor/index.html).
 
-## Current limitations
+## Roadmap
 
-Structured tables, figures, images, citations, footnotes and link dialogs remain to implement, together with multi-file rich editing, chapter movement, multiple windows, search, settings, statistics and recovery. The bundled tutorial includes instructions for some of these features.
+- [ ] Structured tables, figures and images.
+- [ ] Citations, footnotes and link dialogs.
+- [ ] Multi-file rich editing and chapter movement.
+- [ ] Multiple windows and recovery.
+- [ ] Search, settings and statistics.
+- [ ] Validate native pointer dragging, IME, VoiceOver and grapheme-aware rich cursor movement.
+- [ ] Test Linux and Windows; macOS has been exercised.
+- [ ] Native scrollbar integration; egui currently draws the scrollbar.
+- [ ] Incremental document projection and layout; both currently scan the document.
+- [ ] Render preview pages on demand; rasterization currently processes all pages.
+- [ ] Reduce undo memory use; history currently retains up to 200 source snapshots.
 
-The scrollbar is drawn by egui. Native pointer dragging, IME, VoiceOver and grapheme-aware rich cursor movement need further validation. macOS has been exercised; Linux and Windows need platform testing. Document projection/layout scan the document, preview rasterizes pages eagerly, and undo retains up to 200 source snapshots.
+The bundled tutorial includes instructions for some features on this roadmap.
 
 ## Development
 

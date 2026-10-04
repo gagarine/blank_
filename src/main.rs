@@ -2,6 +2,7 @@ mod commands;
 mod editor;
 #[cfg(target_os = "macos")]
 mod menus;
+mod outline;
 mod preview;
 mod source_editor;
 mod typography;
@@ -32,7 +33,6 @@ struct App {
     path: Option<PathBuf>,
     disk_text: String,
     mode: Mode,
-    home: bool,
     contents: bool,
     bookmark: usize,
     source_focus: bool,
@@ -54,7 +54,8 @@ struct App {
     zoom: f32,
     error: Option<String>,
     conflict: bool,
-    confirm_close: bool,
+    message_dialog: rfd::MessageDialog,
+    file_dialog: rfd::FileDialog,
     window_title: String,
     picker: Picker,
     pending_events: Vec<egui::Event>,
@@ -66,6 +67,7 @@ struct App {
     caret_anchor: Option<egui::Pos2>,
     dragging_block: Option<usize>,
     block_menu: Option<(usize, egui::Pos2)>,
+    block_transform: bool,
     #[cfg(test)]
     block_rects: Vec<egui::Rect>,
     #[cfg(target_os = "macos")]
@@ -81,7 +83,7 @@ impl App {
         style.visuals.panel_fill = Color32::WHITE;
         style.visuals.window_fill = Color32::WHITE;
         style.visuals.override_text_color = Some(Color32::from_rgb(52, 58, 55));
-        style.visuals.selection.bg_fill = Color32::from_rgb(218, 229, 216);
+        style.visuals.text_cursor.stroke = egui::Stroke::new(2.0, Color32::from_rgb(52, 58, 55));
         // Standard egui components with the app's quiet palette.
         ctx.set_global_style(style);
         let reading_faces = typography::install(ctx);
@@ -95,7 +97,6 @@ impl App {
             path: None,
             disk_text: String::new(),
             mode: Mode::Write,
-            home: true,
             contents: true,
             bookmark: 0,
             source_focus: false,
@@ -117,7 +118,8 @@ impl App {
             zoom: 1.0,
             error: None,
             conflict: false,
-            confirm_close: false,
+            message_dialog: rfd::MessageDialog::new().set_parent(cc),
+            file_dialog: rfd::FileDialog::new().set_parent(cc),
             window_title: String::new(),
             picker: Picker::default(),
             pending_events: vec![],
@@ -129,11 +131,13 @@ impl App {
             caret_anchor: None,
             dragging_block: None,
             block_menu: None,
+            block_transform: false,
             #[cfg(test)]
             block_rects: vec![],
             #[cfg(target_os = "macos")]
             menus: None,
         };
+        app.load(String::new(), None);
         let args: Vec<String> = std::env::args().skip(1).collect();
         if args.iter().any(|a| a == "--demo") {
             app.load(DEMO.to_owned(), None);
@@ -168,13 +172,14 @@ impl App {
         self.model.document = Document::new(text);
         self.model.error = None;
         self.path = path;
-        self.home = false;
-        self.editor = RichEdit::new(Id::new("writer"));
+        self.editor.document_replaced();
         self.editor
             .select(Selection::caret(egui_richedit::Position::new(0, 0)));
         self.seen_revision = 0;
         self.bookmark = 0;
         self.source_focus = true;
+        self.restore_focus = true;
+        self.last_input = Instant::now();
         self.source_new_step = true;
         self.pages.clear();
         self.pdf.clear();
@@ -315,7 +320,9 @@ impl App {
     }
     fn save(&mut self, save_as: bool) -> bool {
         let path = if save_as || self.path.is_none() {
-            let mut dialog = rfd::FileDialog::new()
+            let mut dialog = self
+                .file_dialog
+                .clone()
                 .add_filter("Typst document", &["typ"])
                 .set_file_name(
                     self.path
@@ -375,14 +382,22 @@ impl App {
         if !self.dirty() {
             return true;
         }
-        let answer = rfd::MessageDialog::new()
+        let answer = self
+            .message_dialog
+            .clone()
             .set_title("Save your writing?")
             .set_description("Save changes before opening another document.")
-            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+                "Save".into(),
+                "Discard".into(),
+                "Keep writing".into(),
+            ))
             .show();
         match answer {
             rfd::MessageDialogResult::Yes => self.save(false),
             rfd::MessageDialogResult::No => true,
+            rfd::MessageDialogResult::Custom(label) if label == "Save" => self.save(false),
+            rfd::MessageDialogResult::Custom(label) if label == "Discard" => true,
             _ => false,
         }
     }
@@ -390,7 +405,9 @@ impl App {
         if !self.protect_unsaved() {
             return;
         }
-        if let Some(path) = rfd::FileDialog::new()
+        if let Some(path) = self
+            .file_dialog
+            .clone()
             .add_filter("Typst document", &["typ"])
             .pick_file()
         {
@@ -412,6 +429,7 @@ impl App {
         self.picker.open = false;
         self.slash_start = None;
         self.block_menu = None;
+        self.block_transform = false;
         self.dragging_block = None;
         let changed = if redo {
             self.model.document.redo()
@@ -434,14 +452,14 @@ impl App {
         use Command::*;
         match command {
             New | Open | Close | Quit | Palette | Tutorial | Contents => true,
-            Undo => !self.home && self.model.document.can_undo(),
-            Redo => !self.home && self.model.document.can_redo(),
+            Undo => self.model.document.can_undo(),
+            Redo => self.model.document.can_redo(),
             Bold | Italic | Paragraph | Heading1 | Heading2 | Heading3 | Bullet | Numbered => {
-                !self.home && self.mode == Mode::Write
+                self.mode == Mode::Write
             }
-            Refresh | ZoomIn | ZoomOut | ActualSize => !self.home && self.mode == Mode::Preview,
-            Cut | Copy | Paste | SelectAll => !self.home && self.mode != Mode::Preview,
-            _ => !self.home,
+            Refresh | ZoomIn | ZoomOut | ActualSize => self.mode == Mode::Preview,
+            Cut | Copy | Paste | SelectAll => self.mode != Mode::Preview,
+            _ => true,
         }
     }
     fn execute(&mut self, command: Command, ctx: &egui::Context) {
@@ -593,7 +611,7 @@ impl App {
             }
             return;
         }
-        if self.home || self.mode != Mode::Write {
+        if self.mode != Mode::Write {
             return;
         }
         if let Some(selection) = self.editor.selection()
@@ -680,8 +698,9 @@ impl App {
             });
         } else {
             let response = egui::Modal::new(Id::new("command-picker"))
+                .area(egui::Modal::default_area(Id::new("command-picker")).movable(false))
                 .backdrop_color(Color32::from_black_alpha(25))
-                .frame(frame.inner_margin(20))
+                .frame(frame.corner_radius(12).inner_margin(24))
                 .show(ctx, |ui| {
                     ui.set_width(420.0);
                     ui.horizontal(|ui| {
@@ -690,7 +709,7 @@ impl App {
                             egui::FontFamily::Name("reading".into()),
                         )));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("×").clicked() {
+                            if ui.add(egui::Button::new("×").frame(false)).clicked() {
                                 open = false;
                             }
                         });
@@ -793,7 +812,9 @@ impl App {
         }
     }
     fn export(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = self
+            .file_dialog
+            .clone()
             .add_filter("PDF", &["pdf"])
             .set_file_name("manuscript.pdf")
             .save_file()
@@ -894,6 +915,7 @@ impl App {
         let mut open = true;
         let mut action = None;
         let mut close_menu = false;
+        let width = if self.block_transform { 170.0 } else { 140.0 };
         egui::Popup::new(
             Id::new("block-menu"),
             ctx.clone(),
@@ -901,7 +923,8 @@ impl App {
             egui::LayerId::background(),
         )
         .open_bool(&mut open)
-        .width(190.0)
+        .width(width)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .kind(egui::PopupKind::Menu)
         .style(egui::containers::menu::menu_style)
         .frame(
@@ -910,9 +933,12 @@ impl App {
                 .corner_radius(9),
         )
         .show(|ui| {
-            ui.set_width(190.0);
+            ui.set_width(width);
             ui.spacing_mut().interact_size.y = 30.0;
-            ui.menu_button("Turn into…", |ui| {
+            if self.block_transform {
+                if ui.button("← Back").clicked() {
+                    self.block_transform = false;
+                }
                 for command in [
                     Command::Paragraph,
                     Command::Heading1,
@@ -923,19 +949,22 @@ impl App {
                 ] {
                     if ui.button(command.label()).clicked() {
                         action = Some(command);
-                        ui.close();
                     }
                 }
-            });
-            if ui.button("Duplicate").clicked() {
-                let result = self.model.document.duplicate_block(index);
-                self.finish_block_action(result, ctx);
-                close_menu = true;
-            }
-            if ui.button("Delete").clicked() {
-                let result = self.model.document.delete_block(index);
-                self.finish_block_action(result, ctx);
-                close_menu = true;
+            } else {
+                if ui.button("Turn into…").clicked() {
+                    self.block_transform = true;
+                }
+                if ui.button("Duplicate").clicked() {
+                    let result = self.model.document.duplicate_block(index);
+                    self.finish_block_action(result, ctx);
+                    close_menu = true;
+                }
+                if ui.button("Delete").clicked() {
+                    let result = self.model.document.delete_block(index);
+                    self.finish_block_action(result, ctx);
+                    close_menu = true;
+                }
             }
         });
         if let Some(command) = action {
@@ -950,10 +979,11 @@ impl App {
         }
         if !open || close_menu {
             self.block_menu = None;
+            self.block_transform = false;
         }
     }
     fn block_shortcuts(&mut self, ctx: &egui::Context) {
-        if self.home || self.mode != Mode::Write || self.picker.open {
+        if self.mode != Mode::Write || self.picker.open {
             return;
         }
         if let Some(selection) = self.editor.selection() {
@@ -973,6 +1003,7 @@ impl App {
     }
     fn writing(&mut self, ui: &mut egui::Ui) {
         let mut drop_target = None;
+        let mut bounds = Vec::new();
         #[cfg(test)]
         self.block_rects.clear();
         egui::ScrollArea::vertical()
@@ -991,7 +1022,7 @@ impl App {
                             match block {
                                 Block::Source { range, kind } => {
                                     let raw = self.model.document.text()[range.clone()].to_owned();
-                                    ui.horizontal(|ui| {
+                                    let response = ui.horizontal(|ui| {
                                         egui::CollapsingHeader::new(kind)
                                             .id_salt(range.start)
                                             .show(ui, |ui| {
@@ -1006,6 +1037,7 @@ impl App {
                                                 self.source_new_step = true;
                                             });
                                     });
+                                    bounds.push((None, response.response.rect));
                                     ui.add_space(8.0);
                                 }
                                 Block::Editable(index) => {
@@ -1030,6 +1062,7 @@ impl App {
                                         vec2(width, galley.size().y),
                                         Sense::click_and_drag(),
                                     );
+                                    bounds.push((Some(index), rect));
                                     if let Some(selection) = self.editor.selection()
                                         && selection.focus.paragraph == index
                                     {
@@ -1053,18 +1086,50 @@ impl App {
                                         self.caret_anchor =
                                             Some(caret.left_bottom() + vec2(0.0, 6.0));
                                     }
+                                    let cursor_stroke = ui.visuals().text_cursor.stroke;
+                                    ui.visuals_mut().text_cursor.stroke = egui::Stroke::NONE;
                                     self.editor.paragraph(
                                         ui,
                                         &response,
                                         &index,
                                         Laid {
-                                            galley,
+                                            galley: galley.clone(),
                                             map,
                                             origin: rect.min,
                                         },
                                     );
-                                    let handle_rect = egui::Rect::from_min_size(
-                                        rect.min - vec2(24.0, 0.0),
+                                    ui.visuals_mut().text_cursor.stroke = cursor_stroke;
+                                    if ui.memory(|m| m.has_focus(Id::new("writer")))
+                                        && self
+                                            .editor
+                                            .selection()
+                                            .is_some_and(|s| s.focus.paragraph == index)
+                                        && let Some(caret) =
+                                            ui.output(|o| o.ime.as_ref().map(|ime| ime.cursor_rect))
+                                    {
+                                        let transform = ui
+                                            .ctx()
+                                            .layer_transform_to_global(ui.layer_id())
+                                            .unwrap_or_default();
+                                        typography::paint_caret(
+                                            ui,
+                                            &galley,
+                                            rect.min,
+                                            transform.inverse() * caret,
+                                            self.last_input.elapsed().as_secs_f32(),
+                                        );
+                                    }
+                                    let first_line = galley
+                                        .pos_from_cursor(egui::text::CCursor::new(
+                                            egui::text::CharIndex::ZERO,
+                                        ))
+                                        .translate(rect.min.to_vec2());
+                                    let line_center =
+                                        typography::caret_rect(&galley, rect.min, first_line, 2.0)
+                                            .center()
+                                            .y;
+                                    let handle_rect = egui::Rect::from_center_size(
+                                        egui::pos2(rect.left() - 14.0, line_center),
                                         vec2(20.0, 30.0),
                                     );
                                     #[cfg(test)]
@@ -1110,29 +1175,7 @@ impl App {
                                     }
                                     if handle.clicked() {
                                         self.block_menu = Some((index, handle_rect.left_bottom()));
-                                    }
-                                    if self.dragging_block.is_some() && hovering {
-                                        let after = ui.input(|i| {
-                                            i.pointer
-                                                .hover_pos()
-                                                .is_some_and(|pos| pos.y > rect.center().y)
-                                        });
-                                        let y = if after {
-                                            rect.bottom() + 8.0
-                                        } else {
-                                            rect.top() - 8.0
-                                        };
-                                        ui.painter().line_segment(
-                                            [
-                                                egui::pos2(rect.left(), y),
-                                                egui::pos2(rect.right(), y),
-                                            ],
-                                            egui::Stroke::new(
-                                                2.0,
-                                                Color32::from_rgb(134, 153, 124),
-                                            ),
-                                        );
-                                        drop_target = Some((index, after));
+                                        self.block_transform = false;
                                     }
                                     ui.add_space(if matches!(p.kind, BlockKind::Heading(_)) {
                                         22.0
@@ -1145,6 +1188,52 @@ impl App {
                         ui.add_space(200.0);
                     });
                 });
+                if self.dragging_block.is_some()
+                    && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
+                    && ui.clip_rect().contains(pointer)
+                {
+                    let mut nearest = None;
+                    for (row, &(index, rect)) in bounds.iter().enumerate() {
+                        let Some(index) = index else { continue };
+                        if pointer.x < rect.left() - 24.0 || pointer.x > rect.right() {
+                            continue;
+                        }
+                        let before = bounds
+                            .get(row.wrapping_sub(1))
+                            .map_or(rect.top() - 12.0, |(_, above)| {
+                                (above.bottom() + rect.top()) / 2.0
+                            });
+                        let after = bounds
+                            .get(row + 1)
+                            .map_or(rect.bottom() + 12.0, |(_, below)| {
+                                (rect.bottom() + below.top()) / 2.0
+                            });
+                        for (after, y) in [(false, before), (true, after)] {
+                            let distance = (pointer.y - y).abs();
+                            if nearest
+                                .as_ref()
+                                .is_none_or(|&(best, _, _, _)| distance < best)
+                            {
+                                nearest = Some((
+                                    distance,
+                                    index,
+                                    after,
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(rect.left(), y),
+                                        egui::pos2(rect.right(), y),
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    if let Some((_, index, after, line)) = nearest {
+                        ui.painter().line_segment(
+                            [line.min, line.max],
+                            egui::Stroke::new(2.0, Color32::from_rgb(134, 153, 124)),
+                        );
+                        drop_target = Some((index, after));
+                    }
+                }
             });
         if ui.input(|i| i.pointer.any_released())
             && let Some(from) = self.dragging_block.take()
@@ -1163,6 +1252,13 @@ impl App {
         }
     }
     fn source(&mut self, ui: &mut egui::Ui) {
+        if ui.input(|i| {
+            i.events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Copy | egui::Event::Cut))
+        }) {
+            self.editor.clear();
+        }
         let errors = self.model.document.errors();
         if !errors.is_empty() {
             ui.colored_label(
@@ -1214,6 +1310,8 @@ impl App {
                     job.wrap.max_width = width;
                     ui.fonts_mut(|fonts| fonts.layout_job(job))
                 };
+                let cursor_stroke = ui.visuals().text_cursor.stroke;
+                ui.visuals_mut().text_cursor.stroke = egui::Stroke::NONE;
                 let mut output = egui::TextEdit::multiline(&mut self.source_buffer)
                     .id(id)
                     .font(egui::TextStyle::Monospace)
@@ -1223,6 +1321,7 @@ impl App {
                     .layouter(&mut layouter)
                     .code_editor()
                     .show(ui);
+                ui.visuals_mut().text_cursor.stroke = cursor_stroke;
                 if let Some(cursor) = paired {
                     output.state.cursor.set_char_range(Some(cursor));
                     output.state.clone().store(ui.ctx(), id);
@@ -1230,6 +1329,19 @@ impl App {
                     ui.ctx().request_repaint();
                 }
                 if let Some(cursor) = output.cursor_range {
+                    if output.response.has_focus() {
+                        let caret = output
+                            .galley
+                            .pos_from_cursor(cursor.primary)
+                            .translate(output.galley_pos.to_vec2());
+                        typography::paint_caret(
+                            ui,
+                            &output.galley,
+                            output.galley_pos,
+                            caret,
+                            self.last_input.elapsed().as_secs_f32(),
+                        );
+                    }
                     self.bookmark = self
                         .source_buffer
                         .char_indices()
@@ -1357,7 +1469,7 @@ impl eframe::App for App {
         }
         if self.restore_focus {
             self.restore_focus = false;
-            if !self.home && self.mode != Mode::Preview {
+            if self.mode != Mode::Preview {
                 ctx.memory_mut(|m| {
                     m.request_focus(Id::new(if self.mode == Mode::Write {
                         "writer"
@@ -1379,29 +1491,37 @@ impl eframe::App for App {
         self.poll_compile(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) && self.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm_close = true;
-        }
-        if self.confirm_close {
-            egui::Window::new("Save your writing?")
-                .collapsible(false)
-                .resizable(false)
-                .show(&ctx, |ui| {
-                    ui.label("This document has unsaved changes.");
-                    ui.horizontal(|ui| {
-                        if ui.button("Save and close").clicked() && self.save(false) {
-                            self.confirm_close = false;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                        if ui.button("Discard and close").clicked() {
-                            self.disk_text = self.model.document.text().to_owned();
-                            self.confirm_close = false;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                        if ui.button("Keep writing").clicked() {
-                            self.confirm_close = false;
-                        }
-                    });
-                });
+            let answer = self
+                .message_dialog
+                .clone()
+                .set_title("Save your writing?")
+                .set_description("This document has unsaved changes.")
+                .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
+                    "Save and close".into(),
+                    "Discard and close".into(),
+                    "Keep writing".into(),
+                ))
+                .show();
+            let close = match answer {
+                rfd::MessageDialogResult::Yes => self.save(false),
+                rfd::MessageDialogResult::No => {
+                    self.disk_text = self.model.document.text().to_owned();
+                    true
+                }
+                rfd::MessageDialogResult::Custom(label) if label == "Save and close" => {
+                    self.save(false)
+                }
+                rfd::MessageDialogResult::Custom(label) if label == "Discard and close" => {
+                    self.disk_text = self.model.document.text().to_owned();
+                    true
+                }
+                _ => false,
+            };
+            if close {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.restore_editor_focus(&ctx);
+            }
         }
         if let Some(error) = self.model.error.take() {
             self.error = Some(error);
@@ -1444,10 +1564,10 @@ impl eframe::App for App {
                     }
                 });
             });
-        if self.contents && !self.home {
+        if self.contents {
             egui::Panel::left("contents")
                 .show_separator_line(false)
-                .default_size(200.0)
+                .exact_size(220.0)
                 .frame(
                     egui::Frame::NONE
                         .fill(Color32::WHITE)
@@ -1455,81 +1575,30 @@ impl eframe::App for App {
                 )
                 .show(ui, |ui| {
                     ui.add_space(18.0);
-                    let headings: Vec<_> = self
-                        .model
-                        .document
-                        .paragraphs
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, p)| {
-                            matches!(p.kind, BlockKind::Heading(_))
-                                && !(*i == 0 && p.text() == "Tutorial")
-                        })
-                        .map(|(i, p)| (i, p.text(), p.range.start))
-                        .collect();
-                    let active = headings
-                        .iter()
-                        .rfind(|(_, _, byte)| *byte <= self.bookmark)
-                        .map(|(i, _, _)| *i)
-                        .or_else(|| headings.first().map(|(i, _, _)| *i));
-                    for (i, text, byte) in headings {
-                        let label =
-                            egui::RichText::new(text)
-                                .size(12.0)
-                                .color(if active == Some(i) {
-                                    Color32::from_rgb(52, 58, 55)
-                                } else {
-                                    Color32::from_rgb(147, 149, 141)
-                                });
-                        if ui.add(egui::Button::new(label).frame(false)).clicked() {
-                            self.bookmark = byte;
-                            match self.mode {
-                                Mode::Write => self
-                                    .editor
-                                    .select(Selection::caret(egui_richedit::Position::new(i, 0))),
-                                Mode::Source => self.source_focus = true,
-                                Mode::Preview => self.reveal_page = true,
-                            }
+                    if let Some((i, byte)) = outline::show(ui, &self.model.document, self.bookmark)
+                    {
+                        self.bookmark = byte;
+                        match self.mode {
+                            Mode::Write => self
+                                .editor
+                                .select(Selection::caret(egui_richedit::Position::new(i, 0))),
+                            Mode::Source => self.source_focus = true,
+                            Mode::Preview => self.reveal_page = true,
                         }
-                        ui.add_space(10.0);
                     }
                 });
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(ui.style()).inner_margin(0))
-            .show(ui, |ui| {
-                if self.home {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(110.0);
-                        ui.heading("A quiet place to write.");
-                        ui.add_space(20.0);
-                        #[cfg(target_os = "macos")]
-                        ui.weak("⌘N to start · ⌘O to open · ⌘K for commands");
-                        #[cfg(not(target_os = "macos"))]
-                        if ui.button("New document").clicked() {
-                            self.new_document();
-                        }
-                        #[cfg(not(target_os = "macos"))]
-                        if ui.button("Open Typst document…").clicked() {
-                            self.open();
-                        }
-                        #[cfg(not(target_os = "macos"))]
-                        if ui.button("Tutorial").clicked() {
-                            self.load(DEMO.into(), None);
-                        }
-                    });
-                } else {
-                    match self.mode {
-                        Mode::Write => self.writing(ui),
-                        Mode::Source => self.source(ui),
-                        Mode::Preview => self.preview(ui),
-                    }
-                }
+            .show(ui, |ui| match self.mode {
+                Mode::Write => self.writing(ui),
+                Mode::Source => self.source(ui),
+                Mode::Preview => self.preview(ui),
             });
         self.block_picker(&ctx);
         self.command_picker(&ctx);
         self.changed();
-        if !self.home && self.last_edit.elapsed() >= Duration::from_millis(650) {
+        if self.last_edit.elapsed() >= Duration::from_millis(650) {
             if self.mode == Mode::Preview
                 && self.requested_revision != Some(self.model.document.revision)
             {
@@ -1539,7 +1608,7 @@ impl eframe::App for App {
                 self.save(false);
             }
         }
-        if !self.home && self.last_edit.elapsed() < Duration::from_millis(650) {
+        if self.last_edit.elapsed() < Duration::from_millis(650) {
             ctx.request_repaint_after(
                 Duration::from_millis(650)
                     - self.last_edit.elapsed().min(Duration::from_millis(650)),
@@ -1578,7 +1647,7 @@ fn command_row(ui: &mut egui::Ui, command: Command, selected: bool) -> egui::Res
         _ => ("", ""),
     };
     let fill = if selected {
-        Color32::from_rgb(234, 236, 229)
+        ui.visuals().selection.bg_fill
     } else {
         Color32::TRANSPARENT
     };
@@ -1669,6 +1738,208 @@ mod app_tests {
             modifiers: Modifiers::NONE,
         }
     }
+    fn text_rect(output: &egui::FullOutput, label: &str) -> egui::Rect {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing visible text: {label}"))
+    }
+    fn click(ctx: &egui::Context, app: &mut App, pos: egui::Pos2) -> egui::FullOutput {
+        frame(
+            ctx,
+            app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        frame(
+            ctx,
+            app,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        )
+    }
+    #[test]
+    fn outline_indents_and_folds_children_and_keeps_titles_on_one_line() {
+        let (ctx, mut app) = setup("= Chapter\n\n== Section\n\n=== Topic\n\n= Next chapter");
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let output = frame(&ctx, &mut app, vec![]);
+        let chapter = text_rect(&output, "Chapter");
+        let section = text_rect(&output, "Section");
+        let topic = text_rect(&output, "Topic");
+        assert!(section.left() > chapter.left());
+        assert!(topic.left() > section.left());
+        assert!(section.height() < 28.0);
+        let arrow = egui::pos2(chapter.left() - 12.0, chapter.center().y);
+        click(&ctx, &mut app, arrow);
+        let output = frame(&ctx, &mut app, vec![]);
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.pos.x < 220.0 && matches!(text.galley.job.text.as_str(), "Section" | "Topic"))));
+        assert!(text_rect(&output, "Next chapter").left() < 220.0);
+        click(&ctx, &mut app, arrow);
+        let output = frame(&ctx, &mut app, vec![]);
+        assert!(text_rect(&output, "Section").left() < 220.0);
+    }
+    #[test]
+    fn turn_into_replaces_the_menu_and_back_returns_to_block_actions() {
+        let (ctx, mut app) = setup("Text");
+        frame(&ctx, &mut app, vec![]);
+        app.block_menu = Some((0, egui::pos2(250.0, 110.0)));
+        frame(&ctx, &mut app, vec![]);
+        let output = frame(&ctx, &mut app, vec![]);
+        click(&ctx, &mut app, text_rect(&output, "Turn into…").center());
+        assert!(app.block_menu.is_some());
+        assert!(app.block_transform);
+        let output = frame(&ctx, &mut app, vec![]);
+        click(&ctx, &mut app, text_rect(&output, "← Back").center());
+        assert!(!app.block_transform);
+        let output = frame(&ctx, &mut app, vec![]);
+        click(&ctx, &mut app, text_rect(&output, "Turn into…").center());
+        let output = frame(&ctx, &mut app, vec![]);
+        click(&ctx, &mut app, text_rect(&output, "Heading 2").center());
+        assert!(app.block_menu.is_none());
+        assert_eq!(app.model.document.text(), "== Text");
+    }
+    #[test]
+    fn startup_is_focused_and_ready_to_type_with_a_font_height_rounded_caret() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = App::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let output = frame(&ctx, &mut app, vec![]);
+        assert!(ctx.memory(|m| m.has_focus(Id::new("writer"))));
+        assert!(app.model.document.text().is_empty());
+        let color = ctx.global_style().visuals.text_cursor.stroke.color;
+        let caret = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == color && rect.rect.width() == 2.0 => {
+                    Some(rect)
+                }
+                _ => None,
+            })
+            .expect("startup draws a caret");
+        assert!(caret.rect.height() < app.block_rects[0].height());
+        assert_eq!(caret.corner_radius.nw, 1);
+        frame(&ctx, &mut app, vec![egui::Event::Text("Ready".into())]);
+        assert_eq!(app.model.document.text(), "Ready");
+    }
+    #[test]
+    fn write_copy_paste_keeps_title_style_across_document_replacement() {
+        let (ctx, mut app) = setup("== Café *bold _title_*");
+        let len = app.model.document.paragraphs[0].glyphs.len();
+        app.editor.select(Selection {
+            anchor: egui_richedit::Position::new(0, 0),
+            focus: egui_richedit::Position::new(0, len),
+        });
+        frame(&ctx, &mut app, vec![]);
+        let output = frame(&ctx, &mut app, vec![egui::Event::Copy]);
+        let copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(copied, "Café bold title");
+        app.load(String::new(), None);
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![egui::Event::Paste(copied)]);
+        assert_eq!(app.model.document.paragraphs[0].kind, BlockKind::Heading(2));
+        assert_eq!(app.model.document.paragraphs[0].text(), "Café bold title");
+        assert!(
+            app.model.document.paragraphs[0].glyphs[5..]
+                .iter()
+                .all(|g| g.bold)
+        );
+        assert!(
+            app.model.document.paragraphs[0].glyphs[10..]
+                .iter()
+                .all(|g| g.italic)
+        );
+        app.history(false);
+        assert_eq!(app.model.document.text(), "");
+    }
+    #[test]
+    fn dropping_from_either_side_of_a_heading_gap_draws_one_centered_line() {
+        let (ctx, mut app) = setup("First\n\n== Second\n\nThird");
+        frame(&ctx, &mut app, vec![]);
+        let rects = app.block_rects.clone();
+        let handle = rects[2].left_top() + vec2(-14.0, 15.0);
+        frame(&ctx, &mut app, vec![egui::Event::PointerMoved(handle)]);
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos: handle,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        let midpoint = (rects[0].bottom() + rects[1].top()) / 2.0;
+        for y in [rects[0].bottom() - 2.0, midpoint, rects[1].top() + 2.0] {
+            let output = frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    rects[0].left() + 10.0,
+                    y,
+                ))],
+            );
+            let lines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == Color32::from_rgb(134, 153, 124) =>
+                    {
+                        Some(points)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(lines.len(), 1);
+            assert!((lines[0][0].y - midpoint).abs() < 0.1);
+        }
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos: egui::pos2(rects[0].left() + 10.0, midpoint),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert_eq!(
+            app.model
+                .document
+                .paragraphs
+                .iter()
+                .map(|p| p.text())
+                .collect::<Vec<_>>(),
+            ["First", "Third", "Second", ""]
+        );
+    }
     #[test]
     fn idle_frames_do_not_repeat_native_title_or_compile_while_writing() {
         let (ctx, mut app) = setup("Hello");
@@ -1691,7 +1962,6 @@ mod app_tests {
     #[test]
     fn tutorial_opens_from_palette_and_draws_the_sidebar() {
         let (ctx, mut app) = setup("");
-        app.home = true;
         frame(&ctx, &mut app, vec![]);
         app.execute(Command::Palette, &ctx);
         frame(&ctx, &mut app, vec![]);

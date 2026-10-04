@@ -1,5 +1,5 @@
 use blank_document::{BlockKind, Document, Mark as DocumentMark, Position as DocumentPosition};
-use egui_richedit::{Edit, Mark, Model, Position};
+use egui_richedit::{Edit, Fragment, Mark, Model, Position};
 
 pub struct EditorModel {
     pub document: Document,
@@ -99,6 +99,30 @@ impl Model for EditorModel {
         mark(m)
             .and_then(|m| self.document.marked(position(from), position(to), m))
             .or(Some(false))
+    }
+    fn fragment(&self, from: &Position<usize>, to: &Position<usize>) -> Option<Fragment> {
+        self.document
+            .fragment(position(from), position(to))
+            .ok()
+            .map(Fragment::new)
+    }
+    fn paste_fragment(
+        &mut self,
+        at: &Position<usize>,
+        fragment: &Fragment,
+        new_step: bool,
+    ) -> Option<Position<usize>> {
+        let fragment = fragment.get::<blank_document::Fragment>()?;
+        match self
+            .document
+            .paste_fragment(position(at), fragment, new_step)
+        {
+            Ok(at) => Some(editor_position(at)),
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        }
     }
     fn apply(&mut self, edit: Edit<'_, usize>, new_step: bool) -> Option<Position<usize>> {
         let result = match edit {

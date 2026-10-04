@@ -218,3 +218,57 @@ pub fn paragraph(p: &Paragraph, width: f32, real_faces: bool, number: usize) -> 
     }
     job
 }
+
+/// Use the editor's cursor position but the font's height, independent of line spacing.
+pub fn paint_caret(
+    ui: &egui::Ui,
+    galley: &egui::Galley,
+    origin: egui::Pos2,
+    row_rect: egui::Rect,
+    since_input: f32,
+) {
+    let style = &ui.visuals().text_cursor;
+    if style.blink {
+        let cycle = style.on_duration + style.off_duration;
+        let phase = since_input % cycle;
+        let visible = phase < style.on_duration;
+        ui.request_repaint_after_secs(if visible {
+            style.on_duration - phase
+        } else {
+            cycle - phase
+        });
+        if !visible {
+            return;
+        }
+    }
+    let caret = caret_rect(galley, origin, row_rect, style.stroke.width);
+    ui.painter().rect_filled(caret, 1, style.stroke.color);
+}
+
+pub fn caret_rect(
+    galley: &egui::Galley,
+    origin: egui::Pos2,
+    row_rect: egui::Rect,
+    width: f32,
+) -> egui::Rect {
+    let mut top = row_rect.top();
+    let mut height = row_rect.height();
+    if let Some(row) = galley.rows.iter().min_by(|a, b| {
+        (origin.y + a.pos.y - row_rect.top())
+            .abs()
+            .total_cmp(&(origin.y + b.pos.y - row_rect.top()).abs())
+    }) && let Some(glyph) = row
+        .glyphs
+        .iter()
+        .rev()
+        .find(|g| origin.x + row.pos.x + g.pos.x <= row_rect.center().x)
+        .or_else(|| row.glyphs.first())
+    {
+        top = origin.y + row.pos.y + glyph.pos.y - glyph.font_ascent;
+        height = glyph.font_height;
+    }
+    egui::Rect::from_min_size(
+        egui::pos2(row_rect.center().x - width / 2.0, top),
+        egui::vec2(width, height),
+    )
+}

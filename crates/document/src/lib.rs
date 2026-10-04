@@ -61,6 +61,11 @@ pub struct Paragraph {
     nodes: Vec<Inline>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Fragment {
+    paragraphs: Vec<(BlockKind, String)>,
+}
+
 impl Paragraph {
     pub fn text(&self) -> String {
         self.glyphs.iter().map(|g| g.text).collect()
@@ -288,6 +293,9 @@ impl Document {
         ))
     }
     fn adjacent_editable(&self, first: usize, last: usize) -> bool {
+        if first == last {
+            return true;
+        }
         let mut inside = false;
         for block in &self.blocks {
             match block {
@@ -298,6 +306,79 @@ impl Document {
             }
         }
         true
+    }
+    pub fn fragment(&self, from: Position, to: Position) -> Result<Fragment, String> {
+        self.selected(from, to)?;
+        if !self.adjacent_editable(from.paragraph, to.paragraph) {
+            return Err("A source block separates these paragraphs.".into());
+        }
+        let paragraphs = (from.paragraph..=to.paragraph)
+            .map(|index| {
+                let p = &self.paragraphs[index];
+                let start = if index == from.paragraph {
+                    from.offset
+                } else {
+                    0
+                };
+                let end = if index == to.paragraph {
+                    to.offset
+                } else {
+                    p.glyphs.len()
+                };
+                (
+                    p.kind.clone(),
+                    slice(&p.nodes, self.text(), start, end, None),
+                )
+            })
+            .collect();
+        Ok(Fragment { paragraphs })
+    }
+    pub fn paste_fragment(
+        &mut self,
+        at: Position,
+        fragment: &Fragment,
+        new_step: bool,
+    ) -> Result<Position, String> {
+        let p = self.valid(at)?;
+        let Some((first_kind, _)) = fragment.paragraphs.first() else {
+            return Ok(at);
+        };
+        let line_start = self.text()[..p.range.start]
+            .rfind('\n')
+            .map_or(0, |i| i + 1);
+        let original_prefix = &self.text()[line_start..p.range.start];
+        let adopt_kind = p.glyphs.is_empty() && *first_kind != p.kind;
+        if adopt_kind
+            && !original_prefix
+                .chars()
+                .all(|c| c.is_whitespace() || matches!(c, '=' | '-' | '+' | '.' | '0'..='9'))
+        {
+            return Err("Change this embedded block in Source.".into());
+        }
+        let mut body = if adopt_kind {
+            block_prefix(first_kind)
+        } else {
+            original_prefix.to_owned()
+        };
+        body.push_str(&slice(&p.nodes, self.text(), 0, at.offset, None));
+        for (index, (kind, source)) in fragment.paragraphs.iter().enumerate() {
+            if index > 0 {
+                body.push_str("\n\n");
+                body.push_str(&block_prefix(kind));
+            }
+            body.push_str(source);
+        }
+        let caret = line_start + body.len();
+        body.push_str(&slice(
+            &p.nodes,
+            self.text(),
+            at.offset,
+            p.glyphs.len(),
+            None,
+        ));
+        let end = p.range.end;
+        self.patch_body(line_start..end, &body, new_step);
+        Ok(self.position_at(caret))
     }
     pub fn split(&mut self, at: Position, new_step: bool) -> Result<Position, String> {
         let p = self.valid(at)?;
@@ -514,12 +595,7 @@ impl Document {
         let p = self.valid(at)?;
         let body_start = p.range.start;
         let line_start = self.text()[..body_start].rfind('\n').map_or(0, |i| i + 1);
-        let prefix = match kind {
-            BlockKind::Paragraph => String::new(),
-            BlockKind::Heading(level) => format!("{} ", "=".repeat(level.clamp(1, 6))),
-            BlockKind::Bullet => "- ".into(),
-            BlockKind::Numbered => "+ ".into(),
-        };
+        let prefix = block_prefix(&kind);
         // A normal paragraph can begin after a source expression on the same line.
         if !self.text()[line_start..body_start]
             .chars()
@@ -543,6 +619,15 @@ impl Document {
         let (paragraphs, blocks) = project(&self.source);
         self.paragraphs = paragraphs;
         self.blocks = blocks;
+    }
+}
+
+fn block_prefix(kind: &BlockKind) -> String {
+    match kind {
+        BlockKind::Paragraph => String::new(),
+        BlockKind::Heading(level) => format!("{} ", "=".repeat((*level).clamp(1, 6))),
+        BlockKind::Bullet => "- ".into(),
+        BlockKind::Numbered => "+ ".into(),
     }
 }
 

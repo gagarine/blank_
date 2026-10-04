@@ -1,6 +1,59 @@
 use blank_document::{BlockKind, Document, Mark, Position as P, minimal_patch};
 
 #[test]
+fn clipboard_fragments_keep_heading_level_nested_marks_and_one_undo_step() {
+    let source = "== Café *bold _title_*\n\n#set text(size: 11pt)";
+    let original = Document::new(source);
+    let fragment = original.fragment(P::new(0, 5), P::new(0, 15)).unwrap();
+    let mut destination = Document::new("");
+    let caret = destination
+        .paste_fragment(P::new(0, 0), &fragment, true)
+        .unwrap();
+    assert_eq!(destination.paragraphs[0].kind, BlockKind::Heading(2));
+    assert_eq!(destination.paragraphs[0].text(), "bold title");
+    assert_eq!(caret, P::new(0, 10));
+    assert!(destination.paragraphs[0].glyphs.iter().all(|g| g.bold));
+    assert!(
+        destination.paragraphs[0].glyphs[5..]
+            .iter()
+            .all(|g| g.italic)
+    );
+    assert!(destination.errors().is_empty(), "{}", destination.text());
+    assert_eq!(original.text(), source);
+    assert!(destination.undo());
+    assert_eq!(destination.text(), "");
+}
+
+#[test]
+fn clipboard_multiple_blocks_preserve_destination_text_and_list_kinds() {
+    let original = Document::new("== Title\n\nA *bold* paragraph\n\n- One\n- Two");
+    let fragment = original.fragment(P::new(0, 0), P::new(3, 3)).unwrap();
+    let source = "Before after\n\nKeep this";
+    let mut destination = Document::new(source);
+    destination
+        .paste_fragment(P::new(0, 7), &fragment, true)
+        .unwrap();
+    let p = &destination.paragraphs;
+    assert_eq!(
+        p.iter().map(|p| p.text()).collect::<Vec<_>>(),
+        [
+            "Before Title",
+            "A bold paragraph",
+            "One",
+            "Twoafter",
+            "Keep this"
+        ]
+    );
+    assert_eq!(p[0].kind, BlockKind::Paragraph);
+    assert_eq!(p[2].kind, BlockKind::Bullet);
+    assert_eq!(p[3].kind, BlockKind::Bullet);
+    assert!(p[1].glyphs[2..6].iter().all(|g| g.bold));
+    assert!(destination.errors().is_empty(), "{}", destination.text());
+    assert!(destination.undo());
+    assert_eq!(destination.text(), source);
+}
+
+#[test]
 fn visual_typing_preserves_custom_code_comments_and_exact_spacing() {
     let source = "// Keep this comment\n#set page(margin: 23mm)\n\n= Title\n\nHello *world*.\n\n#figure(rect(), caption: [Custom])\n";
     let mut d = Document::new(source);
