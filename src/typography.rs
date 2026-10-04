@@ -2,6 +2,11 @@ use blank_document::{BlockKind, Paragraph};
 use eframe::egui::{self, Color32, FontId, TextFormat, text::LayoutJob};
 use egui_richedit::ParagraphJob;
 use std::sync::OnceLock;
+pub struct CachedParagraph {
+    pub key: (u32, u32, [u8; 3], u64),
+    pub galley: std::sync::Arc<egui::Galley>,
+    pub map: egui_richedit::OffsetMap,
+}
 
 // All faces in a collection share its immutable bytes, across editor contexts.
 static READING_COLLECTION: OnceLock<Option<Vec<u8>>> = OnceLock::new();

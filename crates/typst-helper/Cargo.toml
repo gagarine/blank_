@@ -18,3 +18,6 @@ typst-render = { version = "=0.15.1", optional = true }
 [features]
 default = ["native-preview"]
 native-preview = ["dep:typst-render"]
+
+[dev-dependencies]
+tempfile = "3"

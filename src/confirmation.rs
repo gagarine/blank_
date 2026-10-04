@@ -6,6 +6,7 @@ pub enum Choice {
     Cancel,
 }
 
+#[derive(Clone)]
 pub struct Confirmation {
     #[cfg(target_os = "macos")]
     parent: Option<objc2::rc::Retained<objc2_app_kit::NSWindow>>,
@@ -14,6 +15,18 @@ pub struct Confirmation {
 }
 
 impl Confirmation {
+    pub fn active_window() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self { parent: None }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self {
+                dialog: rfd::MessageDialog::new(),
+            }
+        }
+    }
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         #[cfg(target_os = "macos")]
         {
@@ -70,7 +83,11 @@ impl Confirmation {
                         _ => "",
                     }));
                 }
-                if let Some(parent) = &self.parent {
+                let parent = self
+                    .parent
+                    .clone()
+                    .or_else(|| NSApplication::sharedApplication(mtm).keyWindow());
+                if let Some(parent) = &parent {
                     let completion = block2::StackBlock::new(move |result| {
                         NSApplication::sharedApplication(mtm).stopModalWithCode(result);
                     });

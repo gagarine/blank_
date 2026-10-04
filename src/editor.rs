@@ -6,6 +6,7 @@ use egui_richedit::{Edit, Fragment, Mark, Model, Position};
 pub struct EditorModel {
     pub document: Document,
     pub error: Option<String>,
+    pub visible: Option<std::ops::Range<usize>>,
 }
 
 pub fn position(p: &Position<usize>) -> DocumentPosition {
@@ -86,16 +87,28 @@ impl Model for EditorModel {
         self.document.paragraphs.get(*p).map(|p| p.text())
     }
     fn first(&self) -> Option<usize> {
-        Some(0)
+        Some(self.visible.as_ref().map_or(0, |range| range.start))
     }
     fn last(&self) -> Option<usize> {
-        self.document.paragraphs.len().checked_sub(1)
+        self.visible
+            .as_ref()
+            .map_or(self.document.paragraphs.len(), |range| range.end)
+            .checked_sub(1)
     }
     fn previous(&self, p: &usize) -> Option<usize> {
-        p.checked_sub(1)
+        p.checked_sub(1).filter(|index| {
+            self.visible
+                .as_ref()
+                .is_none_or(|range| range.contains(index))
+        })
     }
     fn next(&self, p: &usize) -> Option<usize> {
-        (p + 1 < self.document.paragraphs.len()).then_some(p + 1)
+        (p + 1 < self.document.paragraphs.len()
+            && self
+                .visible
+                .as_ref()
+                .is_none_or(|range| range.contains(&(p + 1))))
+        .then_some(p + 1)
     }
     fn marked(&self, from: &Position<usize>, to: &Position<usize>, m: Mark) -> Option<bool> {
         mark(m)
@@ -219,6 +232,7 @@ mod tests {
     fn real_editor_input_updates_typst_and_groups_typing_into_one_undo_step() {
         let ctx = egui::Context::default();
         let mut model = EditorModel {
+            visible: None,
             document: Document::new("Hello *world*"),
             error: None,
         };

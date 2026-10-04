@@ -1,5 +1,88 @@
 use blank_document::{BlockKind, Document, Mark, Position as P, minimal_patch};
 
+fn projection(document: &Document) -> String {
+    format!(
+        "{:?} {:?}",
+        document.blocks,
+        document
+            .paragraphs
+            .iter()
+            .map(|p| (
+                &p.kind,
+                &p.range,
+                p.text(),
+                p.glyphs
+                    .iter()
+                    .map(|g| (&g.source, g.bold, g.italic, &g.atom))
+                    .collect::<Vec<_>>()
+            ))
+            .collect::<Vec<_>>()
+    )
+}
+#[test]
+fn localized_projection_matches_a_full_parse_through_unicode_splits_and_syntax_changes() {
+    let text = (0..80)
+        .map(|index| format!("== Section {index}\n\nCafé *bold* and _italic_ text {index}.\n\n"))
+        .collect::<String>();
+    let mut d = Document::new(text);
+    let first = d.paragraphs[0].id;
+    let last = d.paragraphs[d.paragraphs.len() - 2].id;
+    for n in 0..100 {
+        let index = 10 + (n * 7) % (d.paragraphs.len() - 20);
+        let p = &d.paragraphs[index];
+        let at = P::new(index, p.glyphs.len());
+        match n % 5 {
+            0 => {
+                d.replace(at, at, " é🙂", true).unwrap();
+            }
+            1 => {
+                d.split(at, true).unwrap();
+            }
+            2 => {
+                d.set_kind(P::new(index, 0), BlockKind::Heading(3)).unwrap();
+            }
+            3 => {
+                let byte = d.source_offset(at);
+                d.edit_source(byte..byte, "\n\n#let x = (\n", true).unwrap();
+            }
+            _ => {
+                d.undo();
+                d.redo();
+            }
+        }
+        assert_eq!(
+            projection(&d),
+            projection(&Document::new(d.text())),
+            "edit {n}"
+        );
+        if n % 5 == 3 {
+            assert!(d.undo());
+        }
+        if n == 0 {
+            assert_eq!(d.paragraphs[0].id, first);
+            assert!(d.paragraphs.iter().any(|p| p.id == last));
+        }
+    }
+}
+#[test]
+fn moving_sibling_sections_keeps_nested_content_and_rejects_cross_parent_drops() {
+    let original = "= Book\n\n== First\n\nText\n\n=== Child\n\n#let custom = 3\n\n== Second\n\nOther\n\n= Next book\n\n== Another";
+    let mut d = Document::new(original);
+    let find =
+        |d: &Document, title: &str| d.paragraphs.iter().position(|p| p.text() == title).unwrap();
+    let a = find(&d, "First");
+    let b = find(&d, "Second");
+    d.move_section(a, b, true).unwrap();
+    assert!(d.text().find("== Second").unwrap() < d.text().find("== First").unwrap());
+    assert!(d.text().contains("=== Child\n\n#let custom = 3"));
+    assert!(
+        d.move_section(find(&d, "First"), find(&d, "Another"), false)
+            .is_err()
+    );
+    assert!(d.undo());
+    assert_eq!(d.text(), original);
+}
+
 #[test]
 fn history_keeps_small_utf8_deltas_groups_typing_and_branches_after_undo() {
     let original = format!("Start\n\n{}", "unchanged paragraph\n\n".repeat(1000));
@@ -378,4 +461,28 @@ fn block_move_duplicate_delete_are_undoable_and_keep_custom_source() {
     assert_eq!(d.paragraphs[at.paragraph].text(), "First");
     assert!(d.errors().is_empty());
     assert!(d.text().contains("#set text(12pt)"));
+}
+
+#[test]
+fn inline_links_and_notes_keep_their_source_and_cannot_be_split() {
+    let source = "Read #link(\"https://example.org\")[the paper] and #footnote[Note] here.";
+    let mut doc = Document::new(source);
+    assert_eq!(doc.paragraphs.len(), 1);
+    assert_eq!(
+        doc.paragraphs[0]
+            .glyphs
+            .iter()
+            .filter(|glyph| glyph.atom.is_some())
+            .count(),
+        2
+    );
+    doc.replace(P::new(0, 0), P::new(0, 0), "Please ", true)
+        .unwrap();
+    assert!(
+        doc.text()
+            .contains("#link(\"https://example.org\")[the paper]")
+    );
+    assert!(doc.text().contains("#footnote[Note]"));
+    doc.undo();
+    assert_eq!(doc.text(), source);
 }

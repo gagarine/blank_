@@ -32,6 +32,23 @@ pub enum Command {
     ActualSize,
     Palette,
     Tutorial,
+    Find,
+    Settings,
+    Statistics,
+    Recovery,
+    ParagraphFocus,
+    Typewriter,
+    Quote,
+    Image,
+    Table,
+    Citation,
+    Footnote,
+    Equation,
+    Link,
+    Label,
+    Reference,
+    RefreshZotero,
+    CurrentChapter,
 }
 impl Command {
     pub const ALL: &'static [Self] = &[
@@ -65,6 +82,23 @@ impl Command {
         Self::ActualSize,
         Self::Palette,
         Self::Tutorial,
+        Self::Find,
+        Self::Settings,
+        Self::Statistics,
+        Self::Recovery,
+        Self::ParagraphFocus,
+        Self::Typewriter,
+        Self::Quote,
+        Self::Image,
+        Self::Table,
+        Self::Citation,
+        Self::Footnote,
+        Self::Equation,
+        Self::Link,
+        Self::Label,
+        Self::Reference,
+        Self::RefreshZotero,
+        Self::CurrentChapter,
         Self::Quit,
     ];
     pub fn label(self) -> &'static str {
@@ -100,6 +134,23 @@ impl Command {
             Self::ActualSize => "Actual Size",
             Self::Palette => "Commands…",
             Self::Tutorial => "Open tutorial",
+            Self::Find => "Find in document",
+            Self::Settings => "Settings…",
+            Self::Statistics => "Statistics & info",
+            Self::Recovery => "Recover unsaved documents…",
+            Self::ParagraphFocus => "Paragraph focus",
+            Self::Typewriter => "Typewriter scrolling",
+            Self::Quote => "Quotation",
+            Self::Image => "Image and caption",
+            Self::Table => "Table",
+            Self::Citation => "Citation",
+            Self::Footnote => "Footnote",
+            Self::Equation => "Equation",
+            Self::Link => "Link",
+            Self::Label => "Label",
+            Self::Reference => "Cross-reference",
+            Self::RefreshZotero => "Refresh Zotero references",
+            Self::CurrentChapter => "Show only current chapter",
         }
     }
     pub fn block(self) -> Option<blank_document::BlockKind> {
@@ -115,7 +166,21 @@ impl Command {
         })
     }
     pub fn formatting(self) -> bool {
-        self.block().is_some() || matches!(self, Self::Bold | Self::Italic)
+        self.block().is_some()
+            || matches!(
+                self,
+                Self::Bold
+                    | Self::Italic
+                    | Self::Quote
+                    | Self::Image
+                    | Self::Table
+                    | Self::Citation
+                    | Self::Footnote
+                    | Self::Equation
+                    | Self::Link
+                    | Self::Label
+                    | Self::Reference
+            )
     }
 }
 #[derive(Default)]

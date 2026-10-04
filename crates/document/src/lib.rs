@@ -1,6 +1,7 @@
 //! Source-backed document state. GUI types deliberately stay out of this crate.
 
 use std::collections::VecDeque;
+pub mod objects;
 use std::ops::Range;
 use typst_syntax::{
     Source, SyntaxKind, SyntaxNode,
@@ -55,6 +56,7 @@ struct Inline {
 
 #[derive(Clone, Debug)]
 pub struct Paragraph {
+    pub id: u64,
     pub kind: BlockKind,
     /// Editable body; heading/list prefixes are outside this range.
     pub range: Range<usize>,
@@ -217,12 +219,63 @@ impl Document {
             .get(pos.paragraph)
             .map_or(self.text().len(), |p| p.source_offset(pos.offset))
     }
+    pub fn chapter_range(&self, byte: usize) -> Range<usize> {
+        let mut levels = std::collections::BTreeMap::<usize, usize>::new();
+        for paragraph in &self.paragraphs {
+            if let BlockKind::Heading(level) = paragraph.kind {
+                *levels.entry(level).or_default() += 1;
+            }
+        }
+        let level = levels
+            .iter()
+            .find(|(_, count)| **count > 1)
+            .or_else(|| levels.first_key_value())
+            .map(|(&level, _)| level);
+        let Some(level) = level else {
+            return 0..self.text().len();
+        };
+        let headings = self
+            .paragraphs
+            .iter()
+            .filter(|p| p.kind == BlockKind::Heading(level))
+            .collect::<Vec<_>>();
+        let current = headings
+            .iter()
+            .rposition(|p| p.range.start <= byte)
+            .unwrap_or(0);
+        let start = headings.get(current).map_or(0, |p| {
+            self.text()[..p.range.start]
+                .rfind('\n')
+                .map_or(0, |i| i + 1)
+        });
+        let end = headings.get(current + 1).map_or(self.text().len(), |p| {
+            self.text()[..p.range.start]
+                .rfind('\n')
+                .map_or(0, |i| i + 1)
+        });
+        start..end
+    }
     pub fn replace_source(&mut self, text: &str, new_step: bool) -> bool {
         let Some((range, insert)) = minimal_patch(self.text(), text) else {
             return false;
         };
         self.patch(range, &insert, new_step);
         true
+    }
+    pub fn edit_source(
+        &mut self,
+        range: Range<usize>,
+        insert: &str,
+        new_step: bool,
+    ) -> Result<(), String> {
+        if range.start > range.end
+            || !self.text().is_char_boundary(range.start)
+            || !self.text().is_char_boundary(range.end)
+        {
+            return Err("The source range is no longer valid.".into());
+        }
+        self.patch(range, insert, new_step);
+        Ok(())
     }
     fn patch(&mut self, range: Range<usize>, insert: &str, new_step: bool) {
         let removed = self.text()[range.clone()].to_owned();
@@ -250,14 +303,28 @@ impl Document {
         {
             self.undo.pop_front();
         }
+        let window = self.projection_window(&range);
         let reparsed = self.source.edit(range.clone(), insert);
         self.last_patch = Some(Patch {
-            replaced: range,
+            replaced: range.clone(),
             inserted: insert.to_owned(),
-            reparsed,
+            reparsed: reparsed.clone(),
         });
         self.revision += 1;
-        self.project();
+        if let Some((source, paragraphs, blocks)) = window {
+            let delta = insert.len() as isize - range.len() as isize;
+            let end = source.end.saturating_add_signed(delta);
+            if reparsed.start >= source.start
+                && reparsed.end <= end
+                && self.text().is_char_boundary(end)
+            {
+                self.project_window(source.start..end, paragraphs, blocks, delta);
+            } else {
+                self.project();
+            }
+        } else {
+            self.project();
+        }
     }
     pub fn undo(&mut self) -> bool {
         let Some(step) = self.undo.pop_back() else {
@@ -696,6 +763,91 @@ impl Document {
     pub fn set_kind(&mut self, at: Position, kind: BlockKind) -> Result<(), String> {
         self.set_kind_step(at, kind, true)
     }
+    /// Move a complete sibling section, including its nested headings and source objects.
+    pub fn move_section(
+        &mut self,
+        from: usize,
+        to: usize,
+        after: bool,
+    ) -> Result<Position, String> {
+        let level = |index: usize| {
+            self.paragraphs.get(index).and_then(|p| {
+                if let BlockKind::Heading(level) = p.kind {
+                    Some(level)
+                } else {
+                    None
+                }
+            })
+        };
+        let Some(depth) = level(from) else {
+            return Err("Choose a heading to move its section.".into());
+        };
+        if level(to) != Some(depth) {
+            return Err("Move sections between sibling headings.".into());
+        }
+        let parent = |index| {
+            self.paragraphs[..index]
+                .iter()
+                .rposition(|p| matches!(p.kind,BlockKind::Heading(level) if level<depth))
+        };
+        if parent(from) != parent(to) {
+            return Err("Move sections within the same parent.".into());
+        }
+        let section = |index| -> Result<Range<usize>, String> {
+            let start = self.block_range(index)?.start;
+            let next = (index + 1..self.paragraphs.len())
+                .find(|&next| level(next).is_some_and(|level| level <= depth));
+            let end = next
+                .map(|next| self.block_range(next).map(|range| range.start))
+                .transpose()?
+                .unwrap_or(self.text().len());
+            Ok(start..end)
+        };
+        let source = section(from)?;
+        let target = section(to)?;
+        let destination = if after { target.end } else { target.start };
+        self.move_source_range(source, destination)
+    }
+    pub fn move_source_range(
+        &mut self,
+        source: Range<usize>,
+        destination: usize,
+    ) -> Result<Position, String> {
+        if destination >= source.start && destination <= source.end {
+            return Ok(self.position_at(source.start));
+        }
+        if !self.text().is_char_boundary(destination) {
+            return Err("The drop position is no longer valid.".into());
+        }
+        let raw = self
+            .text()
+            .get(source.clone())
+            .ok_or("The dragged section no longer exists.")?
+            .trim_end_matches('\n')
+            .to_owned();
+        self.edit_source(source.clone(), "", true)?;
+        let destination = if destination > source.start {
+            destination - source.len()
+        } else {
+            destination
+        };
+        let before = if destination > 0 && !self.text()[..destination].ends_with("\n\n") {
+            "\n\n"
+        } else {
+            ""
+        };
+        let after = if destination < self.text().len() {
+            "\n\n"
+        } else {
+            ""
+        };
+        self.patch(
+            destination..destination,
+            &format!("{before}{raw}{after}"),
+            false,
+        );
+        Ok(self.position_at(destination + before.len()))
+    }
     pub fn set_kind_step(
         &mut self,
         at: Position,
@@ -729,6 +881,144 @@ impl Document {
         let (paragraphs, blocks) = project(&self.source);
         self.paragraphs = paragraphs;
         self.blocks = blocks;
+    }
+    fn projection_window(
+        &self,
+        range: &Range<usize>,
+    ) -> Option<(Range<usize>, Range<usize>, Range<usize>)> {
+        if self.blocks.len() < 6 {
+            return None;
+        }
+        let starts = self
+            .blocks
+            .iter()
+            .map(|block| match block {
+                Block::Source { range, .. } => range.start,
+                Block::Editable(index) => {
+                    let p = &self.paragraphs[*index];
+                    if p.kind == BlockKind::Paragraph {
+                        p.range.start
+                    } else {
+                        self.text()[..p.range.start]
+                            .rfind('\n')
+                            .map_or(0, |i| i + 1)
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let first = starts
+            .partition_point(|&start| start <= range.start)
+            .saturating_sub(3);
+        let last = (starts.partition_point(|&start| start <= range.end) + 2).min(starts.len());
+        let before = self.blocks[..first]
+            .iter()
+            .filter(|block| matches!(block, Block::Editable(_)))
+            .count();
+        let count = self.blocks[first..last]
+            .iter()
+            .filter(|block| matches!(block, Block::Editable(_)))
+            .count();
+        Some((
+            starts[first]..starts.get(last).copied().unwrap_or(self.text().len()),
+            before..before + count,
+            first..last,
+        ))
+    }
+    fn project_window(
+        &mut self,
+        source: Range<usize>,
+        paragraphs: Range<usize>,
+        blocks: Range<usize>,
+        delta: isize,
+    ) {
+        let local = Source::detached(&self.text()[source.clone()]);
+        let (mut projected, mut projected_blocks) = project(&local);
+        // Parsing a clipped paragraph boundary creates a temporary EOF insertion slot.
+        if source.end < self.text().len()
+            && projected
+                .last()
+                .is_some_and(|p| p.glyphs.is_empty() && p.range.start == local.text().len())
+        {
+            let last = projected.len() - 1;
+            projected.pop();
+            projected_blocks
+                .retain(|block| !matches!(block,Block::Editable(index) if *index==last));
+        }
+        let count = projected.len() as isize - paragraphs.len() as isize;
+        for p in &mut projected {
+            shift_paragraph(p, source.start as isize);
+        }
+        for p in &mut self.paragraphs[paragraphs.end..] {
+            shift_paragraph(p, delta);
+        }
+        for block in &mut projected_blocks {
+            match block {
+                Block::Editable(index) => *index += paragraphs.start,
+                Block::Source { range, .. } => {
+                    range.start += source.start;
+                    range.end += source.start;
+                }
+            }
+        }
+        for block in &mut self.blocks[blocks.end..] {
+            match block {
+                Block::Editable(index) => *index = index.saturating_add_signed(count),
+                Block::Source { range, .. } => {
+                    range.start = range.start.saturating_add_signed(delta);
+                    range.end = range.end.saturating_add_signed(delta);
+                }
+            }
+        }
+        self.paragraphs.splice(paragraphs, projected);
+        self.blocks.splice(blocks, projected_blocks);
+    }
+}
+fn shift_paragraph(paragraph: &mut Paragraph, delta: isize) {
+    fn range(range: &mut Range<usize>, delta: isize) {
+        range.start = range.start.saturating_add_signed(delta);
+        range.end = range.end.saturating_add_signed(delta);
+    }
+    fn nodes(nodes: &mut [Inline], delta: isize) {
+        for node in nodes {
+            range(&mut node.range, delta);
+            match &mut node.kind {
+                InlineKind::Text(glyphs) => {
+                    for glyph in glyphs {
+                        range(&mut glyph.source, delta);
+                    }
+                }
+                InlineKind::Styled(_, children, body) => {
+                    range(body, delta);
+                    self::nodes_shift(children, delta);
+                }
+                InlineKind::Atom(_) => {}
+            }
+        }
+    }
+    range(&mut paragraph.range, delta);
+    for glyph in &mut paragraph.glyphs {
+        range(&mut glyph.source, delta);
+    }
+    nodes(&mut paragraph.nodes, delta);
+}
+fn nodes_shift(nodes: &mut [Inline], delta: isize) {
+    for node in nodes {
+        node.range.start = node.range.start.saturating_add_signed(delta);
+        node.range.end = node.range.end.saturating_add_signed(delta);
+        match &mut node.kind {
+            InlineKind::Text(glyphs) => {
+                for glyph in glyphs {
+                    glyph.source.start = glyph.source.start.saturating_add_signed(delta);
+                    glyph.source.end = glyph.source.end.saturating_add_signed(delta);
+                }
+            }
+            InlineKind::Styled(_, children, body) => {
+                body.start = body.start.saturating_add_signed(delta);
+                body.end = body.end.saturating_add_signed(delta);
+                nodes_shift(children, delta);
+            }
+            InlineKind::Atom(_) => {}
+        }
     }
 }
 
@@ -872,6 +1162,43 @@ fn edit_nodes(nodes: &[Inline], source: &str, from: usize, to: usize, insert: &s
     )
 }
 
+// Literal inline functions remain atomic so editing cannot split their syntax.
+fn static_inline(node: &SyntaxNode, start: usize) -> Option<Inline> {
+    if let Some(style) = static_style(node, start) {
+        return Some(style);
+    }
+    if node.kind() != SyntaxKind::FuncCall {
+        return None;
+    }
+    let name = node.children().next()?.full_text();
+    if !matches!(name.as_str(), "link" | "footnote" | "cite" | "ref") {
+        return None;
+    }
+    fn body(node: &SyntaxNode) -> Option<String> {
+        if node.kind() == SyntaxKind::Markup {
+            return Some(node.full_text().to_string());
+        }
+        node.children().find_map(body)
+    }
+    let label = match name.as_str() {
+        "link" => body(node).or_else(|| {
+            node.cast::<ast::FuncCall>().and_then(|call| {
+                call.args().items().find_map(|arg| match arg {
+                    ast::Arg::Pos(ast::Expr::Str(s)) => Some(s.get().to_string()),
+                    _ => None,
+                })
+            })
+        })?,
+        "footnote" => format!("Note: {}", body(node)?),
+        _ => node.full_text().to_string(),
+    };
+    Some(Inline {
+        range: start..start + node.len(),
+        kind: InlineKind::Atom(label),
+        len: 1,
+    })
+}
+
 // Recognize only literal strong/emph content calls. Dynamic calls stay opaque.
 fn static_style(node: &SyntaxNode, start: usize) -> Option<Inline> {
     let (mark, body, offset) = static_style_body(node, start)?;
@@ -929,10 +1256,10 @@ fn collect_inline(node: &SyntaxNode, start: usize) -> Vec<Inline> {
         if child.kind() == SyntaxKind::Hash
             && children
                 .peek()
-                .is_some_and(|n| static_style(n, at + child.len()).is_some())
+                .is_some_and(|n| static_inline(n, at + child.len()).is_some())
         {
             let next = children.next().unwrap();
-            let mut styled = static_style(next, at + child.len()).unwrap();
+            let mut styled = static_inline(next, at + child.len()).unwrap();
             styled.range.start = at;
             at += child.len() + next.len();
             out.push(styled);
@@ -1076,6 +1403,10 @@ fn project(source: &Source) -> (Vec<Paragraph>, Vec<Block>) {
         glyphs(&nodes, false, false, &mut gs);
         blocks.push(Block::Editable(ps.len()));
         ps.push(Paragraph {
+            id: {
+                static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            },
             kind,
             range: start..end,
             glyphs: gs,
@@ -1220,10 +1551,10 @@ fn project(source: &Source) -> (Vec<Paragraph>, Vec<Block>) {
             SyntaxKind::Hash
                 if top
                     .peek()
-                    .is_some_and(|next| static_style(next, at + 1).is_some()) =>
+                    .is_some_and(|next| static_inline(next, at + 1).is_some()) =>
             {
                 let next = top.next().unwrap();
-                let mut styled = static_style(next, at + node.len()).unwrap();
+                let mut styled = static_inline(next, at + node.len()).unwrap();
                 styled.range.start = at;
                 pending.push(styled);
                 at = end + next.len();

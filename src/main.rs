@@ -1,12 +1,21 @@
 mod commands;
 mod confirmation;
+mod desktop;
 mod editor;
+mod input;
+mod insert;
 #[cfg(target_os = "macos")]
 mod menus;
 mod outline;
 mod preview;
+mod project;
+mod scrollbar;
+mod search;
 mod source_editor;
+mod storage;
+mod tools;
 mod typography;
+mod zotero;
 
 use blank_document::{Block, BlockKind, Document};
 use commands::{Command, Picker};
@@ -28,6 +37,30 @@ enum Mode {
 }
 
 struct App {
+    project: Option<project::Project>,
+    scrollbar: scrollbar::ScrollBars,
+    layouts: std::collections::HashMap<u64, typography::CachedParagraph>,
+    windows: Vec<(String, Option<PathBuf>)>,
+    closed: bool,
+    quit: bool,
+    insertion: Option<insert::Insertion>,
+    assets: tempfile::TempDir,
+    objects: std::collections::HashMap<u64, egui::TextureHandle>,
+    pending_objects: std::collections::HashSet<u64>,
+    failed_objects: std::collections::HashSet<u64>,
+    object_focus: Option<Id>,
+    only_chapter: bool,
+    zotero_refresh: Option<std::sync::mpsc::Receiver<insert::RefreshResult>>,
+    composition: String,
+    access_positions:
+        std::collections::HashMap<egui::accesskit::NodeId, Vec<egui_richedit::Position<usize>>>,
+    storage: storage::Storage,
+    preferences: storage::Preferences,
+    find: search::Find,
+    dialog: Option<Command>,
+    font_database: Option<fontdb::Database>,
+    recovery: Vec<(PathBuf, storage::Draft)>,
+    journal_revision: Option<u64>,
     model: EditorModel,
     editor: RichEdit<usize>,
     source_buffer: String,
@@ -47,7 +80,11 @@ struct App {
     request_id: u64,
     requested_revision: Option<u64>,
     compiling: bool,
-    pages: Vec<egui::TextureHandle>,
+    pages: Vec<Option<egui::TextureHandle>>,
+    page_ratios: Vec<f32>,
+    pending_pages: std::collections::HashSet<usize>,
+    page_request_id: u64,
+    page_number: usize,
     pdf: Vec<u8>,
     preview_revision: Option<u64>,
     page_revision: Option<u64>,
@@ -76,7 +113,7 @@ struct App {
     #[cfg(test)]
     block_rects: Vec<egui::Rect>,
     #[cfg(target_os = "macos")]
-    menus: Option<menus::NativeMenus>,
+    menus: Option<std::rc::Rc<std::cell::RefCell<menus::NativeMenus>>>,
 }
 
 impl App {
@@ -95,8 +132,79 @@ impl App {
         // Standard egui components with the app's quiet palette.
         ctx.set_global_style(style);
         let reading_faces = typography::install(ctx);
+        let mut app = Self::empty(
+            ctx,
+            reading_faces,
+            confirmation::Confirmation::new(cc),
+            rfd::FileDialog::new().set_parent(cc),
+        );
+        app.scrollbar.attach(cc);
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if args.iter().any(|a| a == "--demo") {
+            app.load(DEMO.to_owned(), None);
+        } else if let Some(path) = args.iter().find(|a| !a.starts_with("--")) {
+            let path = PathBuf::from(path);
+            match path
+                .canonicalize()
+                .and_then(|p| std::fs::read_to_string(&p).map(|text| (p, text)))
+            {
+                Ok((path, text)) => app.load(text, Some(path)),
+                Err(e) => app.error = Some(e.to_string()),
+            }
+        }
+        if args.iter().any(|a| a == "--source") {
+            app.mode = Mode::Source;
+        }
+        if app.preferences.font != "Iowan Old Style" {
+            app.apply_reading_font(ctx);
+        }
+        if args.iter().any(|a| a == "--preview") {
+            app.mode = Mode::Preview;
+        }
+        #[cfg(target_os = "macos")]
+        if cc.winit_window().is_some() {
+            match menus::NativeMenus::new(ctx.clone()) {
+                Ok(menus) => app.menus = Some(std::rc::Rc::new(std::cell::RefCell::new(menus))),
+                Err(e) => app.error = Some(format!("Cannot install native menus: {e}")),
+            }
+        }
+        app
+    }
+    fn empty(
+        ctx: &egui::Context,
+        reading_faces: bool,
+        confirmation: confirmation::Confirmation,
+        file_dialog: rfd::FileDialog,
+    ) -> Self {
+        let storage = storage::Storage::new();
+        let preferences = storage.preferences();
+        let recovery = storage.recoverable();
         let mut app = Self {
+            project: None,
+            scrollbar: scrollbar::ScrollBars::default(),
+            layouts: std::collections::HashMap::new(),
+            windows: vec![],
+            closed: false,
+            quit: false,
+            insertion: None,
+            assets: tempfile::tempdir().expect("temporary asset directory"),
+            objects: std::collections::HashMap::new(),
+            pending_objects: std::collections::HashSet::new(),
+            failed_objects: std::collections::HashSet::new(),
+            object_focus: None,
+            only_chapter: false,
+            zotero_refresh: None,
+            composition: String::new(),
+            access_positions: std::collections::HashMap::new(),
+            storage,
+            preferences,
+            find: search::Find::default(),
+            dialog: (!recovery.is_empty()).then_some(Command::Recovery),
+            font_database: None,
+            recovery,
+            journal_revision: None,
             model: EditorModel {
+                visible: None,
                 document: Document::new(""),
                 error: None,
             },
@@ -119,6 +227,10 @@ impl App {
             requested_revision: None,
             compiling: false,
             pages: vec![],
+            page_ratios: vec![],
+            pending_pages: std::collections::HashSet::new(),
+            page_request_id: 0,
+            page_number: 1,
             pdf: vec![],
             preview_revision: None,
             page_revision: None,
@@ -129,8 +241,8 @@ impl App {
             zoom: 1.0,
             error: None,
             conflict: false,
-            confirmation: confirmation::Confirmation::new(cc),
-            file_dialog: rfd::FileDialog::new().set_parent(cc),
+            confirmation,
+            file_dialog,
             window_title: String::new(),
             picker: Picker::default(),
             pending_events: vec![],
@@ -150,40 +262,25 @@ impl App {
             menus: None,
         };
         app.load(String::new(), None);
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        if args.iter().any(|a| a == "--demo") {
-            app.load(DEMO.to_owned(), None);
-        } else if let Some(path) = args.iter().find(|a| !a.starts_with("--")) {
-            let path = PathBuf::from(path);
-            match path
-                .canonicalize()
-                .and_then(|p| std::fs::read_to_string(&p).map(|text| (p, text)))
-            {
-                Ok((path, text)) => app.load(text, Some(path)),
-                Err(e) => app.error = Some(e.to_string()),
-            }
-        }
-        if args.iter().any(|a| a == "--source") {
-            app.mode = Mode::Source;
-        }
-        if args.iter().any(|a| a == "--preview") {
-            app.mode = Mode::Preview;
-        }
-        #[cfg(target_os = "macos")]
-        if cc.winit_window().is_some() {
-            match menus::NativeMenus::new(ctx.clone()) {
-                Ok(menus) => app.menus = Some(menus),
-                Err(e) => app.error = Some(format!("Cannot install native menus: {e}")),
-            }
-        }
         app
     }
     fn load(&mut self, text: String, path: Option<PathBuf>) {
+        self.storage.clear();
+        self.journal_revision = None;
         self.disk_text = text.clone();
         self.source_buffer = text.clone();
         self.model.document = Document::new(text);
         self.model.error = None;
         self.path = path;
+        self.project = self.path.as_ref().and_then(|path| {
+            match project::Project::open(path, self.model.document.text()) {
+                Ok(project) => Some(project),
+                Err(error) => {
+                    self.error = Some(error);
+                    None
+                }
+            }
+        });
         self.editor.document_replaced();
         self.editor
             .select(Selection::caret(egui_richedit::Position::new(0, 0)));
@@ -196,12 +293,23 @@ impl App {
         self.source_history_selection = None;
         self.source_last_selection = None;
         self.pages.clear();
+        self.objects.clear();
+        self.pending_objects.clear();
+        self.failed_objects.clear();
+        self.composition.clear();
+        self.access_positions.clear();
+        self.layouts.clear();
+        self.page_ratios.clear();
+        self.pending_pages.clear();
         self.pdf.clear();
         self.preview_revision = None;
         self.page_revision = None;
         self.pending_export = None;
         self.diagnostics.clear();
         self.source_map.clear();
+        self.find.cache = None;
+        self.find.matches.clear();
+        self.journal_revision = None;
         self.requested_revision = None;
         self.request_id += 1;
         self.last_edit = Instant::now() - Duration::from_secs(1);
@@ -210,12 +318,29 @@ impl App {
     }
     fn dirty(&self) -> bool {
         self.model.document.text() != self.disk_text
+            || self.project.as_ref().is_some_and(|project| {
+                project.files.iter().enumerate().any(|(index, file)| {
+                    index != project.active
+                        && file
+                            .document
+                            .as_ref()
+                            .is_some_and(|doc| doc.text() != file.disk_text)
+                })
+            })
     }
     fn changed(&mut self) {
         if self.seen_revision != self.model.document.revision {
             self.seen_revision = self.model.document.revision;
             self.last_edit = Instant::now();
             self.source_buffer = self.model.document.text().to_owned();
+            let ids: std::collections::HashSet<_> = self
+                .model
+                .document
+                .paragraphs
+                .iter()
+                .map(|p| p.id)
+                .collect();
+            self.layouts.retain(|id, _| ids.contains(id));
         }
     }
     fn switch_mode(&mut self, mode: Mode, _ctx: &egui::Context) {
@@ -228,7 +353,10 @@ impl App {
             self.bookmark = self.model.document.source_offset(position(&s.focus));
         }
         if self.mode == Mode::Preview {
+            self.compiler.release_preview();
             self.pages.clear();
+            self.page_ratios.clear();
+            self.pending_pages.clear();
             self.page_revision = None;
         }
         self.mode = mode;
@@ -258,22 +386,43 @@ impl App {
                 path.file_name().unwrap().to_string_lossy().into_owned(),
             )
         } else {
-            let root = match std::env::current_dir() {
-                Ok(root) => root,
-                Err(error) => {
-                    self.error = Some(format!("Cannot resolve document directory: {error}"));
-                    return;
-                }
-            };
+            let root = self.project_root();
             (root, "main.typ".into())
         };
         self.request_id += 1;
+        let (root, entry) = self
+            .project
+            .as_ref()
+            .map(|project| {
+                (
+                    project.root.clone(),
+                    project
+                        .entry
+                        .strip_prefix(&project.root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            })
+            .unwrap_or((root, entry));
+        let files = self
+            .project
+            .as_ref()
+            .map(|project| project.texts(&self.model.document))
+            .unwrap_or_else(|| {
+                std::collections::HashMap::from([(
+                    entry.clone(),
+                    self.model.document.text().to_owned(),
+                )])
+            });
         let request = preview::Request {
+            files,
+            page: None,
+            object: None,
             revision: self.request_id,
             root,
             entry,
-            text: self.model.document.text().to_owned(),
-            render,
+            render: render || self.mode == Mode::Preview,
         };
         if self.compiler.tx.send(request).is_ok() {
             self.requested_revision = Some(self.model.document.revision);
@@ -285,6 +434,37 @@ impl App {
     fn poll_compile(&mut self, ctx: &egui::Context) {
         while let Ok(result) = self.compiler.rx.try_recv() {
             match result {
+                Ok(result) if result.object.is_some() => {
+                    let key = result.object.unwrap();
+                    self.pending_objects.remove(&key);
+                    if let Some(page) = result.pages.into_iter().next() {
+                        self.objects.insert(
+                            key,
+                            ctx.load_texture(
+                                format!("object-{key}"),
+                                egui::ColorImage::from_rgba_unmultiplied(page.size, &page.rgba),
+                                egui::TextureOptions::LINEAR,
+                            ),
+                        );
+                    } else if let Some(error) = result.diagnostics.first() {
+                        self.error = Some(error.clone());
+                        self.failed_objects.insert(key);
+                    }
+                }
+                Ok(result) if result.page.is_some() && result.revision == self.page_request_id => {
+                    let index = result.page.unwrap();
+                    self.pending_pages.remove(&index);
+                    if self.mode == Mode::Preview
+                        && let Some(slot) = self.pages.get_mut(index)
+                        && let Some(page) = result.pages.into_iter().next()
+                    {
+                        *slot = Some(ctx.load_texture(
+                            format!("page-{}-{index}", result.revision),
+                            egui::ColorImage::from_rgba_unmultiplied(page.size, &page.rgba),
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                }
                 Ok(result) if result.revision == self.request_id => {
                     self.compiling = false;
                     if self.requested_revision != Some(self.model.document.revision) {
@@ -307,19 +487,11 @@ impl App {
                         self.error =
                             Some("PDF export failed. Resolve the typesetting errors first.".into());
                     }
-                    if !result.pages.is_empty() && self.mode == Mode::Preview {
-                        self.pages = result
-                            .pages
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, page)| {
-                                ctx.load_texture(
-                                    format!("page-{}-{i}", result.revision),
-                                    egui::ColorImage::from_rgba_unmultiplied(page.size, &page.rgba),
-                                    egui::TextureOptions::LINEAR,
-                                )
-                            })
-                            .collect();
+                    if !result.ratios.is_empty() && self.mode == Mode::Preview {
+                        self.pages = vec![None; result.ratios.len()];
+                        self.page_ratios = result.ratios;
+                        self.pending_pages.clear();
+                        self.page_request_id = result.revision;
                         self.page_revision = self.requested_revision;
                     }
                 }
@@ -356,6 +528,10 @@ impl App {
             self.path.clone().unwrap()
         };
         let result = (|| -> Result<(), String> {
+            self.save_other_files()?;
+            if self.path.is_none() {
+                self.promote_assets(path.parent().unwrap_or(std::path::Path::new(".")))?;
+            }
             if self.path.as_ref() == Some(&path) {
                 let disk = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
                 if disk != self.disk_text {
@@ -406,9 +582,6 @@ impl App {
         }
     }
     fn open(&mut self) {
-        if !self.protect_unsaved() {
-            return;
-        }
         if let Some(path) = self
             .file_dialog
             .clone()
@@ -419,14 +592,22 @@ impl App {
                 .canonicalize()
                 .and_then(|path| std::fs::read_to_string(&path).map(|text| (path, text)))
             {
-                Ok((path, text)) => self.load(text, Some(path)),
+                Ok((path, text)) => {
+                    if self.model.document.text().is_empty() && self.path.is_none() {
+                        self.load(text, Some(path));
+                    } else {
+                        self.windows.push((text, Some(path)));
+                    }
+                }
                 Err(e) => self.error = Some(e.to_string()),
             }
         }
     }
     fn new_document(&mut self) {
-        if self.protect_unsaved() {
+        if self.model.document.text().is_empty() && self.path.is_none() {
             self.load(String::new(), None);
+        } else {
+            self.windows.push((String::new(), None));
         }
     }
     fn history(&mut self, redo: bool) {
@@ -441,6 +622,8 @@ impl App {
             self.model.document.undo()
         };
         if changed {
+            self.object_focus = None;
+            self.restore_focus = true;
             self.editor.document_replaced();
             self.source_new_step = true;
             self.changed();
@@ -464,7 +647,8 @@ impl App {
             New | Open | Close | Quit | Palette | Tutorial | Contents => true,
             Undo => self.model.document.can_undo(),
             Redo => self.model.document.can_redo(),
-            Bold | Italic | Paragraph | Heading1 | Heading2 | Heading3 | Bullet | Numbered => {
+            Bold | Italic | Paragraph | Heading1 | Heading2 | Heading3 | Bullet | Numbered
+            | Quote | Image | Table | Citation | Footnote | Equation | Link | Label | Reference => {
                 self.mode == Mode::Write
             }
             Refresh | ZoomIn | ZoomOut | ActualSize => self.mode == Mode::Preview,
@@ -488,7 +672,8 @@ impl App {
                 self.save(true);
             }
             Export => self.export(),
-            Close | Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            Quit => self.quit = true,
             Undo => self.history(false),
             Redo => self.history(true),
             Bold | Italic => {
@@ -512,6 +697,28 @@ impl App {
                     self.editor.select(Selection::caret(editor_position(pos)));
                 }
             }
+            Find => {
+                self.find.open = true;
+                self.find.focus = true;
+            }
+            Settings | Statistics | Recovery => {
+                self.dialog = Some(command);
+                if command == Settings && self.font_database.is_none() {
+                    let mut database = fontdb::Database::new();
+                    database.load_system_fonts();
+                    self.font_database = Some(database);
+                }
+                if command == Recovery {
+                    self.recovery = self.storage.recoverable();
+                }
+            }
+            ParagraphFocus => self.preferences.paragraph_focus = !self.preferences.paragraph_focus,
+            Typewriter => self.preferences.typewriter = !self.preferences.typewriter,
+            Quote | Image | Table | Citation | Footnote | Equation | Link | Label | Reference => {
+                self.start_insertion(command)
+            }
+            RefreshZotero => self.refresh_zotero(ctx),
+            CurrentChapter => self.only_chapter = !self.only_chapter,
             Write => self.switch_mode(Mode::Write, ctx),
             Source => self.switch_mode(Mode::Source, ctx),
             Preview => self.switch_mode(Mode::Preview, ctx),
@@ -522,8 +729,10 @@ impl App {
             ActualSize => self.zoom = 1.0,
             Palette => self.picker.show(false),
             Tutorial => {
-                if self.protect_unsaved() {
+                if self.model.document.text().is_empty() && self.path.is_none() {
                     self.load(DEMO.into(), None);
+                } else {
+                    self.windows.push((DEMO.into(), None));
                 }
             }
             Copy => self.pending_events.push(egui::Event::Copy),
@@ -543,8 +752,16 @@ impl App {
                 }
             }
         }
-        if command != Palette {
+        if !matches!(
+            command,
+            Palette | Find | Settings | Statistics | Recovery | Copy | Cut | Paste | SelectAll
+        ) {
             self.restore_editor_focus(ctx);
+        }
+        if matches!(command, ParagraphFocus | Typewriter)
+            && let Err(error) = self.storage.save_preferences(&self.preferences)
+        {
+            self.error = Some(error);
         }
         ctx.request_repaint();
     }
@@ -601,7 +818,7 @@ impl App {
                 Err(e) => self.error = Some(e),
             }
         }
-        if matches!(command, Command::Bold | Command::Italic) {
+        if command.block().is_none() {
             self.execute(command, ctx);
         }
         self.restore_editor_focus(ctx);
@@ -809,6 +1026,12 @@ impl App {
         };
         if consumed(Key::K, Modifiers::COMMAND) {
             self.picker.show(false);
+        }
+        if consumed(Key::F, Modifiers::COMMAND) {
+            self.execute(Command::Find, ctx);
+        }
+        if consumed(Key::Comma, Modifiers::COMMAND) {
+            self.execute(Command::Settings, ctx);
         }
         if consumed(Key::O, Modifiers::COMMAND) {
             self.open();
@@ -1036,41 +1259,98 @@ impl App {
         }
     }
     fn writing(&mut self, ui: &mut egui::Ui) {
+        let chapter = self
+            .only_chapter
+            .then(|| self.model.document.chapter_range(self.bookmark));
+        self.model.visible = chapter.as_ref().map(|range| {
+            let from = self
+                .model
+                .document
+                .paragraphs
+                .partition_point(|p| p.range.start < range.start);
+            let end = self
+                .model
+                .document
+                .paragraphs
+                .partition_point(|p| p.range.start < range.end)
+                .max(from + 1)
+                .min(self.model.document.paragraphs.len());
+            from..end
+        });
         let mut drop_target = None;
         let mut drag_preview = None;
         let mut handle_cursor = None;
         let mut bounds = Vec::new();
         #[cfg(test)]
         self.block_rects.clear();
-        egui::ScrollArea::vertical()
-            .id_salt("writing")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                self.editor.input(ui, &mut self.model);
-                let width = (ui.available_width() - 48.0).clamp(100.0, 700.0);
-                let margin = ((ui.available_width() - width) / 2.0).max(12.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(margin);
-                    ui.vertical(|ui| {
+        let area = self.scrollbar.area(
+            egui::ScrollArea::vertical()
+                .id_salt("writing")
+                .auto_shrink([false, false]),
+            ui.ctx(),
+        );
+        let output = area.show(ui, |ui| {
+            self.normalize_graphemes();
+            self.rich_input(ui.ctx());
+            self.access_positions.clear();
+            self.editor.input(ui, &mut self.model);
+            ui.ctx().accesskit_node_builder(Id::new("writer"), |node| {
+                node.set_role(egui::accesskit::Role::MultilineTextInput);
+                node.set_label("Document");
+                node.add_action(egui::accesskit::Action::SetTextSelection);
+            });
+            let width = (ui.available_width() - 48.0).clamp(100.0, 700.0);
+            let margin = ((ui.available_width() - width) / 2.0).max(12.0);
+            ui.horizontal(|ui| {
+                ui.add_space(margin);
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .layout(egui::Layout::top_down(egui::Align::Min))
+                        .accessibility_parent(Id::new("writer")),
+                    |ui| {
                         ui.set_width(width);
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.add_space(48.0);
                         let mut previous = None;
                         let mut first = true;
                         for block in self.model.document.blocks.clone() {
+                            let byte = match &block {
+                                Block::Editable(index) => {
+                                    self.model.document.paragraphs[*index].range.start
+                                }
+                                Block::Source { range, .. } => range.start,
+                            };
+                            if chapter
+                                .as_ref()
+                                .is_some_and(|range| byte < range.start || byte >= range.end)
+                            {
+                                continue;
+                            }
                             let current = match &block {
                                 Block::Editable(index) => {
-                                    Some(&self.model.document.paragraphs[*index].kind)
+                                    Some(self.model.document.paragraphs[*index].kind.clone())
                                 }
                                 Block::Source { .. } => None,
                             };
                             if !first {
-                                ui.add_space(typography::block_gap(previous, current));
+                                ui.add_space(
+                                    typography::block_gap(previous.as_ref(), current.as_ref())
+                                        * self.preferences.size
+                                        / 18.0,
+                                );
                             }
                             first = false;
                             previous = current;
                             match block {
                                 Block::Source { range, kind } => {
+                                    let revision = self.model.document.revision;
+                                    if self.object_ui(ui, range.clone()) {
+                                        if self.model.document.revision != revision {
+                                            ui.ctx().request_repaint();
+                                            break;
+                                        }
+                                        continue;
+                                    }
                                     let raw = self.model.document.text()[range.clone()].to_owned();
                                     let response = ui.horizontal(|ui| {
                                         egui::CollapsingHeader::new(kind)
@@ -1102,7 +1382,7 @@ impl App {
                                                 fonts.layout_no_wrap(
                                                     text,
                                                     egui::FontId::new(
-                                                        18.0,
+                                                        self.preferences.size,
                                                         egui::FontFamily::Name("reading".into()),
                                                     ),
                                                     Color32::from_rgb(126, 132, 128),
@@ -1112,18 +1392,21 @@ impl App {
                                     let indent = marker
                                         .as_ref()
                                         .map_or(0.0, |g| (g.size().x + 12.0).max(26.0));
-                                    let job = typography::paragraph(
-                                        p,
-                                        width - indent,
-                                        self.reading_faces,
-                                    );
-                                    let (job, map) = job.into_parts();
-                                    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                                    let (galley, map) =
+                                        self.paragraph_layout(index, width - indent, ui.ctx());
                                     let (rect, response) = ui.allocate_exact_size(
                                         vec2(width, galley.size().y),
                                         Sense::click_and_drag(),
                                     );
                                     let opacity = ui.painter().opacity();
+                                    if self.preferences.paragraph_focus
+                                        && self
+                                            .editor
+                                            .selection()
+                                            .is_some_and(|s| s.focus.paragraph != index)
+                                    {
+                                        ui.multiply_opacity(0.35);
+                                    }
                                     if self.dragging_block == Some(index) {
                                         ui.multiply_opacity(0.3);
                                     }
@@ -1178,17 +1461,39 @@ impl App {
                                     }
                                     let cursor_stroke = ui.visuals().text_cursor.stroke;
                                     ui.visuals_mut().text_cursor.stroke = egui::Stroke::NONE;
+                                    let mut galley = galley;
+                                    if self.find.open
+                                        && !ui.memory(|m| m.has_focus(Id::new("writer")))
+                                        && let Some(hit) = self.find.matches.get(self.find.index)
+                                        && hit.from.paragraph == index
+                                    {
+                                        let range = egui::text::CCursorRange::two(
+                                            egui::text::CCursor::new(egui::text::CharIndex(
+                                                map.to_galley(hit.from.offset),
+                                            )),
+                                            egui::text::CCursor::new(egui::text::CharIndex(
+                                                map.to_galley(hit.to.offset),
+                                            )),
+                                        );
+                                        egui::text_selection::visuals::paint_text_selection(
+                                            &mut galley,
+                                            ui.visuals(),
+                                            &range,
+                                            None,
+                                        );
+                                    }
                                     self.editor.paragraph(
                                         ui,
                                         &response,
                                         &index,
                                         Laid {
                                             galley: galley.clone(),
-                                            map,
+                                            map: map.clone(),
                                             origin,
                                         },
                                     );
                                     ui.visuals_mut().text_cursor.stroke = cursor_stroke;
+                                    self.expose_paragraph(ui, response.id, index, &galley, &map);
                                     if ui.memory(|m| m.has_focus(Id::new("writer")))
                                         && self
                                             .editor
@@ -1208,6 +1513,12 @@ impl App {
                                             transform.inverse() * caret,
                                             self.last_input.elapsed().as_secs_f32(),
                                         );
+                                        if self.preferences.typewriter
+                                            && self.last_input.elapsed()
+                                                < Duration::from_millis(150)
+                                        {
+                                            ui.scroll_to_rect(caret, Some(egui::Align::Center));
+                                        }
                                     }
                                     let first_line = galley
                                         .pos_from_cursor(egui::text::CCursor::new(
@@ -1300,55 +1611,63 @@ impl App {
                             }
                         }
                         ui.add_space(200.0);
-                    });
-                });
-                if self.dragging_block.is_some()
-                    && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
-                    && ui.clip_rect().contains(pointer)
-                {
-                    let mut nearest = None;
-                    for (row, &(index, rect)) in bounds.iter().enumerate() {
-                        let Some(index) = index else { continue };
-                        if pointer.x < rect.left() - 24.0 || pointer.x > rect.right() {
-                            continue;
-                        }
-                        let before = bounds
-                            .get(row.wrapping_sub(1))
-                            .map_or(rect.top() - 12.0, |(_, above)| {
-                                (above.bottom() + rect.top()) / 2.0
-                            });
-                        let after = bounds
-                            .get(row + 1)
-                            .map_or(rect.bottom() + 12.0, |(_, below)| {
-                                (rect.bottom() + below.top()) / 2.0
-                            });
-                        for (after, y) in [(false, before), (true, after)] {
-                            let distance = (pointer.y - y).abs();
-                            if nearest
-                                .as_ref()
-                                .is_none_or(|&(best, _, _, _)| distance < best)
-                            {
-                                nearest = Some((
-                                    distance,
-                                    index,
-                                    after,
-                                    egui::Rect::from_min_max(
-                                        egui::pos2(rect.left(), y),
-                                        egui::pos2(rect.right(), y),
-                                    ),
-                                ));
-                            }
-                        }
+                    },
+                );
+            });
+            if self.dragging_block.is_some()
+                && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
+                && ui.clip_rect().contains(pointer)
+            {
+                let mut nearest = None;
+                for (row, &(index, rect)) in bounds.iter().enumerate() {
+                    let Some(index) = index else { continue };
+                    if pointer.x < rect.left() - 24.0 || pointer.x > rect.right() {
+                        continue;
                     }
-                    if let Some((_, index, after, line)) = nearest {
-                        ui.painter().line_segment(
-                            [line.min, line.max],
-                            egui::Stroke::new(2.0, Color32::from_rgb(134, 153, 124)),
-                        );
-                        drop_target = Some((index, after));
+                    let before = bounds
+                        .get(row.wrapping_sub(1))
+                        .map_or(rect.top() - 12.0, |(_, above)| {
+                            (above.bottom() + rect.top()) / 2.0
+                        });
+                    let after = bounds
+                        .get(row + 1)
+                        .map_or(rect.bottom() + 12.0, |(_, below)| {
+                            (rect.bottom() + below.top()) / 2.0
+                        });
+                    for (after, y) in [(false, before), (true, after)] {
+                        let distance = (pointer.y - y).abs();
+                        if nearest
+                            .as_ref()
+                            .is_none_or(|&(best, _, _, _)| distance < best)
+                        {
+                            nearest = Some((
+                                distance,
+                                index,
+                                after,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(rect.left(), y),
+                                    egui::pos2(rect.right(), y),
+                                ),
+                            ));
+                        }
                     }
                 }
-            });
+                if let Some((_, index, after, line)) = nearest {
+                    ui.painter().line_segment(
+                        [line.min, line.max],
+                        egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+                    );
+                    drop_target = Some((index, after));
+                }
+            }
+        });
+        self.scrollbar.update(
+            output.inner_rect,
+            output.content_size,
+            output.state.offset,
+            !self.picker.open && self.dialog.is_none() && self.insertion.is_none(),
+            ui.ctx(),
+        );
         if let Some(cursor) = handle_cursor {
             ui.ctx().set_cursor_icon(cursor);
         }
@@ -1402,153 +1721,164 @@ impl App {
                 ),
             );
         }
-        egui::ScrollArea::both()
-            .id_salt("source-scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let id = Id::new(SOURCE_ID);
-                if self.source_focus {
-                    {
-                        let mut state =
-                            egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-                        let selection = self.source_history_selection.take().unwrap_or(
-                            blank_document::SourceSelection {
-                                anchor: self.bookmark,
-                                focus: self.bookmark,
-                            },
-                        );
-                        let cursor = |byte| {
-                            egui::text::CCursor::new(egui::text::CharIndex(
-                                self.source_buffer
-                                    .char_indices()
-                                    .take_while(|(i, _)| *i < byte)
-                                    .count(),
-                            ))
-                        };
-                        state
-                            .cursor
-                            .set_char_range(Some(egui::text::CCursorRange::two(
-                                cursor(selection.anchor),
-                                cursor(selection.focus),
-                            )));
-                        state.store(ui.ctx(), id);
-                    }
-                    ui.memory_mut(|m| m.request_focus(id));
-                    self.source_focus = false;
-                }
-                let previous_cursor = egui::TextEdit::load_state(ui.ctx(), id)
-                    .and_then(|state| state.cursor.char_range());
-                let paired = if self.picker.open {
-                    None
-                } else {
-                    source_editor::pairs(ui.ctx(), id, &self.source_buffer)
-                };
-                let available = ui.available_size();
-                let cache = &mut self.source_layout;
-                let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, width: f32| {
-                    let text = text.as_str();
-                    if cache.as_ref().is_none_or(|(previous, _)| previous != text) {
-                        *cache = Some((text.to_owned(), source_editor::layout(text)));
-                    }
-                    let mut job = cache.as_ref().unwrap().1.clone();
-                    job.wrap.max_width = width;
-                    ui.fonts_mut(|fonts| fonts.layout_job(job))
-                };
-                let cursor_stroke = ui.visuals().text_cursor.stroke;
-                ui.visuals_mut().text_cursor.stroke = egui::Stroke::NONE;
-                let mut output = egui::TextEdit::multiline(&mut self.source_buffer)
-                    .id(id)
-                    .font(egui::TextStyle::Monospace)
-                    .desired_width(f32::INFINITY)
-                    .min_size(available)
-                    .frame(egui::Frame::NONE.inner_margin(24))
-                    .layouter(&mut layouter)
-                    .code_editor()
-                    .show(ui);
-                ui.visuals_mut().text_cursor.stroke = cursor_stroke;
-                if let Some(cursor) = paired {
-                    output.state.cursor.set_char_range(Some(cursor));
-                    output.state.clone().store(ui.ctx(), id);
-                    output.cursor_range = Some(cursor);
-                    ui.ctx().request_repaint();
-                }
-                // The document owns shared Write/Source history. Do not retain
-                // TextEdit's separate whole-string snapshots as well.
-                output.state.clear_undoer();
-                if let Some(cursor) = output.cursor_range {
-                    if output.response.has_focus() {
-                        let caret = output
-                            .galley
-                            .pos_from_cursor(cursor.primary)
-                            .translate(output.galley_pos.to_vec2());
-                        typography::paint_caret(
-                            ui,
-                            &output.galley,
-                            output.galley_pos,
-                            caret,
-                            self.last_input.elapsed().as_secs_f32(),
-                        );
-                    }
-                    self.bookmark = self
-                        .source_buffer
-                        .char_indices()
-                        .nth(cursor.primary.index.0)
-                        .map_or(self.source_buffer.len(), |(i, _)| i);
-                }
-                if output.response.changed() {
-                    let structural = ui.input(|input| {
-                        input.events.iter().any(|event| {
-                            matches!(event, egui::Event::Paste(_) | egui::Event::Cut)
-                                || matches!(
-                                    event,
-                                    egui::Event::Key {
-                                        key: Key::Enter,
-                                        pressed: true,
-                                        ..
-                                    }
-                                )
-                        })
-                    });
-                    let selection = |text: &str, cursor: egui::text::CCursorRange| {
-                        let byte = |index| {
-                            text.char_indices()
-                                .nth(index)
-                                .map_or(text.len(), |(i, _)| i)
-                        };
+        let area = self.scrollbar.area(
+            egui::ScrollArea::both()
+                .id_salt("source-scroll")
+                .auto_shrink([false, false]),
+            ui.ctx(),
+        );
+        let scroll = area.show(ui, |ui| {
+            let id = Id::new(SOURCE_ID);
+            if self.source_focus || self.source_history_selection.is_some() {
+                {
+                    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+                    let selection = self.source_history_selection.take().unwrap_or(
                         blank_document::SourceSelection {
-                            anchor: byte(cursor.secondary.index.0),
-                            focus: byte(cursor.primary.index.0),
-                        }
+                            anchor: self.bookmark,
+                            focus: self.bookmark,
+                        },
+                    );
+                    let cursor = |byte| {
+                        egui::text::CCursor::new(egui::text::CharIndex(
+                            self.source_buffer
+                                .char_indices()
+                                .take_while(|(i, _)| *i < byte)
+                                .count(),
+                        ))
                     };
-                    let before =
-                        previous_cursor.map(|cursor| selection(self.model.document.text(), cursor));
-                    let deleting = self.source_buffer.len() < self.model.document.text().len();
-                    let new_step = self.source_new_step
-                        || structural
-                        || self.last_edit.elapsed() > Duration::from_secs(1)
-                        || before.is_some_and(|before| {
-                            before.anchor != before.focus
-                                || self
-                                    .source_last_selection
-                                    .is_some_and(|last| last != before)
-                        })
-                        || deleting != self.source_last_delete;
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::two(
+                            cursor(selection.anchor),
+                            cursor(selection.focus),
+                        )));
+                    state.store(ui.ctx(), id);
+                }
+                if self.source_focus {
+                    ui.memory_mut(|m| m.request_focus(id));
+                }
+                self.source_focus = false;
+            }
+            let previous_cursor = egui::TextEdit::load_state(ui.ctx(), id)
+                .and_then(|state| state.cursor.char_range());
+            let paired = if self.picker.open {
+                None
+            } else {
+                source_editor::pairs(ui.ctx(), id, &self.source_buffer)
+            };
+            let available = ui.available_size();
+            let cache = &mut self.source_layout;
+            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, width: f32| {
+                let text = text.as_str();
+                if cache.as_ref().is_none_or(|(previous, _)| previous != text) {
+                    *cache = Some((text.to_owned(), source_editor::layout(text)));
+                }
+                let mut job = cache.as_ref().unwrap().1.clone();
+                job.wrap.max_width = width;
+                ui.fonts_mut(|fonts| fonts.layout_job(job))
+            };
+            let cursor_stroke = ui.visuals().text_cursor.stroke;
+            ui.visuals_mut().text_cursor.stroke = egui::Stroke::NONE;
+            let mut output = egui::TextEdit::multiline(&mut self.source_buffer)
+                .id(id)
+                .font(egui::TextStyle::Monospace)
+                .desired_width(f32::INFINITY)
+                .min_size(available)
+                .frame(egui::Frame::NONE.inner_margin(24))
+                .layouter(&mut layouter)
+                .code_editor()
+                .show(ui);
+            ui.visuals_mut().text_cursor.stroke = cursor_stroke;
+            if let Some(cursor) = paired {
+                output.state.cursor.set_char_range(Some(cursor));
+                output.state.clone().store(ui.ctx(), id);
+                output.cursor_range = Some(cursor);
+                ui.ctx().request_repaint();
+            }
+            // The document owns shared Write/Source history. Do not retain
+            // TextEdit's separate whole-string snapshots as well.
+            output.state.clear_undoer();
+            if let Some(cursor) = output.cursor_range {
+                if output.response.has_focus() {
+                    let caret = output
+                        .galley
+                        .pos_from_cursor(cursor.primary)
+                        .translate(output.galley_pos.to_vec2());
+                    typography::paint_caret(
+                        ui,
+                        &output.galley,
+                        output.galley_pos,
+                        caret,
+                        self.last_input.elapsed().as_secs_f32(),
+                    );
+                }
+                self.bookmark = self
+                    .source_buffer
+                    .char_indices()
+                    .nth(cursor.primary.index.0)
+                    .map_or(self.source_buffer.len(), |(i, _)| i);
+            }
+            if output.response.changed() {
+                let structural = ui.input(|input| {
+                    input.events.iter().any(|event| {
+                        matches!(event, egui::Event::Paste(_) | egui::Event::Cut)
+                            || matches!(
+                                event,
+                                egui::Event::Key {
+                                    key: Key::Enter,
+                                    pressed: true,
+                                    ..
+                                }
+                            )
+                    })
+                });
+                let selection = |text: &str, cursor: egui::text::CCursorRange| {
+                    let byte = |index| {
+                        text.char_indices()
+                            .nth(index)
+                            .map_or(text.len(), |(i, _)| i)
+                    };
+                    blank_document::SourceSelection {
+                        anchor: byte(cursor.secondary.index.0),
+                        focus: byte(cursor.primary.index.0),
+                    }
+                };
+                let before =
+                    previous_cursor.map(|cursor| selection(self.model.document.text(), cursor));
+                let deleting = self.source_buffer.len() < self.model.document.text().len();
+                let new_step = self.source_new_step
+                    || structural
+                    || self.last_edit.elapsed() > Duration::from_secs(1)
+                    || before.is_some_and(|before| {
+                        before.anchor != before.focus
+                            || self
+                                .source_last_selection
+                                .is_some_and(|last| last != before)
+                    })
+                    || deleting != self.source_last_delete;
+                self.model
+                    .document
+                    .replace_source(&self.source_buffer, new_step);
+                if let Some(before) = before
+                    && let Some(cursor) = output.cursor_range
+                {
                     self.model
                         .document
-                        .replace_source(&self.source_buffer, new_step);
-                    if let Some(before) = before
-                        && let Some(cursor) = output.cursor_range
-                    {
-                        self.model
-                            .document
-                            .record_selection(before, selection(&self.source_buffer, cursor));
-                        self.source_last_selection = Some(selection(&self.source_buffer, cursor));
-                    }
-                    self.source_new_step = structural;
-                    self.source_last_delete = deleting;
-                    self.editor.document_replaced();
+                        .record_selection(before, selection(&self.source_buffer, cursor));
+                    self.source_last_selection = Some(selection(&self.source_buffer, cursor));
                 }
-            });
+                self.source_new_step = structural;
+                self.source_last_delete = deleting;
+                self.editor.document_replaced();
+            }
+        });
+        self.scrollbar.update(
+            scroll.inner_rect,
+            scroll.content_size,
+            scroll.state.offset,
+            !self.picker.open && self.dialog.is_none() && self.insertion.is_none(),
+            ui.ctx(),
+        );
     }
     fn preview(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -1557,6 +1887,14 @@ impl App {
                 ui.label("Typesetting…");
             } else {
                 ui.label(format!("{} page(s)", self.pages.len()));
+            }
+            ui.label("Page");
+            if ui
+                .add(egui::DragValue::new(&mut self.page_number).range(1..=self.pages.len().max(1)))
+                .changed()
+            {
+                self.reveal_page = true;
+                self.bookmark = 0;
             }
             if self.page_revision != Some(self.model.document.revision) && !self.pages.is_empty() {
                 ui.weak("Last successful preview");
@@ -1568,53 +1906,108 @@ impl App {
         if self.pages.is_empty() && !self.compiling {
             ui.label("Preview will appear after a successful compile.");
         }
+        let active_path = self
+            .path
+            .as_ref()
+            .map(|path| {
+                self.project
+                    .as_ref()
+                    .and_then(|project| path.strip_prefix(&project.root).ok())
+                    .unwrap_or_else(|| std::path::Path::new(path.file_name().unwrap()))
+            })
+            .map(|path| path.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|| "main.typ".into());
         let target_page = self
             .source_map
             .iter()
             .filter(|a| {
-                a["start"]
-                    .as_u64()
-                    .is_some_and(|s| s as usize <= self.bookmark)
+                a["path"].as_str() == Some(active_path.as_str())
+                    && a["start"]
+                        .as_u64()
+                        .is_some_and(|s| s as usize <= self.bookmark)
             })
             .max_by_key(|a| a["start"].as_u64())
             .and_then(|a| a["page"].as_u64())
             .unwrap_or(1) as usize;
-        egui::ScrollArea::both()
-            .id_salt("preview-scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for (index, page) in self.pages.iter().enumerate() {
-                    let width = 720.0 * self.zoom;
-                    let height = width * page.size()[1] as f32 / page.size()[0] as f32;
-                    let response = ui.add(
-                        egui::Image::new(page)
-                            .fit_to_exact_size(vec2(width, height))
-                            .sense(Sense::click()),
-                    );
-                    if self.reveal_page && index + 1 == target_page {
-                        response.scroll_to_me(Some(egui::Align::TOP));
-                    }
-                    if response.clicked()
-                        && let Some(pointer) = response.interact_pointer_pos()
-                    {
-                        let y = (pointer.y - response.rect.top()) / response.rect.height();
-                        if let Some(anchor) = self
-                            .source_map
-                            .iter()
-                            .filter(|a| a["page"].as_u64() == Some(index as u64 + 1))
-                            .min_by(|a, b| {
-                                (a["y"].as_f64().unwrap_or(0.0) - y as f64)
-                                    .abs()
-                                    .total_cmp(&(b["y"].as_f64().unwrap_or(0.0) - y as f64).abs())
-                            })
-                        {
-                            self.bookmark = anchor["start"].as_u64().unwrap_or(0) as usize;
+        if self.reveal_page && self.bookmark > 0 {
+            self.page_number = target_page;
+        }
+        let mut visible = vec![];
+        let mut reveal_source = None;
+        let area = self.scrollbar.area(
+            egui::ScrollArea::both()
+                .id_salt("preview-scroll")
+                .auto_shrink([false, false]),
+            ui.ctx(),
+        );
+        let scroll = area.show(ui, |ui| {
+            for (index, page) in self.pages.iter().enumerate() {
+                let width = 720.0 * self.zoom;
+                let height = width * self.page_ratios.get(index).copied().unwrap_or(1.414);
+                let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+                if ui.is_rect_visible(rect) {
+                    visible.push(index);
+                    if let Some(page) = page {
+                        egui::Image::new(page).paint_at(ui, rect);
+                    } else {
+                        ui.painter().rect_filled(rect, 0, Color32::WHITE);
+                        if self.pending_pages.insert(index) {
+                            self.compiler.render(self.page_request_id, index);
                         }
                     }
-                    ui.add_space(20.0);
                 }
-            });
+                if self.reveal_page && index + 1 == self.page_number {
+                    response.scroll_to_me(Some(egui::Align::TOP));
+                }
+                if response.clicked()
+                    && let Some(pointer) = response.interact_pointer_pos()
+                {
+                    let y = (pointer.y - response.rect.top()) / response.rect.height();
+                    if let Some(anchor) = self
+                        .source_map
+                        .iter()
+                        .filter(|a| a["page"].as_u64() == Some(index as u64 + 1))
+                        .min_by(|a, b| {
+                            (a["y"].as_f64().unwrap_or(0.0) - y as f64)
+                                .abs()
+                                .total_cmp(&(b["y"].as_f64().unwrap_or(0.0) - y as f64).abs())
+                        })
+                    {
+                        reveal_source = Some((
+                            anchor["path"].as_str().unwrap_or("main.typ").to_owned(),
+                            anchor["start"].as_u64().unwrap_or(0) as usize,
+                        ));
+                    }
+                }
+                ui.add_space(20.0);
+            }
+        });
+        for (index, page) in self.pages.iter_mut().enumerate() {
+            if !visible.iter().any(|&visible| index.abs_diff(visible) <= 2) {
+                *page = None;
+            }
+        }
+        self.scrollbar.update(
+            scroll.inner_rect,
+            scroll.content_size,
+            scroll.state.offset,
+            !self.picker.open && self.dialog.is_none() && self.insertion.is_none(),
+            ui.ctx(),
+        );
         self.reveal_page = false;
+        if let Some((path, byte)) = reveal_source {
+            if let Some(project) = &self.project
+                && let Some(index) = project.files.iter().position(|file| {
+                    file.path
+                        .strip_prefix(&project.root)
+                        .is_ok_and(|relative| relative.to_string_lossy().replace('\\', "/") == path)
+                })
+            {
+                self.switch_file(index, ui.ctx());
+            }
+            self.bookmark = byte;
+            self.switch_mode(Mode::Source, ui.ctx());
+        }
     }
 }
 
@@ -1642,7 +2035,10 @@ impl eframe::App for App {
         ui.style_mut().visuals.text_cursor.blink = blinking;
         ctx.global_style_mut(|style| style.visuals.text_cursor.blink = blinking);
         #[cfg(target_os = "macos")]
-        if let Some(mut menus) = self.menus.take() {
+        if ctx.input(|i| i.viewport().focused.unwrap_or(true))
+            && let Some(menus) = self.menus.clone()
+        {
+            let mut menus = menus.borrow_mut();
             let commands: Vec<_> = menus.rx.try_iter().collect();
             if !commands.is_empty() {
                 // AppKit may also forward the accelerator's key event to winit.
@@ -1656,7 +2052,6 @@ impl eframe::App for App {
                 self.execute(command, &ctx);
             }
             menus.sync(|command| self.enabled(command));
-            self.menus = Some(menus);
         }
         if self.restore_focus {
             self.restore_focus = false;
@@ -1670,6 +2065,9 @@ impl eframe::App for App {
                 });
             }
         }
+        if let Some(id) = self.object_focus.take() {
+            ctx.memory_mut(|m| m.request_focus(id));
+        }
         self.shortcuts(&ctx);
         self.block_shortcuts(&ctx);
         self.slash_trigger(&ctx);
@@ -1680,23 +2078,40 @@ impl eframe::App for App {
             ctx.input_mut(|i| i.events.append(&mut self.pending_events));
         }
         self.poll_compile(&ctx);
-        if ctx.input(|i| i.viewport().close_requested()) && self.dirty() {
+        self.poll_zotero();
+        let dropped: Vec<_> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|file| file.path().to_owned())
+                .collect()
+        });
+        for path in dropped {
+            self.dropped_image(&path, &ctx);
+        }
+        if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            let answer = self
-                .confirmation
-                .ask("This document has unsaved changes.", true);
-            let close = match answer {
-                confirmation::Choice::Save => self.save(false),
-                confirmation::Choice::Discard => {
-                    self.disk_text = self.model.document.text().to_owned();
-                    true
-                }
-                confirmation::Choice::Cancel => false,
-            };
-            if close {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if !self.dirty() {
+                self.closed = true;
+                self.storage.clear();
             } else {
-                self.restore_editor_focus(&ctx);
+                let answer = self
+                    .confirmation
+                    .ask("This document has unsaved changes.", true);
+                let close = match answer {
+                    confirmation::Choice::Save => self.save(false),
+                    confirmation::Choice::Discard => {
+                        self.disk_text = self.model.document.text().to_owned();
+                        true
+                    }
+                    confirmation::Choice::Cancel => false,
+                };
+                if close {
+                    self.closed = true;
+                    self.storage.clear();
+                } else {
+                    self.restore_editor_focus(&ctx);
+                }
             }
         }
         if let Some(error) = self.model.error.take() {
@@ -1714,32 +2129,7 @@ impl eframe::App for App {
                 });
             });
         }
-        egui::Panel::bottom("status")
-            .show_separator_line(false)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.weak(format!(
-                        "{} words",
-                        self.model
-                            .document
-                            .paragraphs
-                            .iter()
-                            .map(|p| p.text().split_whitespace().count())
-                            .sum::<usize>()
-                    ));
-                    if self.path.is_some() && self.dirty() {
-                        ui.weak(if self.conflict {
-                            "Disk conflict · Save As"
-                        } else {
-                            "Saving…"
-                        });
-                    } else if self.path.is_none() {
-                        ui.weak("Unsaved document");
-                    } else {
-                        ui.weak("Saved");
-                    }
-                });
-            });
+        self.find_bar(ui);
         if self.contents {
             egui::Panel::left("contents")
                 .show_separator_line(false)
@@ -1751,8 +2141,45 @@ impl eframe::App for App {
                 )
                 .show(ui, |ui| {
                     ui.add_space(18.0);
-                    if let Some((i, byte)) = outline::show(ui, &self.model.document, self.bookmark)
-                    {
+                    let selected = self.project.as_ref().and_then(|project| {
+                        if project.files.len() < 2 {
+                            return None;
+                        }
+                        let mut selected = None;
+                        for (index, file) in project.files.iter().enumerate() {
+                            let title = file
+                                .path
+                                .strip_prefix(&project.root)
+                                .unwrap()
+                                .display()
+                                .to_string();
+                            if ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new(title).size(12.0))
+                                        .selected(index == project.active)
+                                        .truncate()
+                                        .frame(false),
+                                )
+                                .clicked()
+                            {
+                                selected = Some(index);
+                            }
+                        }
+                        ui.add_space(12.0);
+                        selected
+                    });
+                    if let Some(index) = selected {
+                        self.switch_file(index, &ctx);
+                    }
+                    if let Some(action) = outline::show(ui, &self.model.document, self.bookmark) {
+                        if let outline::Action::Move(from, to, after) = action {
+                            let result = self.model.document.move_section(from, to, after);
+                            self.finish_block_action(result, &ctx);
+                            return;
+                        }
+                        let outline::Action::Jump(i, byte) = action else {
+                            return;
+                        };
                         self.bookmark = byte;
                         match self.mode {
                             Mode::Write => self
@@ -1765,7 +2192,15 @@ impl eframe::App for App {
                 });
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(ui.style()).inner_margin(0))
+            .frame(
+                egui::Frame::central_panel(ui.style())
+                    .fill(Color32::from_rgb(
+                        self.preferences.background[0],
+                        self.preferences.background[1],
+                        self.preferences.background[2],
+                    ))
+                    .inner_margin(0),
+            )
             .show(ui, |ui| match self.mode {
                 Mode::Write => self.writing(ui),
                 Mode::Source => self.source(ui),
@@ -1773,6 +2208,8 @@ impl eframe::App for App {
             });
         self.block_picker(&ctx);
         self.command_picker(&ctx);
+        self.tools_dialog(&ctx);
+        self.insertion_dialog(&ctx);
         self.changed();
         if self.last_edit.elapsed() >= Duration::from_millis(650) {
             if self.mode == Mode::Preview
@@ -1782,6 +2219,17 @@ impl eframe::App for App {
             }
             if self.path.is_some() && self.dirty() && !self.conflict {
                 self.save(false);
+            }
+            if self.dirty() && self.journal_revision != Some(self.model.document.revision) {
+                if let Err(error) = self
+                    .recovery_draft()
+                    .and_then(|draft| self.storage.checkpoint(&draft))
+                {
+                    self.error = Some(error);
+                }
+                self.journal_revision = Some(self.model.document.revision);
+            } else if !self.dirty() {
+                self.storage.clear();
             }
         }
         if self.last_edit.elapsed() < Duration::from_millis(650) {
@@ -1872,7 +2320,7 @@ fn main() -> eframe::Result {
                 .with_min_inner_size([680.0, 480.0]),
             ..Default::default()
         },
-        Box::new(|cc| Ok(Box::new(App::new(cc)))),
+        Box::new(|cc| Ok(Box::new(desktop::Desktop::new(cc)))),
     )
 }
 
@@ -2201,6 +2649,7 @@ mod app_tests {
             "press closes the hand without waiting for the drag threshold"
         );
         let midpoint = (rects[0].bottom() + rects[1].top()) / 2.0;
+        let drop_color = ctx.global_style().visuals.selection.bg_fill;
         for y in [rects[0].bottom() - 2.0, midpoint, rects[1].top() + 2.0] {
             let output = frame(
                 &ctx,
@@ -2214,9 +2663,7 @@ mod app_tests {
                 .shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    egui::Shape::LineSegment { points, stroke }
-                        if stroke.color == Color32::from_rgb(134, 153, 124) =>
-                    {
+                    egui::Shape::LineSegment { points, stroke } if stroke.color == drop_color => {
                         Some(points)
                     }
                     _ => None,
@@ -2295,11 +2742,11 @@ mod app_tests {
     fn leaving_preview_releases_page_textures() {
         let (ctx, mut app) = setup("Hello");
         app.mode = Mode::Preview;
-        app.pages.push(ctx.load_texture(
+        app.pages.push(Some(ctx.load_texture(
             "test-page",
             egui::ColorImage::new([1, 1], vec![Color32::WHITE]),
             Default::default(),
-        ));
+        )));
         app.page_revision = Some(0);
         app.switch_mode(Mode::Write, &ctx);
         assert!(app.pages.is_empty());
@@ -2627,5 +3074,149 @@ mod app_tests {
         );
         app.history(false);
         assert_eq!(app.model.document.text(), "First\n\nSecond\n\nThird");
+    }
+    #[test]
+    fn composed_input_and_cluster_deletion_share_undo() {
+        let (ctx, mut app) = setup("A👩🏽‍💻éZ");
+        app.editor
+            .select(Selection::caret(egui_richedit::Position::new(0, 1)));
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![key(Key::ArrowRight)]);
+        assert_eq!(app.editor.selection().unwrap().focus.offset, 5);
+        frame(&ctx, &mut app, vec![key(Key::Backspace)]);
+        assert_eq!(app.model.document.text(), "AéZ");
+        app.history(false);
+        assert_eq!(app.model.document.text(), "A👩🏽‍💻éZ");
+        assert_eq!(app.editor.selection().unwrap().focus.offset, 5);
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "日本".into(),
+                active_range_chars: None,
+            })],
+        );
+        assert_eq!(app.model.document.text(), "A👩🏽‍💻éZ");
+        assert_eq!(app.composition, "日本");
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::Ime(egui::ImeEvent::Commit("日本".into()))],
+        );
+        assert_eq!(app.model.document.text(), "A👩🏽‍💻日本éZ");
+        assert!(app.composition.is_empty());
+        app.history(false);
+        assert_eq!(app.model.document.text(), "A👩🏽‍💻éZ");
+    }
+    #[test]
+    fn accessible_text_selection_focuses_writer_and_edits_the_selected_run() {
+        let (ctx, mut app) = setup("Café text");
+        frame(&ctx, &mut app, vec![]);
+        let (&node, positions) = app
+            .access_positions
+            .iter()
+            .find(|(_, positions)| positions.len() > 5)
+            .unwrap();
+        let expected = positions[4].offset;
+        ctx.memory_mut(|m| m.surrender_focus(Id::new("writer")));
+        let selection = egui::accesskit::TextSelection {
+            anchor: egui::accesskit::TextPosition {
+                node,
+                character_index: 0,
+            },
+            focus: egui::accesskit::TextPosition {
+                node,
+                character_index: 4,
+            },
+        };
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::AccessKitActionRequest(
+                egui::accesskit::ActionRequest {
+                    action: egui::accesskit::Action::SetTextSelection,
+                    target_tree: egui::accesskit::TreeId::ROOT,
+                    target_node: node,
+                    data: Some(egui::accesskit::ActionData::SetTextSelection(selection)),
+                },
+            )],
+        );
+        assert!(ctx.memory(|m| m.has_focus(Id::new("writer"))));
+        assert_eq!(app.editor.selection().unwrap().focus.offset, expected);
+        frame(&ctx, &mut app, vec![egui::Event::Text("Tea".into())]);
+        assert_eq!(app.model.document.text(), "Tea text");
+    }
+    #[test]
+    fn project_switches_keep_histories_and_recovery_keeps_every_file_and_asset() {
+        let folder = tempfile::tempdir().unwrap();
+        let entry = folder.path().join("main.typ");
+        let chapter = folder.path().join("chapter.typ");
+        std::fs::write(&entry, "= Main\n\n#include \"chapter.typ\"").unwrap();
+        std::fs::write(&chapter, "== Chapter\n\nCafé").unwrap();
+        let (ctx, mut app) = setup("");
+        app.load(std::fs::read_to_string(&entry).unwrap(), Some(entry));
+        app.model
+            .document
+            .edit_source(0..0, "// main edit\n", true)
+            .unwrap();
+        app.switch_file(1, &ctx);
+        app.model
+            .document
+            .edit_source(0..0, "// child edit\n", true)
+            .unwrap();
+        app.switch_file(0, &ctx);
+        assert!(app.model.document.text().starts_with("// main edit"));
+        app.history(false);
+        assert!(!app.model.document.text().starts_with("// main edit"));
+        app.switch_file(1, &ctx);
+        assert!(app.model.document.text().starts_with("// child edit"));
+        std::fs::create_dir(app.assets.path().join("assets")).unwrap();
+        std::fs::write(app.assets.path().join("assets/test.svg"), "<svg/>").unwrap();
+        let draft = app.recovery_draft().unwrap();
+        let (_, mut recovered) = setup("");
+        recovered.load(draft.text.clone(), draft.path.clone());
+        recovered.restore_draft(&draft, &ctx);
+        assert!(recovered.model.document.text().starts_with("// child edit"));
+        assert_eq!(recovered.project.as_ref().unwrap().files.len(), 2);
+        assert_eq!(
+            std::fs::read(recovered.assets.path().join("assets/test.svg")).unwrap(),
+            b"<svg/>"
+        );
+        app.save_other_files().unwrap();
+        std::fs::write(&chapter, "External change").unwrap();
+        assert!(!app.save(false));
+        assert_eq!(std::fs::read_to_string(chapter).unwrap(), "External change");
+    }
+    #[test]
+    fn table_cell_edits_and_structural_actions_are_reversible() {
+        let original = "#table(columns: 2, stroke: 0.5pt, [Café], [Second])";
+        let (ctx, mut app) = setup(original);
+        let output = frame(&ctx, &mut app, vec![]);
+        click(&ctx, &mut app, text_rect(&output, "+ Row").center());
+        let blank_document::objects::Object::Table(table) =
+            blank_document::objects::parse(app.model.document.text(), 0).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(table.cells.len(), 4);
+        assert_eq!(table.options, ["stroke: 0.5pt"]);
+        app.history(false);
+        assert_eq!(app.model.document.text(), original);
+        frame(&ctx, &mut app, vec![]);
+        ctx.memory_mut(|m| m.request_focus(Id::new(("table-cell", 0usize, 1usize))));
+        frame(&ctx, &mut app, vec![key(Key::Tab)]);
+        let blank_document::objects::Object::Table(table) =
+            blank_document::objects::parse(app.model.document.text(), 0).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(table.cells.len(), 4);
+        app.history(false);
+        frame(&ctx, &mut app, vec![]);
+        ctx.memory_mut(|m| m.request_focus(Id::new(("table-cell", 0usize, 0usize))));
+        frame(&ctx, &mut app, vec![egui::Event::Text("Edited".into())]);
+        assert!(app.model.document.text().contains("Edited"));
+        app.history(false);
+        assert_eq!(app.model.document.text(), original);
     }
 }

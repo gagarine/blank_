@@ -128,3 +128,53 @@ fn compiler_protocol_exports_pdf_renders_pages_and_reports_invalid_source() {
     }));
     assert!(unsupported.get("error").is_some());
 }
+
+#[cfg(feature = "native-preview")]
+#[test]
+fn lazy_preview_renders_only_requested_pages_and_releases_the_document() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut helper = Helper::start();
+    let compiled = helper.request(json!({"id":10,"method":"compile","protocolVersion":1,
+        "params":{"root":folder.path(),"entry":"main.typ","revision":10,"retain_preview":true,
+            "files":{"main.typ":"= First\n#pagebreak()\n= Second"}}}));
+    assert!(
+        compiled["result"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(compiled["result"]["pages"], 2);
+    assert!(compiled["result"].get("pageImages").is_none());
+    assert_eq!(
+        compiled["result"]["pageRatios"].as_array().unwrap().len(),
+        2
+    );
+    let page =
+        helper.request(json!({"id":11,"method":"render-page","params":{"revision":10,"page":1}}));
+    assert_eq!(page["result"]["pageNumber"], 1);
+    let pages = page["result"]["pageImages"].as_array().unwrap();
+    assert_eq!(pages.len(), 1);
+    assert!(
+        STANDARD
+            .decode(pages[0].as_str().unwrap())
+            .unwrap()
+            .starts_with(b"\x89PNG")
+    );
+    let stale =
+        helper.request(json!({"id":12,"method":"render-page","params":{"revision":9,"page":1}}));
+    assert!(stale.get("error").is_some());
+    helper.request(json!({"id":13,"method":"release-preview"}));
+    let released =
+        helper.request(json!({"id":14,"method":"render-page","params":{"revision":10,"page":0}}));
+    assert!(released.get("error").is_some());
+    std::fs::write(folder.path().join("figure.svg"),r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="blue"/></svg>"#).unwrap();
+    let object=helper.request(json!({"id":15,"method":"render-object","params":{"root":folder.path(),"revision":15,"objectKey":123,"text":"#image(\"figure.svg\", width:100%)"}}));
+    assert_eq!(object["result"]["objectKey"], 123);
+    assert!(
+        object["result"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(object["result"]["pageImages"].as_array().unwrap().len(), 1);
+}

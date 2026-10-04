@@ -27,6 +27,9 @@ impl NativeMenus {
             &PredefinedMenuItem::separator(),
         ])?;
         let quit = item(Command::Quit);
+        let settings = item(Command::Settings);
+        app.append(&settings)?;
+        items.push((Command::Settings, settings, true));
         app.append(&quit)?;
         items.push((Command::Quit, quit, true));
         menu.append(&app)?;
@@ -40,6 +43,7 @@ impl NativeMenus {
                     Command::SaveAs,
                     Command::Export,
                     Command::Close,
+                    Command::Recovery,
                 ][..],
             ),
             (
@@ -52,6 +56,7 @@ impl NativeMenus {
                     Command::Paste,
                     Command::SelectAll,
                     Command::Palette,
+                    Command::Find,
                 ][..],
             ),
             (
@@ -78,6 +83,9 @@ impl NativeMenus {
                     Command::ZoomIn,
                     Command::ZoomOut,
                     Command::ActualSize,
+                    Command::ParagraphFocus,
+                    Command::Typewriter,
+                    Command::Statistics,
                 ][..],
             ),
         ] {
@@ -156,6 +164,8 @@ fn item(command: Command) -> MenuItem {
         ZoomOut => Some((Modifiers::META, Code::Minus)),
         ActualSize => Some((Modifiers::META, Code::Digit0)),
         Palette => Some((Modifiers::META, Code::KeyK)),
+        Find => Some((Modifiers::META, Code::KeyF)),
+        Settings => Some((Modifiers::META, Code::Comma)),
         _ => None,
     };
     MenuItem::with_id(

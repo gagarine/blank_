@@ -145,6 +145,9 @@ impl World for Environment {
             .get_or_init(|| Mutex::new(HashMap::new()))
             .lock()
             .unwrap();
+        if cache.len() >= 64 && !cache.contains_key(&(self.root.clone(), id)) {
+            cache.clear();
+        }
         let source = cache
             .entry((self.root.clone(), id))
             .or_insert_with(|| Source::new(id, text.to_owned()));
@@ -175,6 +178,34 @@ struct CompileRequest {
     revision: u64,
     #[serde(default)]
     native_preview: bool,
+    #[serde(default)]
+    retain_preview: bool,
+}
+static PREVIEW: OnceLock<Mutex<Option<(u64, typst_layout::PagedDocument)>>> = OnceLock::new();
+fn render_page(params: Value) -> Result<Value, String> {
+    #[cfg(feature = "native-preview")]
+    {
+        let revision = params["revision"]
+            .as_u64()
+            .ok_or("Missing preview revision")?;
+        let index = params["page"].as_u64().ok_or("Missing page number")? as usize;
+        let cache = PREVIEW.get_or_init(|| Mutex::new(None)).lock().unwrap();
+        let (current, document) = cache.as_ref().ok_or("No compiled preview")?;
+        if *current != revision {
+            return Err("Preview revision has changed".into());
+        }
+        let page = document.pages().get(index).ok_or("Page no longer exists")?;
+        let image = typst_render::render(page, &typst_render::RenderOptions::default());
+        let png = image.encode_png().map_err(|e| e.to_string())?;
+        Ok(
+            json!({"revision":revision,"pageNumber":index,"pageImages":[base64::engine::general_purpose::STANDARD.encode(png)]}),
+        )
+    }
+    #[cfg(not(feature = "native-preview"))]
+    {
+        let _ = params;
+        Err("Native preview support is unavailable".into())
+    }
 }
 
 // One anchor per source run, rather than per glyph, keeps the map small for theses.
@@ -294,6 +325,10 @@ fn compile(params: Value) -> Result<Value, String> {
                 }
                 result["pageImages"] = json!(images);
             }
+            if p.retain_preview {
+                *PREVIEW.get_or_init(|| Mutex::new(None)).lock().unwrap() =
+                    Some((p.revision, document));
+            }
             Ok(result)
         }
         Err(errors) => {
@@ -363,6 +398,22 @@ fn main() {
             "compile" => {
                 let output = output.clone();
                 std::thread::spawn(move || respond(&output, id, compile(params)));
+            }
+            "render-page" => respond(&output, id, render_page(params)),
+            "release-preview" => {
+                *PREVIEW.get_or_init(|| Mutex::new(None)).lock().unwrap() = None;
+                comemo::evict(0);
+                respond(&output, id, Ok(json!({"released":true})));
+            }
+            "render-object" => {
+                let text = format!(
+                    "#set page(width: 540pt, height: auto, margin: 0pt)\n{}",
+                    params["text"].as_str().unwrap_or("")
+                );
+                let result=compile(json!({"root":params["root"],"entry":"__blank_object.typ","files":{"__blank_object.typ":text},"revision":params["revision"],"native_preview":true})).map(|mut result| {
+                    result["objectKey"]=params["objectKey"].clone();result
+                });
+                respond(&output, id, result);
             }
             _ => respond(&output, id, Err("unknown method".into())),
         }
