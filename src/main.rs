@@ -55,7 +55,6 @@ struct App {
     error: Option<String>,
     conflict: bool,
     confirm_close: bool,
-    screenshot: Option<PathBuf>,
     window_title: String,
     picker: Picker,
     pending_events: Vec<egui::Event>,
@@ -119,7 +118,6 @@ impl App {
             error: None,
             conflict: false,
             confirm_close: false,
-            screenshot: None,
             window_title: String::new(),
             picker: Picker::default(),
             pending_events: vec![],
@@ -162,7 +160,6 @@ impl App {
                 Err(e) => app.error = Some(format!("Cannot install native menus: {e}")),
             }
         }
-        app.screenshot = std::env::var_os("BLANK_NATIVE_SCREENSHOT").map(PathBuf::from);
         app
     }
     fn load(&mut self, text: String, path: Option<PathBuf>) {
@@ -242,10 +239,14 @@ impl App {
                 path.file_name().unwrap().to_string_lossy().into_owned(),
             )
         } else {
-            (
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
-                "main.typ".into(),
-            )
+            let root = match std::env::current_dir() {
+                Ok(root) => root,
+                Err(error) => {
+                    self.error = Some(format!("Cannot resolve document directory: {error}"));
+                    return;
+                }
+            };
+            (root, "main.typ".into())
         };
         self.request_id += 1;
         let request = preview::Request {
@@ -259,8 +260,7 @@ impl App {
             self.requested_revision = Some(self.model.document.revision);
             self.compiling = true;
         } else {
-            self.error =
-                Some("Compiler is unavailable. Restart with scripts/dev-native.sh.".into());
+            self.error = Some("Compiler is unavailable. Restart the application.".into());
         }
     }
     fn poll_compile(&mut self, ctx: &egui::Context) {
@@ -1563,38 +1563,6 @@ impl eframe::App for App {
         if title != self.window_title {
             self.window_title = title.clone();
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
-        }
-        if self.screenshot.is_some() && (self.mode != Mode::Preview || !self.pages.is_empty()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
-        }
-        let screenshots: Vec<_> = ctx.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|e| {
-                    if let egui::Event::Screenshot { image, .. } = e {
-                        Some(image.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        });
-        if let Some(image) = screenshots.first()
-            && let Some(path) = self.screenshot.take()
-        {
-            let bytes: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
-            if let Err(e) = image::save_buffer_with_format(
-                path,
-                &bytes,
-                image.width() as u32,
-                image.height() as u32,
-                image::ColorType::Rgba8,
-                image::ImageFormat::Png,
-            ) {
-                self.error = Some(e.to_string());
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
         }
     }
 }

@@ -19,7 +19,7 @@ muda = { version = "=0.21.0", default-features = false }
 arboard = { version = "3", default-features = false }
 
 [workspace]
-members = [".", "crates/document", "crates/typst-helper"]
+members = [".", "crates/document", "crates/typst-helper", "xtask"]
 default-members = ["."]
 exclude = ["crates/library-assessment"]
 resolver = "3"

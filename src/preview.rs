@@ -42,28 +42,29 @@ impl Compiler {
         let child = Arc::new(Mutex::new(None));
         let process = child.clone();
         thread::spawn(move || {
-            let helper = std::env::var_os("BLANK_HELPER")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
-                    let bundled = std::env::current_exe()
-                        .ok()
-                        .and_then(|path| path.parent().map(|dir| dir.join("writer-helper")));
-                    bundled.filter(|path| path.is_file()).unwrap_or_else(|| {
-                        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                            .join("target/release/writer-helper")
-                    })
-                });
-            let spawned = Command::new(&helper)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
-                .spawn();
+            let spawned = (|| {
+                let helper = match std::env::var_os("BLANK_HELPER") {
+                    Some(path) => PathBuf::from(path),
+                    None => {
+                        let mut path = std::env::current_exe()?;
+                        path.set_file_name(format!(
+                            "writer-helper{}",
+                            std::env::consts::EXE_SUFFIX
+                        ));
+                        path
+                    }
+                };
+                Command::new(helper)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::inherit())
+                    .spawn()
+            })();
             let mut helper = match spawned {
                 Ok(child) => child,
                 Err(e) => {
                     let _ = results.send(Err(format!(
-                        "Cannot start compiler at {}: {e}. Run scripts/dev.sh.",
-                        helper.display()
+                        "Cannot start compiler: {e}. Run cargo xtask dev."
                     )));
                     ctx.request_repaint();
                     return;

@@ -1,7 +1,4 @@
-.tools/
 /target/
 **/target/
-.writer-cache/
 *.log
 .DS_Store
-__pycache__/

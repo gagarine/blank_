@@ -52,16 +52,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-rust-v2-${{ hashFiles('scripts/bootstrap.sh', 'rust-toolchain.toml', 'Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-v2-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
 
       - name: Install dependencies
-        run: bash scripts/bootstrap.sh
+        run: cargo fetch --locked
 
       - name: Check Rust workspace
-        run: bash scripts/check.sh
+        run: cargo xtask check
 
       - name: Build app
-        run: bash scripts/build.sh
+        run: cargo xtask bundle
 
       - name: Verify and archive app
         run: |
@@ -108,4 +108,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: bash scripts/publish-release.sh
+        run: |
+          files=(target/releases/blank_-macos-arm64.zip target/releases/blank_-macos-intel.zip target/releases/SHA256SUMS)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --draft=false
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" --verify-tag \
+              --title "blank_ $RELEASE_TAG" --notes-file .github/release-notes.md
+          fi

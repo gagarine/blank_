@@ -2,70 +2,70 @@
 
 **Made using AI (OpenAI Codex). Open source under the [MIT license](LICENSE).**
 
-A quiet native Rust app for writing in Typst. Write, edit source, and preview typeset pages; documents stay ordinary local `.typ` files. This branch uses egui/eframe without a webview, JavaScript or Qt.
-
-The Rust implementation is a prototype. It includes a structured, source-preserving editor, shared undo, macOS menus, a contents sidebar, inline `/` commands, Cmd-K, syntax-colored source editing, and PDF preview/export. Some features of the earlier application still need porting; see [current validation and boundaries](docs/acceptance.md).
+A quiet native Rust app for writing in Typst. Write, edit source, and preview typeset pages; documents stay ordinary local `.typ` files.
 
 ## Build and run
 
-Requires Rust 1.98 or newer. On macOS, install Xcode Command Line Tools. No Go, Node.js, Python, or separate Typst installation is needed. `rust-toolchain.toml` selects the Rust toolchain and includes rustfmt and Clippy.
-
-If Rust is not installed, run `bash scripts/bootstrap.sh` and then `source scripts/env.sh` in Bash or Zsh to use the isolated local toolchain. With a normal Rust installation, Cargo works directly.
+Requires Rust 1.98 or newer and, on macOS, Xcode Command Line Tools.
 
 ```sh
-cargo build --release -p writer-helper  # optimized background compiler
-cargo run -- --demo                     # debug app with the original tutorial
-cargo run -- path/to/document.typ
-cargo test --workspace --locked
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo xtask dev --demo       # launch with the tutorial
+cargo xtask dev document.typ
+cargo xtask check            # formatting, Clippy and tests
+cargo xtask bundle           # release application
+cargo xtask bundle --debug   # debug application
 ```
 
-Cargo puts compiled executables and generated artifacts in `target/`. The app executable is `blank_`; `writer-helper` is the separate Rust Typst compiler process. Build the optimized helper before previewing. `BLANK_HELPER` can specify an explicit helper executable.
+On macOS, open `target/release/bundle/blank_.app`, or `target/debug/bundle/blank_.app` for a debug build. The bundle contains the editor and its Typst compiler. Development runs use an optimized compiler alongside the debug editor.
 
-Convenience scripts handle setup, development, checks and packaging:
+## Editing
 
-```sh
-bash scripts/bootstrap.sh       # install/fetch development dependencies if needed
-bash scripts/dev.sh --demo       # build optimized helper, run debug app
-bash scripts/build.sh            # release macOS app bundle
-bash scripts/build.sh --debug    # bundle a debug app with the optimized helper
-bash scripts/check.sh            # formatting, Clippy and Rust tests
-```
+Use ⌘1 / ⌘2 / ⌘3 for Write / Source / Preview, ⌘K for commands, ⌘⇧L for the table of contents, and ⌘S to save. Help → Tutorial opens an editable copy of [the original tutorial](examples/Tutorial.typ).
 
-On macOS, open `target/release/bundle/blank_.app` (`target/debug/bundle/blank_.app` with `--debug`). The bundle contains both executables. On other platforms, the build script builds executables in `target/release/` (or the app in `target/debug/` with `--debug`). macOS is the platform currently exercised. An isolated development toolchain may live in the ignored `.tools/` directory; it is not part of the source or app bundle.
+Write supports paragraphs, headings, simple lists, bold and italic. Return continues a list; Return on an empty item exits it. At the start of a paragraph, `= `, `== ` and `=== ` create headings; `- ` and `+ ` create lists. `*bold*` and `_italic_` apply inline formatting.
 
-Use ⌘1 / ⌘2 / ⌘3 for Write / Source / Preview and ⌘K for commands. Tutorial in the native Help menu opens an editable copy of [the original tutorial](examples/Tutorial.typ). The tutorial is preserved exactly and includes instructions for features still awaiting a Rust port.
+Type `/` to open block commands beside the caret. Continue typing to filter, use arrow keys and Return to choose, or Escape to keep the literal text. Hover beside a block to reveal its handle; click for Turn into, Duplicate and Delete. ⌥↑ / ⌥↓ moves the current block.
 
-## Project structure
+Source displays every Typst character, with syntax colors, heading sizes and bold/italic markup. Copying uses exact plain source text. Delimiters support basic pairing. Write and Source share undo/redo; custom expressions can be edited in Source.
 
-| Path | Purpose |
+Preview displays typeset pages. Compilation errors preserve the last successful preview. Export PDF requires a successful compilation of the current document; clicking preview text navigates to its source position.
+
+Saved documents autosave after 650 ms of inactivity. An external file change blocks overwriting and offers Save As. Unsaved changes prompt before closing or replacing the document.
+
+## Architecture
+
+The desktop interface uses eframe/egui and egui_richedit, with macOS menus through muda. `crates/document` owns the canonical Typst source and lossless syntax tree. Editable projections map visible characters to UTF-8 source spans; editing transactions patch ranges and incrementally reparse the tree while preserving unchanged source. Other Typst expressions remain source objects in Write.
+
+`crates/typst-helper` runs compilation, PDF export, page rendering and source mapping in a separate Rust process. Preview compilation runs on demand, and leaving Preview releases page textures.
+
+The current GUI was selected for editor transactions and fast iteration. Alternatives assessed:
+
+| Library | Findings |
 |---|---|
-| `src/` | Native desktop UI, rich editor adapter, menus, typography and preview worker |
-| `crates/document/` | GUI-independent Typst source model and editing transactions |
-| `crates/typst-helper/src/` | Background Typst compiler, PDF/PNG rendering and source maps |
-| `crates/typst-helper/tests/` | Cargo integration test of the real compiler process, PDF/PNG output and diagnostics |
-| `crates/typst-helper/examples/` | Rust commands for generating a large document fixture and benchmarking compilation |
-| `examples/` | Original tutorial and sample document assets |
-| `crates/library-assessment/` | Isolated alternative editor-model evaluation, excluded from the application workspace |
-| `scripts/` | Small shell wrappers for toolchain setup, checks, packaging and releases |
-| `docs/` | Usage, validation and GUI/editor library assessment |
-| `target/` | Ignored Cargo builds and generated benchmark fixtures |
+| GPUI + gpui-component | Source editor and retained GUI APIs inspected; a structured rich editor would still need its own model. |
+| text-document + text-typeset | Unicode editing, formatting, tables and undo tested in `crates/library-assessment`; integration would require a lossless Typst adapter. |
+| Parley | Shaping/layout and plain-editor APIs inspected; a possible foundation for typography improvements. |
+| Iced text_editor | Plain multiline editor API inspected; rich editing would require additional model and UI work. |
 
-One root Cargo workspace, lockfile and toolchain configuration cover the application and compiler. Go/Wails, the web frontend, and their build/test configuration are removed from this branch; the previous implementation is preserved on `codex/legacy-go` and in Git history.
+References: [egui_richedit](https://docs.rs/egui_richedit/0.7.0/egui_richedit/), [GPUI Editor](https://github.com/longbridge/gpui-component/blob/main/website/docs/components/editor.md), [text-document](https://github.com/FernTech-EU/text-document), [Parley](https://github.com/linebender/parley), [Iced text_editor](https://docs.iced.rs/iced/widget/text_editor/index.html).
 
-## Development checks and benchmarks
+## Current limitations
 
-`cargo test --workspace` includes the compiler protocol integration test. Cargo builds its helper executable automatically; no Python test runner is required. `cargo test -p blank_ -p blank-document` runs just the UI/model tests for faster editor iteration.
+Structured tables, figures, images, citations, footnotes and link dialogs remain to implement, together with multi-file rich editing, chapter movement, multiple windows, search, settings, statistics and recovery. The bundled tutorial includes instructions for some of these features.
 
-The development utilities are Rust Cargo examples. The fixture creates a synthetic 20-chapter document under `target/fixtures/thesis/`; the benchmark measures cold/warm compilation and chapter parsing without modifying those files:
+The scrollbar is drawn by egui. Native pointer dragging, IME, VoiceOver and grapheme-aware rich cursor movement need further validation. macOS has been exercised; Linux and Windows need platform testing. Document projection/layout scan the document, preview rasterizes pages eagerly, and undo retains up to 200 source snapshots.
+
+## Development
+
+`cargo xtask check` covers document transactions, actual egui input, source typography/copying, and the compiler protocol with PDF/PNG output and invalid-source diagnostics. Run it before submitting changes.
+
+For compiler and source-model benchmarks:
 
 ```sh
 cargo run -p writer-helper --example thesis_fixture
 cargo build --release -p writer-helper
 cargo run -p writer-helper --example benchmark
 cargo run --release -p blank-document --example measure -- 1000
-cargo test --manifest-path crates/library-assessment/Cargo.toml --locked
 ```
 
-Read [the guide](docs/guide.md) and [library assessment](docs/native-assessment.md). Contributions are welcome; run `bash scripts/check.sh` before submitting changes. Dependencies retain their own licenses.
+The isolated library evaluation runs with `cargo test --manifest-path crates/library-assessment/Cargo.toml --locked`. Dependencies retain their own licenses.
