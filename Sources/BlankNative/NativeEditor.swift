@@ -91,7 +91,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let track { removeTrackingArea(track) }
-        track = NSTrackingArea(rect:.zero,options:[.mouseMoved,.mouseEnteredAndExited,.activeInKeyWindow,.inVisibleRect],owner:self,userInfo:nil)
+        track = NSTrackingArea(rect:.zero,options:[.mouseMoved,.mouseEnteredAndExited,.cursorUpdate,.activeInKeyWindow,.inVisibleRect],owner:self,userInfo:nil)
         addTrackingArea(track!)
     }
     func readingFont(size: CGFloat, bold: Bool = false, italic: Bool = false) -> NSFont {
@@ -114,7 +114,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let style = NSMutableParagraphStyle()
         style.lineHeightMultiple = 1
         style.lineSpacing = source ? 4 : size * 0.3
-        style.paragraphSpacingBefore = source ? 0 : 18
+        style.paragraphSpacing = source ? 0 : 18
         let font = source ? NSFont.monospacedSystemFont(ofSize:14,weight:.regular) : readingFont(size:size)
         let baseRange = onlyBlock.map { b.projection.blocks[$0].display } ?? all
         result.addAttributes([.font:font,.foregroundColor:NSColor(session.ink),.paragraphStyle:style,.ligature:1],range:baseRange)
@@ -149,21 +149,24 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             for (index,block) in b.projection.blocks.enumerated() {
                 if let onlyBlock, index != onlyBlock { continue }
                 let p = style.mutableCopy() as! NSMutableParagraphStyle
-                if index == 0 { p.paragraphSpacingBefore = 0 }
                 var textSize = size
                 if block.kind == "heading" {
                     textSize = size * (block.level == 1 ? 1.89 : block.level == 2 ? 1.33 : 1.056)
                     p.lineSpacing = 2
-                    p.paragraphSpacingBefore = index == 0 ? 0 : block.level == 1 ? 32 : 28
+                    p.paragraphSpacingBefore = index == 0 ? 0 : block.level == 1 ? 14 : 10
                 }
-                if ["bullet","number"].contains(block.kind) { p.firstLineHeadIndent = 25; p.headIndent = 25; p.paragraphSpacingBefore = index == 0 ? 0 : 5 }
+                if ["bullet","number"].contains(block.kind) { p.firstLineHeadIndent = 25; p.headIndent = 25; p.paragraphSpacing = 5 }
                 if block.kind == "quote" { p.firstLineHeadIndent = 24; p.headIndent = 24 }
                 let raw = !block.editable
-                if raw { p.lineSpacing = 4; p.paragraphSpacingBefore = index == 0 ? 0 : 12 }
+                if raw { p.lineSpacing = 4; p.paragraphSpacing = 12 }
                 let range = block.display
+                // Include the paragraph terminator: an empty next paragraph has
+                // no glyphs from which TextKit can recover its preceding spacing.
+                let paragraphRange = NSRange(location:range.location,length:range.length+(index+1 < b.projection.blocks.count ? 1 : 0))
+                if paragraphRange.length > 0 { result.addAttribute(.paragraphStyle,value:p,range:paragraphRange) }
                 if range.length > 0 {
                     result.addAttributes([.paragraphStyle:p,.font:raw ? NSFont.monospacedSystemFont(ofSize:13,weight:.regular) : readingFont(size:textSize,bold:block.kind == "heading",italic:block.kind == "quote")],range:range)
-                    if raw { result.addAttribute(.foregroundColor,value:NSColor.secondaryLabelColor,range:range) }
+                    if raw { result.addAttribute(.foregroundColor,value:NSColor(session.ink).withAlphaComponent(0.65),range:range) }
                     if block.text == "\u{FFFC}" {
                         let attachment = ObjectAttachment(editor:self,index:index,width:max(160,bounds.width-textContainerInset.width*2))
                         result.addAttribute(.attachment,value:attachment,range:range)
@@ -338,6 +341,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         session.changed()
     }
     override func keyDown(with event: NSEvent) {
+        if session?.mode == .write, [36,76].contains(event.keyCode), event.modifierFlags.intersection([.shift,.command,.option,.control]) == [.shift] {
+            insertLineBreak(nil); return
+        }
         if slashStart != nil {
             switch event.keyCode {
             case 53: dismissSlash(); return
@@ -384,11 +390,18 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
         dismissSlash()
     }
+    override func insertLineBreak(_ sender: Any?) {
+        guard let session else { return }
+        finishComposition(); captureSelection()
+        if session.mode == .write { session.buffer.lineBreak(selectedRange()) }
+        else { session.buffer.editSource(selectedRange(),text:"\n",group:"") }
+        session.changed(); scrollRangeToVisible(selectedRange()); dismissSlash()
+    }
     override func copy(_ sender: Any?) {
         guard let session, selectedRange().length > 0 else { return }
         let board = NSPasteboard.general; board.clearContents()
         let plain = (string as NSString).substring(with:selectedRange())
-        board.setString(plain,forType:.string)
+        board.setString(session.mode == .write ? plain.replacingOccurrences(of:"\u{2028}",with:"\n") : plain,forType:.string)
         if session.mode == .write {
             let fragment = session.buffer.copy(selectedRange())
             if let data = try? JSONEncoder().encode(fragment) { board.setData(data,forType:NSPasteboard.PasteboardType("local.blank.typst-fragment")) }
@@ -447,19 +460,33 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let first = rectFor(b.display.location), last = rectFor(NSMaxRange(b.display))
         return NSRect(x:textContainerInset.width,y:first.minY,width:max(100,bounds.width-2*textContainerInset.width),height:max(first.height,last.maxY-first.minY))
     }
-    override func mouseMoved(with event: NSEvent) {
-        guard session?.mode == .write, grabbed == nil, let session else { return }
-        let point = convert(event.locationInWindow,from:nil)
-        let next = session.buffer.projection.blocks.indices.first { index in
-            let rect = blockRect(index); return point.y >= rect.minY-5 && point.y < rect.maxY+5 && point.x >= textContainerInset.width-38 && point.x < bounds.width-textContainerInset.width
+    func hoveredBlock(at point: NSPoint) -> Int? {
+        guard let session, session.mode == .write else { return nil }
+        return session.buffer.projection.blocks.indices.first { index in
+            let rect = blockRect(index)
+            return point.y >= rect.minY-5 && point.y < rect.maxY+5 && point.x >= textContainerInset.width-38 && point.x < bounds.width-textContainerInset.width
         }
-        if next != hoverBlock { hoverBlock = next; needsDisplay = true }
-        if point.x >= textContainerInset.width-35 && point.x <= textContainerInset.width-8 && next != nil { NSCursor.openHand.set() } else { NSCursor.iBeam.set() }
     }
-    override func mouseExited(with event: NSEvent) { if grabbed == nil { hoverBlock = nil; needsDisplay = true } }
+    override func mouseEntered(with event: NSEvent) { mouseMoved(with:event) }
+    override func cursorUpdate(with event: NSEvent) {
+        if session?.mode != .write { super.cursorUpdate(with:event) }
+        else if grabbed != nil { NSCursor.closedHand.set() }
+        else { mouseMoved(with:event) }
+    }
+    override func mouseMoved(with event: NSEvent) {
+        guard session?.mode == .write, grabbed == nil else { return }
+        let point = convert(event.locationInWindow,from:nil)
+        let next = bounds.contains(point) ? hoveredBlock(at:point) : nil
+        if next != hoverBlock { hoverBlock = next; needsDisplay = true }
+        if point.x >= textContainerInset.width-35 && point.x <= textContainerInset.width-8 && next != nil { NSCursor.openHand.set() }
+        else { (bounds.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set() }
+    }
+    override func mouseExited(with event: NSEvent) { if grabbed == nil { hoverBlock = nil; needsDisplay = true; NSCursor.arrow.set() } }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow,from:nil)
-        if let hoverBlock, point.x >= textContainerInset.width-38 && point.x <= textContainerInset.width-6 {
+        if grabbed == nil { hoverBlock = hoveredBlock(at:point); needsDisplay = true }
+        if let hoverBlock = hoveredBlock(at:point), point.x >= textContainerInset.width-38 && point.x <= textContainerInset.width-6 {
+            self.hoverBlock = hoverBlock
             grabbed = hoverBlock; pressPoint = point; dragPoint = point; draggingBlock = false
             let region = blockRect(hoverBlock)
             if let bitmap = bitmapImageRepForCachingDisplay(in:region) { cacheDisplay(in:region,to:bitmap); let image = NSImage(size:region.size); image.addRepresentation(bitmap); dragImage = image }
@@ -483,6 +510,15 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if draggingBlock { session?.buffer.moveBlock(index,before:dragTarget); session?.changed() }
         else { showBlockMenu(index,event:event) }
         draggingBlock = false; dragImage = nil
+        mouseMoved(with:event)
+    }
+    func dropIndicatorRect() -> NSRect? {
+        guard draggingBlock, let grabbed, let blocks = session?.buffer.projection.blocks, blocks.indices.contains(grabbed) else { return nil }
+        let target = max(0,min(dragTarget,blocks.count)), y: CGFloat
+        if target == 0 { y = blockRect(0).minY-12 }
+        else if target == blocks.count { y = blockRect(target-1).maxY+12 }
+        else { y = (blockRect(target-1).maxY+blockRect(target).minY)/2 }
+        return NSRect(x:textContainerInset.width,y:y-1,width:max(80,bounds.width-textContainerInset.width*2),height:2)
     }
     func showBlockMenu(_ index: Int,event: NSEvent) {
         guard let session else { return }
@@ -510,29 +546,28 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         session.changed()
     }
     override func draw(_ dirtyRect: NSRect) {
+        // Keep TextKit's text-container clip out of the gutter-overlay pass.
+        NSGraphicsContext.saveGraphicsState()
         super.draw(dirtyRect)
+        NSGraphicsContext.restoreGraphicsState()
         positionObjects()
         guard session?.mode == .write, let session else { return }
         for (index,b) in session.buffer.projection.blocks.enumerated() where ["bullet","number"].contains(b.kind) {
             let r = rectFor(b.display.location)
             guard r.intersects(visibleRect) else { continue }
             let label = b.kind == "bullet" ? "•" : "\(listNumber(index))."
-            (label as NSString).draw(at:NSPoint(x:textContainerInset.width,y:r.minY),withAttributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:NSColor.secondaryLabelColor])
+            (label as NSString).draw(at:NSPoint(x:textContainerInset.width,y:r.minY),withAttributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:NSColor(session.ink).withAlphaComponent(0.6)])
         }
         if let grabbed, draggingBlock {
             let raw = session.buffer.projection.blocks[grabbed].text
-            let preview = NSAttributedString(string:raw,attributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:NSColor.labelColor.withAlphaComponent(0.45)])
+            let preview = NSAttributedString(string:raw,attributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:NSColor(session.ink).withAlphaComponent(0.45)])
             if let dragImage { dragImage.draw(in:NSRect(x:dragPoint.x+18,y:dragPoint.y+12,width:min(550,dragImage.size.width),height:dragImage.size.height),from:.zero,operation:.sourceOver,fraction:0.45,respectFlipped:true,hints:nil) }
             else { preview.draw(in:NSRect(x:dragPoint.x+18,y:dragPoint.y+12,width:350,height:150)) }
-            let y: CGFloat
-            if dragTarget == 0 { y = blockRect(0).minY-12 }
-            else if dragTarget == session.buffer.projection.blocks.count { y = blockRect(dragTarget-1).maxY+12 }
-            else { y = (blockRect(dragTarget-1).maxY+blockRect(dragTarget).minY)/2 }
-            NSColor.separatorColor.setFill(); NSRect(x:textContainerInset.width,y:y-1,width:max(80,bounds.width-textContainerInset.width*2),height:2).fill()
+            if let line = dropIndicatorRect() { NSColor(session.ink).withAlphaComponent(0.45).setFill(); line.fill() }
         } else if let index = grabbed ?? hoverBlock {
             let rect = rectFor(session.buffer.projection.blocks[index].display.location)
-            NSColor.tertiaryLabelColor.setFill()
-            for row in 0..<3 { for column in 0..<2 { NSBezierPath(ovalIn:NSRect(x:textContainerInset.width-26+CGFloat(column*5),y:rect.midY-6+CGFloat(row*5),width:2,height:2)).fill() } }
+            NSColor(session.ink).withAlphaComponent(0.45).setFill()
+            for row in 0..<3 { for column in 0..<2 { NSBezierPath(ovalIn:NSRect(x:textContainerInset.width-26+CGFloat(column*5),y:rect.midY-6+CGFloat(row*5),width:3,height:3)).fill() } }
         }
     }
     func listNumber(_ index: Int) -> Int {

@@ -22,7 +22,7 @@ extension NSToolbarItem.Identifier {
         guard EditorMode.allCases.indices.contains(sender.selectedIndex) else { return }
         session.switchMode(EditorMode.allCases[sender.selectedIndex])
     }
-    @objc func toggleContents(_ sender: Any?) { session.sidebar.toggle() }
+    @objc func toggleContents(_ sender: Any?) { session.toggleSidebar() }
     @objc func exportDocument(_ sender: Any?) { session.exportPDF() }
     @objc func findDocument(_ sender: Any?) { session.searchVisible = true }
 }

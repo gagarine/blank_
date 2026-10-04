@@ -39,6 +39,46 @@ final class DocumentTests {
         XCTAssertTrue(b.source.contains("*bold*")); XCTAssertTrue(b.source.contains("_italic_"))
         b.undo(); XCTAssertEqual(b.source,"one *bold*\n\ntwo _italic_")
     }
+    func testParagraphAndLineBreaks() {
+        let b = DocumentBuffer("First *bold* second")
+        let at = "First bold".utf16.count
+        b.selection = EditSelection(b.projection.sourceOffset(at:at),b.projection.sourceOffset(at:at))
+        b.split(NSRange(location:at,length:0))
+        XCTAssertEqual(b.projection.blocks.count,2)
+        XCTAssertEqual(b.projection.blocks[0].text,"First bold")
+        XCTAssertEqual(b.projection.blocks[1].text,"second")
+        XCTAssertTrue(b.source.contains("*bold*\n\n"))
+        b.undo(); XCTAssertEqual(b.source,"First *bold* second")
+        b.lineBreak(NSRange(location:at,length:0))
+        XCTAssertEqual(b.projection.blocks.count,1)
+        XCTAssertEqual(b.projection.text,"First bold\u{2028}second")
+        XCTAssertFalse(b.parsed.erroneous)
+        XCTAssertEqual(b.projection.displayOffset(at:b.selection.focus),at+1)
+        b.undo(); XCTAssertEqual(b.source,"First *bold* second")
+        let list = DocumentBuffer("- First")
+        list.lineBreak(NSRange(location:5,length:0))
+        XCTAssertEqual(list.projection.blocks.count,1)
+        XCTAssertEqual(list.projection.blocks[0].kind,"bullet")
+        XCTAssertEqual(list.projection.text,"First\u{2028}")
+        list.editWrite(NSRange(location:6,length:0),text:"next")
+        XCTAssertEqual(list.projection.text,"First\u{2028}next")
+        XCTAssertEqual(list.projection.blocks.count,1)
+        XCTAssertFalse(list.parsed.erroneous)
+        let empty = DocumentBuffer()
+        empty.split(NSRange(location:0,length:0))
+        XCTAssertEqual(empty.projection.blocks.count,2)
+        empty.split(NSRange(location:1,length:0))
+        XCTAssertEqual(empty.projection.blocks.count,3)
+        empty.editWrite(NSRange(location:2,length:0),text:"Third")
+        XCTAssertEqual(empty.projection.blocks.map(\.text),["","","Third"])
+        let between = DocumentBuffer("First\n\nSecond")
+        between.selection = EditSelection(5,5)
+        between.split(NSRange(location:5,length:0))
+        XCTAssertEqual(between.projection.blocks.map(\.text),["First","","Second"])
+        XCTAssertEqual(between.projection.displayOffset(at:between.selection.focus),6)
+        between.editWrite(NSRange(location:6,length:0),text:"Middle")
+        XCTAssertEqual(between.projection.blocks.map(\.text),["First","Middle","Second"])
+    }
     func testClipboardHeadingAndList() {
         let b = DocumentBuffer("== A *heading*\n\n- An _item_")
         let fragment = b.copy(NSRange(location:0,length:b.projection.text.utf16.count))
@@ -191,6 +231,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Lossless styled edit",t.testProjectionAndLosslessEdit),
             ("List continuation and exit",t.testListContinueAndExit),
             ("Paragraph joining",t.testParagraphJoinKeepsFormatting),
+            ("Paragraph and soft line breaks",t.testParagraphAndLineBreaks),
             ("Structured clipboard",t.testClipboardHeadingAndList),
             ("Grouped history and selections",t.testHistoryGroupingAndSelections),
             ("Cross-mark deletion",t.testCrossMarkupDeletionRemainsValid),

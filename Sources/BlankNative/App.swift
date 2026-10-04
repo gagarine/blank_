@@ -80,7 +80,7 @@ import Combine
     @objc func settings(_ sender: Any?) { current?.sheet = .settings }
     @objc func statistics(_ sender: Any?) { current?.sheet = .statistics }
     @objc func find(_ sender: Any?) { current?.searchVisible = true }
-    @objc func outline(_ sender: Any?) { current?.sidebar.toggle() }
+    @objc func outline(_ sender: Any?) { current?.toggleSidebar() }
     @objc func undo(_ sender: Any?) { current?.undo() }
     @objc func redo(_ sender: Any?) { current?.undo(true) }
     @objc func bold(_ sender: Any?) { current?.editor?.formatNative(false) }
@@ -150,6 +150,7 @@ import Combine
         window.title = session.title; window.representedURL = session.root?.appendingPathComponent(session.entry); window.titlebarAppearsTransparent = true
         if session.dark { window.appearance = NSAppearance(named:.darkAqua) }
         window.center(); window.delegate = self
+        window.acceptsMouseMovedEvents = true
         window.contentView = NSHostingView(rootView:EditorRoot(session:session)); window.minSize = NSSize(width:660,height:480)
         installToolbar()
         window.isReleasedWhenClosed = false; session.window = window

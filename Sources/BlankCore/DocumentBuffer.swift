@@ -216,7 +216,12 @@ public final class DocumentBuffer {
         return nil
     }
     public func split(_ range: NSRange) {
-        if range.length > 0 { editWrite(range, text: "", group: "") }
+        if range.length > 0 {
+            let draft = DocumentBuffer(source); draft.selection = selection
+            draft.editWrite(range,text:"",group:"")
+            draft.split(NSRange(location:draft.projection.displayOffset(at:draft.selection.focus),length:0))
+            commit(draft.source,selection:draft.selection); return
+        }
         let caret = projection.displayOffset(at: selection.focus)
         let index = projection.blockIndex(at: caret), b = projection.blocks[index]
         if ["bullet", "number"].contains(b.kind) && b.text.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -227,6 +232,9 @@ public final class DocumentBuffer {
             commit(source.replacingBytes(ByteSpan(at,at), with: "\n\n"), selection: EditSelection(at+2,at+2)); return
         }
         editWrite(NSRange(location: caret,length: 0), text: "\n", group: "")
+    }
+    public func lineBreak(_ range: NSRange) {
+        editWrite(range,text:"\\ ",raw:true,group:"")
     }
     public func format(_ range: NSRange, italic: Bool) {
         guard range.length > 0 else { return }

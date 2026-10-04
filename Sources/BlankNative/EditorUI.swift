@@ -76,10 +76,12 @@ struct EditorRoot: View {
                     if session.mode == .preview { PreviewView(session:session) }
                     else { NativeEditor(session:session).ignoresSafeArea(.container,edges:.top) }
                     if !session.sidebar {
-                        Color.clear.frame(width:18).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
-                        if session.sidebarHover && !session.headings.isEmpty {
-                            contents.frame(width:235).background(chrome).shadow(color:.black.opacity(0.07),radius:12,x:4).onHover { session.sidebarHover = $0 }.transition(.opacity)
-                        }
+                        ZStack(alignment:.leading) {
+                            Color.clear
+                            if session.sidebarHover && (!session.headings.isEmpty || session.includes.count > 1) {
+                                contents.background(chrome).shadow(color:.black.opacity(0.07),radius:12,x:4).transition(.opacity)
+                            }
+                        }.frame(width:session.sidebarHover && (!session.headings.isEmpty || session.includes.count > 1) ? 235 : 18).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
                     }
                 }
             }
@@ -153,7 +155,12 @@ struct EditorRoot: View {
     }
     var contents: some View {
         VStack(alignment:.leading,spacing:0) {
-            HStack { Text("CONTENTS").font(.system(size:9,weight:.semibold)).tracking(1.2).foregroundStyle(.tertiary); Spacer(); Button { session.sidebar.toggle() } label: { Image(systemName:session.sidebar ? "pin.fill" : "pin").font(.system(size:10)).foregroundStyle(.secondary) }.buttonStyle(.plain).help("Pin contents · ⌘⇧L") }.padding(.horizontal,22).padding(.top,25).padding(.bottom,15)
+            HStack {
+                Text("CONTENTS").font(.system(size:9,weight:.semibold)).tracking(1.2).foregroundStyle(.secondary)
+                Spacer()
+                Button { session.toggleSidebar() } label: { Image(systemName:session.sidebar ? "pin.fill" : "pin").font(.system(size:12)).frame(width:24,height:24) }
+                    .buttonStyle(.borderless).accessibilityLabel(session.sidebar ? "Unpin Contents" : "Pin Contents").help(session.sidebar ? "Unpin Contents · ⌘⇧L" : "Pin Contents · ⌘⇧L")
+            }.padding(.horizontal,16).padding(.top,18).padding(.bottom,10)
             ScrollView {
                 VStack(alignment:.leading,spacing:3) {
                     if session.includes.count > 1 {

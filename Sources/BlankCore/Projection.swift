@@ -130,7 +130,21 @@ public struct Projection {
         var i = 0
         while i < nodes.count {
             var n = nodes[i]
-            if n.kind == "Parbreak" { flush(); i += 1; continue }
+            if n.kind == "Parbreak" {
+                flush()
+                if result.isEmpty { result.append(ProjectedBlock(kind:"paragraph",source:ByteSpan(n.start,n.start),body:ByteSpan(n.start,n.start),inlines:[])) }
+                let whitespace = Array(source.bytes(n.span).utf8)
+                let newlines = whitespace.indices.filter { whitespace[$0] == 10 }
+                // Each Return inserts two source newlines. Retain its empty
+                // editing slot even when Typst folds adjacent paragraph breaks.
+                if newlines.count >= 4 {
+                    for pair in 1..<(newlines.count/2) {
+                        let at = n.start+newlines[pair*2-1]+1
+                        result.append(ProjectedBlock(kind:"paragraph",source:ByteSpan(at,at),body:ByteSpan(at,at),inlines:[]))
+                    }
+                }
+                i += 1; continue
+            }
             if ["Heading", "ListItem", "EnumItem"].contains(n.kind), let body = n.markup {
                 flush()
                 let level = source.bytes(n.span).prefix { $0 == "=" }.count
@@ -141,7 +155,9 @@ public struct Projection {
                     if body.span.count == 0 { projected.body = ByteSpan(body.start+padding,body.end+padding) }
                     else if padding > 0 {
                         projected.body.end += padding
-                        projected.inlines.append(.text(spaces,ByteSpan(n.end,n.end+padding),TextStyle(),true))
+                        if body.children.last?.kind == "Linebreak", case let .text(text,span,style,literal) = projected.inlines.last, text == "\u{2028}" {
+                            projected.inlines[projected.inlines.count-1] = .text(text,ByteSpan(span.start,n.end+padding),style,literal)
+                        } else { projected.inlines.append(.text(spaces,ByteSpan(n.end,n.end+padding),TextStyle(),true)) }
                     }
                 }
                 result.append(projected)
@@ -243,7 +259,13 @@ private func inline(_ nodes: [SyntaxNode], source: String, style: TextStyle = Te
             i += 1
         } else if n.kind == "Escape" {
             out.append(.text(String(raw.dropFirst()), n.span, style, false))
-        } else if n.kind == "Linebreak" { out.append(.text("\n", n.span, style, false)) }
+        } else if n.kind == "Linebreak" {
+            var span = n.span
+            if i+1 < nodes.count, nodes[i+1].kind == "Space" { span.end = nodes[i+1].end; i += 1 }
+            // Native line separators wrap within a paragraph; newlines mark
+            // projected block boundaries and receive paragraph spacing.
+            out.append(.text("\u{2028}", span, style, false))
+        }
         else if n.kind == "Raw", raw.hasPrefix("`"), !raw.hasPrefix("```") {
             var s = style; s.code = true
             out.append(.group(n.span, "`", "`", [.text(String(raw.dropFirst().dropLast()), ByteSpan(n.start+1, n.end-1), s, true)]))

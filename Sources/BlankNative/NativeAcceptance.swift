@@ -24,8 +24,27 @@ import BlankCore
         check(controller.window?.styleMask.contains(.fullSizeContentView) == true && controller.window?.titlebarAppearsTransparent == true,"Document extends beneath native transparent toolbar")
         for scalar in "Hello café 👩🏽‍💻".unicodeScalars { view.insertText(String(scalar),replacementRange:view.selectedRange()) }
         check(session.buffer.projection.text == "Hello café 👩🏽‍💻","Native typing and Unicode")
-        view.insertNewline(nil); view.insertText("Second paragraph",replacementRange:view.selectedRange())
+        view.textLayoutManager?.ensureLayout(for:view.visibleRect)
+        let firstLineEnd = view.rectFor(view.selectedRange().location)
+        view.insertNewline(nil)
+        view.textLayoutManager?.ensureLayout(for:view.visibleRect)
+        let emptyParagraph = view.rectFor(view.selectedRange().location)
+        check(emptyParagraph.minY-firstLineEnd.minY >= firstLineEnd.height+12,"Return shows paragraph spacing before typing")
+        view.insertText("Second paragraph",replacementRange:view.selectedRange())
         check(session.buffer.projection.blocks.count == 2,"Return splits paragraph")
+        view.textLayoutManager?.ensureLayout(for:view.visibleRect)
+        let paragraphEnd = view.rectFor(view.selectedRange().location)
+        view.insertLineBreak(nil)
+        view.textLayoutManager?.ensureLayout(for:view.visibleRect)
+        let softLine = view.rectFor(view.selectedRange().location)
+        check(session.buffer.projection.blocks.count == 2 && session.buffer.projection.text.hasSuffix("\u{2028}"),"Shift-Return stays inside the paragraph")
+        check(softLine.minY-paragraphEnd.minY < paragraphEnd.height+12,"Soft line break omits paragraph spacing")
+        view.insertText("Continuation",replacementRange:view.selectedRange())
+        let lastParagraph = session.buffer.projection.blocks.last!
+        view.setSelectedRange(lastParagraph.display); view.copy(nil)
+        check(NSPasteboard.general.string(forType:.string) == "Second paragraph\nContinuation","Soft line breaks copy as plain newlines")
+        session.undo(); session.undo()
+        check(session.buffer.projection.blocks.last?.text == "Second paragraph","Undo restores paragraph before soft break")
         view.setSelectedRange(NSRange(location:0,length:5)); view.captureSelection(); session.format(italic:false)
         check(session.buffer.source.contains("*Hello*"),"Native selection and bold")
         view.copy(nil)
@@ -62,6 +81,31 @@ import BlankCore
             if input == "=== " { check(session.buffer.projection.blocks[0].level == 3,"Heading prefix keeps existing content") }
         }
         editor.insertionBold = nil; editor.insertionItalic = nil
+        func resetParagraphs(_ text: String) {
+            session.buffer.loadExternal(text); session.revision += 1; editor.refresh()
+            editor.setSelectedRange(NSRange(location:editor.string.utf16.count,length:0)); editor.captureSelection()
+        }
+        resetParagraphs("")
+        editor.insertNewline(nil); editor.insertNewline(nil); editor.insertText("Third",replacementRange:editor.selectedRange())
+        check(session.buffer.projection.blocks.map(\.text) == ["","","Third"],"Repeated Return retains empty paragraphs")
+        editor.setSelectedRange(NSRange(location:2,length:0)); editor.deleteBackward(nil)
+        check(session.buffer.projection.blocks.map(\.text) == ["","Third"],"Backspace joins an empty paragraph")
+        resetParagraphs("First\n\nSecond")
+        editor.setSelectedRange(NSRange(location:5,length:0)); editor.captureSelection(); editor.insertNewline(nil)
+        editor.insertText("Middle",replacementRange:editor.selectedRange())
+        check(session.buffer.projection.blocks.map(\.text) == ["First","Middle","Second"],"Return creates an editable paragraph between existing blocks")
+        resetParagraphs("= Heading")
+        editor.insertNewline(nil); editor.insertText("Body",replacementRange:editor.selectedRange())
+        check(session.buffer.projection.blocks.map(\.kind) == ["heading","paragraph"],"Return after a heading starts body text")
+        resetParagraphs("- Item")
+        editor.insertNewline(nil)
+        check(session.buffer.projection.blocks.map(\.kind) == ["bullet","bullet"],"Return continues a list")
+        editor.insertNewline(nil); editor.insertText("After",replacementRange:editor.selectedRange())
+        check(session.buffer.projection.blocks.map(\.kind) == ["bullet","paragraph"],"Return on an empty item exits the list")
+        resetParagraphs("Left selected right")
+        editor.setSelectedRange(NSRange(location:5,length:8)); editor.captureSelection(); editor.insertNewline(nil)
+        check(session.buffer.projection.blocks.map(\.text) == ["Left","right"],"Return replaces selection and splits its paragraph")
+        session.undo(); check(session.buffer.source == "Left selected right","Selected Return is one undo transaction")
         session.buffer.loadExternal("Slash target"); session.revision += 1; editor.refresh()
         editor.setSelectedRange(NSRange(location:0,length:0)); editor.captureSelection()
         for scalar in "/heading".unicodeScalars { editor.insertText(String(scalar),replacementRange:editor.selectedRange()) }
@@ -80,6 +124,49 @@ import BlankCore
         editor.slashIndex = 1; editor.chooseSlash()
         check(session.buffer.source == "== Slash target" && editor.slashPopover == nil,"Slash choice preserves content and dismisses menu")
         session.undo(); check(session.buffer.source == "/headingSlash target","Slash conversion is one undo transaction")
+        session.buffer.loadExternal("First block\n\nSecond block\n\nThird block")
+        session.revision += 1; editor.refresh(); editor.textLayoutManager?.ensureLayout(for:editor.visibleRect)
+        check(controller.window?.acceptsMouseMovedEvents == true,"Document window delivers handle hover events")
+        func pointer(_ type: NSEvent.EventType,_ point: NSPoint) -> NSEvent {
+            NSEvent.mouseEvent(with:type,location:editor.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:1,pressure:type == .leftMouseUp ? 0 : 1)!
+        }
+        let handle = NSPoint(x:editor.textContainerInset.width-23,y:editor.blockRect(0).minY+12)
+        editor.mouseEntered(with:pointer(.mouseMoved,handle))
+        check(editor.hoverBlock == 0 && NSCursor.current == NSCursor.openHand,"Entering a handle shows an open hand")
+        let gutter = NSRect(x:editor.textContainerInset.width-30,y:editor.rectFor(0).midY-9,width:20,height:20)
+        guard let handlePixels = editor.bitmapImageRepForCachingDisplay(in:gutter) else { fatalError("Missing native gutter bitmap") }
+        editor.cacheDisplay(in:gutter,to:handlePixels)
+        let paper = NSColor(session.paper).usingColorSpace(.deviceRGB)!
+        var visibleHandle = false
+        for y in 0..<handlePixels.pixelsHigh { for x in 0..<handlePixels.pixelsWide {
+            if let color = handlePixels.colorAt(x:x,y:y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 0.8,
+               abs(color.redComponent-paper.redComponent)+abs(color.greenComponent-paper.greenComponent)+abs(color.blueComponent-paper.blueComponent) > 0.2 { visibleHandle = true }
+        } }
+        check(visibleHandle,"Handle dots are actually rendered outside the text-container clip")
+        if ProcessInfo.processInfo.environment["BLANK_INTERACTION_IMAGES"] != nil, let bitmap = editor.bitmapImageRepForCachingDisplay(in:editor.visibleRect) {
+            editor.cacheDisplay(in:editor.visibleRect,to:bitmap)
+            try? bitmap.representation(using:.png,properties:[:])?.write(to:URL(fileURLWithPath:"/tmp/blank-block-handle.png"))
+        }
+        editor.hoverBlock = nil
+        editor.mouseDown(with:pointer(.leftMouseDown,handle))
+        check(editor.grabbed == 0 && NSCursor.current == NSCursor.closedHand,"Handle press grabs immediately without a prior hover")
+        let destination = NSPoint(x:handle.x+50,y:editor.blockRect(2).minY-7)
+        editor.mouseDragged(with:pointer(.leftMouseDragged,destination))
+        let middle = (editor.blockRect(1).maxY+editor.blockRect(2).minY)/2
+        check(editor.draggingBlock && editor.dragTarget == 2 && editor.dragImage != nil,"Block drag creates a native translucent preview")
+        check(editor.dropIndicatorRect()?.height == 2 && abs((editor.dropIndicatorRect()?.midY ?? 0)-middle) < 0.1,"Block drag has one centered insertion line")
+        if ProcessInfo.processInfo.environment["BLANK_INTERACTION_IMAGES"] != nil, let bitmap = editor.bitmapImageRepForCachingDisplay(in:editor.visibleRect) {
+            editor.cacheDisplay(in:editor.visibleRect,to:bitmap)
+            try? bitmap.representation(using:.png,properties:[:])?.write(to:URL(fileURLWithPath:"/tmp/blank-block-drag.png"))
+        }
+        editor.mouseUp(with:pointer(.leftMouseUp,destination))
+        check(NSCursor.current == NSCursor.iBeam,"Dropping over text restores the text cursor")
+        check(session.buffer.projection.blocks.map(\.text) == ["Second block","First block","Third block"],"Dropping a block moves its source")
+        session.undo(); check(session.buffer.projection.blocks.first?.text == "First block","Block drag undo restores order")
+        session.sidebarHover = true; controller.toggleContents(nil)
+        check(session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Pinning contents clears transient hover and updates toolbar")
+        session.sidebarHover = true; session.toggleSidebar()
+        check(!session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Unpinning contents restores transient behavior")
         // Tables use view-backed TextKit 2 attachments and native field editors.
         session.buffer.loadExternal("#table(columns: 2, [Idea], [Step], [One], [Two])\n\nAfter")
         session.revision += 1; editor.lastRevision = -1; editor.refresh()

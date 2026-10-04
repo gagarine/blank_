@@ -18,6 +18,7 @@ struct Recovery: Codable {
     @Published var active = "Untitled.typ"
     @Published var sidebar = false
     @Published var sidebarHover = false
+    func toggleSidebar() { sidebarHover = false; sidebar.toggle() }
     @Published var revision = 0
     @Published var dirty = false
     @Published var error: String?

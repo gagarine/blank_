@@ -12,9 +12,9 @@ Native framework defaults take precedence over early Go presentation choices. MC
 | Typing/selection/Unicode/shared history | NSTextView/TextKit 2; range transactions | Model/native acceptance passes; physical latency, bidi and real IME candidates unverified |
 | Bold/italic and typing shortcuts | Syntax-backed commands and typed markup | Selected formatting, toggles inside words, repeated typing and nested shortcuts checked |
 | Slash/app commands | Caret popover and SwiftUI sheet, filtering/arrows/Return/Escape | Real slash filtering/keyboard choice checked; menu geometry corrected; app-command pointer inspection pending |
-| Splitting/joining/list continuation/empty exit | Source transactions retaining inline formatting | Model/native Return acceptance passes |
+| Splitting/joining/list continuation/empty exit | Source transactions retaining inline formatting | Model/native Return, Shift-Return, empty slots, headings, selected replacement/undo and list continuation/exit pass |
 | Clipboard | Exact Source text, structured internal Write, external RTF and images | Native internal/plain clipboard passes; external list/heading kinds unverified |
-| Block handles/menu/drag | Native cursors, translucent snapshot, one insertion line | Implemented; pointer acceptance and object-adjacent navigation pending |
+| Block handles/menu/drag | Native cursors, translucent snapshot, one insertion line | Real pointer block reorder and native cursor/preview/centered-line checks pass; object-adjacent and long-document drag coverage pending |
 | Hierarchy/section movement | Collapsible outline with elision and source section moves | Movement checked; pointer and repeated-title identity checks pending |
 | Scrolling at viewport edge | NSScrollView independent of text padding | Implemented; all-view/secondary-window long-document scrolling pending |
 | Source characters/colors/fonts/delimiters | Native attributed full source, literal delimiters and indent continuation | Exact clipboard/native delimiters, explicit bold/italic faces and heading sizes checked; large-file styling remains full-file |
