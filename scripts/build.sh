@@ -35,7 +35,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
-<key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Typst document</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSItemContentTypes</key><array><string>public.plain-text</string></array><key>CFBundleTypeExtensions</key><array><string>typ</string></array></dict></array>
+<key>UTImportedTypeDeclarations</key><array><dict><key>UTTypeIdentifier</key><string>org.typst.source</string><key>UTTypeDescription</key><string>Typst document</string><key>UTTypeConformsTo</key><array><string>public.plain-text</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>typ</string></array><key>public.mime-type</key><string>text/x-typst</string></dict></dict></array>
+<key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Typst document</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>org.typst.source</string></array></dict></array>
 </dict></plist>
 PLIST
 codesign --force --deep --sign - "$app"

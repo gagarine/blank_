@@ -151,6 +151,22 @@ final class DocumentTests {
         let cell = DocumentBuffer("#table(columns: 1, [#link(\"https://typst.app\")[A]])")
         XCTAssertEqual(cell.projection.blocks[0].tableCells.count,1)
     }
+    func testIncludeMovementPreservesSource() {
+        let source = "#include \"a.typ\" // a\r\n// untouched\r\n#include \"β.typ\" // b\r\n\n#if true [#include \"dynamic.typ\"]"
+        let b = DocumentBuffer(source)
+        XCTAssertEqual(b.includes.map(\.path),["a.typ","β.typ"])
+        XCTAssertTrue(b.moveInclude(1,before:0))
+        XCTAssertEqual(b.source,"#include \"β.typ\" // b\r\n// untouched\r\n#include \"a.typ\" // a\r\n\n#if true [#include \"dynamic.typ\"]")
+        b.undo(); XCTAssertEqual(b.source,source); b.redo(); XCTAssertEqual(b.includes.map(\.path),["β.typ","a.typ"])
+        let inline = DocumentBuffer("Before #include \"a.typ\"\n#include \"b.typ\"")
+        XCTAssertFalse(inline.moveInclude(1,before:0))
+    }
+    func testLiteralDependenciesIgnoreComments() {
+        let source = "// #image(\"not-real.png\")\n`#read(\"example.csv\")`\n#import \"tools.typ\": *\n#image(\"a\\\"b.png\")\n#read(\"table.csv\")\n#bibliography(\"refs.bib\", style: \"custom.csl\")"
+        let b = DocumentBuffer(source)
+        XCTAssertEqual(b.imports.map(\.path),["tools.typ"])
+        XCTAssertEqual(literalAssetPaths(source,b.parsed),["a\"b.png","table.csv","refs.bib","custom.csl"])
+    }
     func testRandomUnicodePatchRoundtrip() {
         let pool = ["a","é","😀","中","e\u{301}","\n","*","\\"]
         for i in 0..<200 {
@@ -187,6 +203,8 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Empty headings and lists",t.testEmptyStructuredBlockInsertion),
             ("Formatting inside words",t.testExplicitFormattingInsideWords),
             ("Literal includes and prose statistics",t.testIncludesAndStatistics),
+            ("Include movement and conditional boundaries",t.testIncludeMovementPreservesSource),
+            ("Literal dependencies ignore commented examples",t.testLiteralDependenciesIgnoreComments),
             ("Unicode patch round trips",t.testRandomUnicodePatchRoundtrip)
         ]
         for (name,test) in tests { test(); print("PASS: \(name)") }

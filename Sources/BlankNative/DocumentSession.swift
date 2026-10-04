@@ -53,11 +53,14 @@ struct Recovery: Codable {
     weak var window: NSWindow?
     let compiler = TypstCompiler()
     var compileRevision = -1
+    var pendingExport: (URL,Int)?
     var sourceMap: [[String:Any]] = []
     var insertionKind = "footnote"
     var insertionAnchor = EditSelection(0,0)
     var objectIndex = 0
     var saveWork: DispatchWorkItem?
+    var diskScanWork: DispatchWorkItem?
+    var projectUndoPath: String?
     var watch: DispatchSourceFileSystemObject?
     var watchers: [DispatchSourceFileSystemObject] = []
     var writing = false
@@ -72,12 +75,14 @@ struct Recovery: Codable {
             for include in model.includes { if let next = projectAssetPath(include.path,file:path) { visit(next) } }
         }
         visit(entry)
-        return ordered+buffers.keys.filter { $0.hasSuffix(".typ") && !seen.contains($0) }.sorted()
+        return ordered
     }
     var headings: [(Int, ProjectedBlock)] {
         buffer.projection.blocks.enumerated().filter { $0.element.kind == "heading" }.map { ($0.offset,$0.element) }
     }
     func changed() {
+        projectUndoPath = nil
+        if !buffer.lastEditWasLocal { refreshIncludes() }
         revision += 1; dirty = true; error = nil; editor?.refresh(); onTitle?()
         saveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.autosave() }
@@ -104,7 +109,8 @@ struct Recovery: Codable {
             for (index,table) in editor.tableViews { if let field = table.value?.fields.first(where:{ $0.currentEditor() != nil }) { cell = (index,field.index); break } }
             editor.objectEditing = false; window?.makeFirstResponder(editor)
         }
-        editor?.finishComposition(); if redo { buffer.redo() } else { buffer.undo() }; changed(); editor?.refresh(reveal:true)
+        let projectPath = projectUndoPath, model = projectPath.flatMap { buffers[$0] } ?? buffer
+        editor?.finishComposition(); if redo { model.redo() } else { model.undo() }; changed(); projectUndoPath = projectPath; editor?.refresh(reveal:true)
         if let (index,fieldIndex) = cell, let table = editor?.tableViews[index]?.value, table.fields.indices.contains(fieldIndex), buffer.projection.blocks.indices.contains(index) {
             let field = table.fields[fieldIndex], span = buffer.projection.blocks[index].tableCells[fieldIndex]
             window?.makeFirstResponder(field)
@@ -124,7 +130,7 @@ struct Recovery: Codable {
         guard fm.fileExists(atPath:url.path,isDirectory:&directory) else { throw CocoaError(.fileNoSuchFile) }
         let project = directory.boolValue ? url : url.deletingLastPathComponent()
         var file = directory.boolValue ? "main.typ" : url.lastPathComponent
-        if directory.boolValue, let data = try? Data(contentsOf:project.appendingPathComponent("writer.json")), let json = try? JSONSerialization.jsonObject(with:data) as? [String:String], let configured = json["entry"] { file = configured }
+        if directory.boolValue, let data = try? Data(contentsOf:project.appendingPathComponent("writer.json")), let json = try? JSONSerialization.jsonObject(with:data) as? [String:Any], let configured = json["entry"] as? String { file = configured }
         var loaded: [String:DocumentBuffer] = [:]
         var seen = Set<String>()
         func visit(_ path: String) throws {
@@ -132,7 +138,7 @@ struct Recovery: Codable {
             let target = project.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
             guard target.path.hasPrefix(project.resolvingSymlinksInPath().path+"/") else { throw CocoaError(.fileReadNoPermission) }
             let text = try String(contentsOf:target,encoding:.utf8); loaded[path] = DocumentBuffer(text)
-            for include in loaded[path]!.includes {
+            for include in loaded[path]!.includes+loaded[path]!.imports where !include.path.hasPrefix("@") {
                 let child = include.path
                 let absolute = target.deletingLastPathComponent().appendingPathComponent(child).standardizedFileURL
                 guard absolute.path.hasPrefix(project.standardizedFileURL.path+"/") else { continue }
@@ -157,20 +163,38 @@ struct Recovery: Codable {
             watcher.setEventHandler { [weak self] in self?.checkDisk(path) }
             watcher.setCancelHandler { Darwin.close(fd) }; watcher.resume(); watchers.append(watcher)
         }
+        // Directory events cover atomic file replacement and newly created
+        // included chapters without an idle polling timer.
+        let directories = Set([root]+buffers.keys.map { root.appendingPathComponent($0).deletingLastPathComponent() })
+        for directory in directories {
+            let fd = Darwin.open(directory.path,O_EVTONLY); guard fd >= 0 else { continue }
+            let watcher = DispatchSource.makeFileSystemObjectSource(fileDescriptor:fd,eventMask:[.write,.rename,.delete],queue:.main)
+            watcher.setEventHandler { [weak self] in
+                self?.diskScanWork?.cancel()
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.refreshIncludes()
+                    for path in Array(self.buffers.keys) { self.checkDisk(path,reinstall:false) }
+                    self.installWatchers()
+                }
+                self?.diskScanWork = work; DispatchQueue.main.asyncAfter(deadline:.now()+0.15,execute:work)
+            }
+            watcher.setCancelHandler { Darwin.close(fd) }; watcher.resume(); watchers.append(watcher)
+        }
     }
-    func checkDisk(_ path: String) {
+    func checkDisk(_ path: String,reinstall: Bool = true) {
         guard let root, let local = buffers[path], let base = bases[path] else { return }
         let target = root.appendingPathComponent(path)
         guard let disk = try? String(contentsOf:target,encoding:.utf8) else {
             if !FileManager.default.fileExists(atPath:target.path) { deletedFiles.insert(path); conflictDisk[path] = ""; error = "\(path) was deleted outside blank_. Your writing is retained in recovery."; sheet = .conflict; persistRecovery() }
             return
         }
-        guard disk != base else { installWatchers(); return }
+        guard disk != base else { if reinstall { installWatchers() }; return }
         if disk == local.source { bases[path] = disk; return }
         if local.source == base {
-            local.loadExternal(disk); bases[path] = disk; revision += 1; editor?.refresh()
+            local.loadExternal(disk); bases[path] = disk; refreshIncludes(); revision += 1; editor?.refresh()
         } else { conflictDisk[path] = disk; error = "\(path) changed outside blank_. Choose which version to keep before saving."; sheet = .conflict }
-        installWatchers()
+        if reinstall { installWatchers() }
     }
     func autosave() {
         persistRecovery()
@@ -219,10 +243,10 @@ struct Recovery: Codable {
     }
     func referencedAssets() -> Set<String> {
         var result = Set<String>()
-        let regex = try! NSRegularExpression(pattern:"#?(?:image|bibliography|read)\\(\\s*\"([^\"]+)\"")
-        for (file,buffer) in buffers {
-            for m in regex.matches(in:buffer.source,range:NSRange(location:0,length:buffer.source.utf16.count)) {
-                if let path = projectAssetPath((buffer.source as NSString).substring(with:m.range(at:1)),file:file) { result.insert(path) }
+        let manuscript = Set(includes)
+        for (file,buffer) in buffers where file.lowercased().hasSuffix(".typ") || manuscript.contains(file) {
+            for literal in literalAssetPaths(buffer.source,buffer.parsed) {
+                if let path = projectAssetPath(literal,file:file) { result.insert(path) }
             }
         }
         return result
@@ -255,7 +279,13 @@ struct Recovery: Codable {
         dirty = false; onTitle?(); installWatchers()
     }
     func compile(export: URL? = nil) {
-        guard !compiling else { return }
+        guard !compiling else {
+            if let export {
+                if pendingExport == nil { pendingExport = (export,revision) }
+                else { error = "A PDF export is already waiting for compilation to finish." }
+            }
+            return
+        }
         if compileRevision == revision, export == nil, pdf != nil { return }
         compiling = true
         let snapshot = buffers.mapValues(\.source), current = revision
@@ -264,6 +294,13 @@ struct Recovery: Codable {
         catch { self.error = error.localizedDescription; compiling = false; return }
         compiler.compile(root:directory,entry:entry,files:snapshot,revision:current) { [weak self] response in
             guard let self else { return }; self.compiling = false
+            defer {
+                if let (url,requestedRevision) = self.pendingExport {
+                    self.pendingExport = nil
+                    if requestedRevision == self.revision { self.compile(export:url) }
+                    else { self.error = "Document changed while waiting to export. Try again." }
+                }
+            }
             switch response {
             case let .success(result):
                 if result.revision != self.revision { if export != nil { self.error = "Document changed during export. Try again." }; if self.mode == .preview { self.compile() }; return }

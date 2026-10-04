@@ -17,9 +17,13 @@ bash scripts/build.sh release  # optimized frontend
 bash scripts/check.sh          # model, parser, compiler and native acceptance
 ```
 
+Both build configurations update the same `build/blank_.app`. The obsolete QA/layout/review app copies have been removed; debug binaries and compiler caches remain in `.build` and the Rust target directories for iteration.
+
+Write follows native text-substitution and spelling preferences; Source disables prose substitutions to preserve Typst code. Native Services and saved-document title proxies are available.
+
 Use ⌘1/⌘2/⌘3 for Write/Source/Preview, ⌘K for application commands and `/` for formatting and insertion beside the caret. Help → Tutorial opens an independent editable copy of the original Go tutorial. The toolbar uses system controls, including macOS 27's native tab role for the view switcher.
 
-The native menus provide document windows, New Paper/New Thesis, Open Recent, save/rename, PDF export, shared undo/redo, formatting and search. Saved files autosave after 650 ms of inactivity. Unsaved writing gets recovery copies; File → Open Recovery Copy opens one as an unsaved document. External conflicts and deleted files require resolution before overwriting. Save As copies known project dependencies and imported assets after checking collisions.
+The native menus provide document windows, New Paper/New Thesis, Open Recent, save/rename, PDF export, shared undo/redo, formatting and search. Saved files autosave after 650 ms of inactivity. Unsaved writing gets recovery copies; File → Open Recovery Copy opens one as an unsaved document. External conflicts and deleted files require resolution before overwriting. Save As copies known project dependencies and imported assets after checking collisions. Local imports are loaded as dependencies; literal image/read/bibliography/custom-CSL paths are discovered from syntax rather than commented examples. Dynamic dependencies and package caches still need separate handling.
 
 ## Architecture
 
@@ -27,7 +31,7 @@ Swift owns the canonical Typst source, conservative syntax-backed projections, U
 
 Write and Source share range-based undo/redo with source selections, adjacent typing groups, a 200-operation/8 MiB payload budget, and retention of the latest operation. Included files keep independent histories. Native TextKit 2 supplies font fallback, shaping, layout, input and selections; the reading font initially uses the original Iowan Old Style with real bold/italic faces. Attributed SwiftUI TextEditor was evaluated; NSTextView supplies the pre-edit, composition, clipboard and caret geometry hooks needed here.
 
-Rust is used only for Typst integration: the official parser behind a small C-compatible library and the Go version's official compiler helper behind a JSON-line process interface. Compilation runs on a background queue. Preview retains the last successful PDF on failure. PDFKit draws pages on demand; the app keeps one successful PDF per window and no raster page cache. Visible native table/figure controls are mounted using TextKit 2 attachment geometry; figure thumbnails have a bounded cache.
+Rust is used only for Typst integration: the official parser behind a small C-compatible library and the Go version's official compiler helper behind a JSON-line process interface. Compilation runs on a background queue. Preview retains the last successful PDF on failure. PDFKit draws pages on demand; the app keeps one successful PDF per window and no raster page cache. The page counter follows native PDF navigation. Export requested during compilation waits for its revision rather than being dropped. Visible native table/figure controls are mounted using TextKit 2 attachment geometry; figure thumbnails have a bounded cache.
 
 ## Functionality roadmap
 
@@ -43,10 +47,10 @@ This carries forward the functionality plans from the Rust README and the Go gui
 - [ ] Validate every clipboard/drop format, SVG display and multipage PDF figures; measure memory with large images.
 - [x] Zotero local-API citation search, stable identity keys, local bibliography/metadata, refresh and bibliography style selection.
 - [ ] Validate against a live Zotero library; finish group-library discovery, citation-picker keyboard selection, custom CSL and existing citation editing.
-- [x] Literal included-file loading/switching with independent histories; Preview compiles in-memory chapter edits.
-- [ ] Continuous editing across included files, include-based chapter reordering and refreshing the include graph after edits.
+- [x] Literal included-file loading/switching with independent histories, live include-graph refresh and include-based chapter reordering; Preview compiles in-memory chapter edits.
+- [ ] Continuous editing across included files and repeated include occurrences; richer chapter movement/navigation controls.
 - [x] Save As dependency/asset preservation, rename, article/thesis templates and native recent documents.
-- [ ] Merge disjoint external changes; broaden file-watch/relaunch, creation-date, disk-full and abrupt-termination checks.
+- [ ] Merge disjoint external changes; broaden relaunch, creation-date, disk-full and abrupt-termination checks.
 - [x] Independent native document windows and recovery journals containing project source and imported assets.
 - [ ] Finish multi-window keyboard, Window-menu, accessibility and document-lifetime validation.
 - [x] Active-file/project search and replacement, per-file/project statistics, font/size/colors, paragraph focus and typewriter scrolling.
@@ -57,13 +61,13 @@ This carries forward the functionality plans from the Rust README and the Go gui
 - [ ] Finish long-document scrolling and pointer-drag checks in every view and secondary window.
 - [x] Bounded local projection, cached fonts, changed-range history and background compilation with last-good Preview/PDF export.
 - [ ] Reduce full Source styling/undo projection work on large files; measure total editor/compiler memory on representative theses and long-running sessions.
-- [ ] Restore Go's opt-in per-window agent/MCP access, revision-checked multi-file transactions and selective agent undo.
+- [ ] Add opt-in per-window agent/MCP access, revision-checked multi-file transactions and selective agent undo through a native API.
 
 Windows/Linux releases are outside this frontend's scope. Pandoc exchange, cloud collaboration, Word review, visual equation construction and built-in AI chat remain future product work, as in the Go guide.
 
 ## Validation
 
-`bash scripts/check.sh` exercises the production source model, official parser/compiler, real native text views and disposable project files. The Command Line Tools environment lacks XCTest, so model checks run through the `BlankCoreChecks` executable. Native checks cover typing, Return, formatting, clipboard, synthetic composition, tables, figures, view switching, PDF failure retention/export, saving, conflicts, deletion recovery and Save As dependencies.
+`bash scripts/check.sh` exercises the production source model, official parser/compiler, real native text views and disposable project files. The Command Line Tools environment lacks XCTest, so the 19 model checks run through the `BlankCoreChecks` executable. Native checks cover typing, Return, formatting, clipboard, synthetic composition, tables, figures, view switching, Source font faces, caret-menu geometry, PDF failure retention/export, saving, conflicts, deletion recovery, chapter history and Save As dependencies.
 
 Resource measurements and their limits are recorded in [docs/acceptance.md](docs/acceptance.md). Native IME candidates, VoiceOver, bidirectional navigation and live Zotero remain unverified. The unchanged tutorial describes the Go app; some steps await Swift parity.
 

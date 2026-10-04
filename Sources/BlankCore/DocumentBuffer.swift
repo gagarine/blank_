@@ -44,6 +44,7 @@ public final class DocumentBuffer {
     private var parsedCache: ParsedSource?
     private var hasSyntaxErrors = false
     public private(set) var includes: [LiteralInclude] = []
+    public private(set) var imports: [LiteralInclude] = []
     private var countsRevision = -1
     private var countsCache = TextCounts()
     public var counts: TextCounts {
@@ -71,8 +72,33 @@ public final class DocumentBuffer {
     public init(_ text: String = "") {
         source = text; let parsed = ParsedSource.parse(text); parsedCache = parsed; hasSyntaxErrors = parsed.erroneous; projection = Projection(source: text, parsed: parsed)
         includes = literalIncludes(text,parsed)
+        imports = literalIncludes(text,parsed,kind:"ModuleImport")
     }
     public func breakUndoGroup() { if !undoSteps.isEmpty { undoSteps[undoSteps.count-1].group = "" } }
+    @discardableResult public func moveInclude(_ from: Int, before target: Int) -> Bool {
+        guard includes.indices.contains(from), includes.indices.contains(target), from != target else { return false }
+        let bytes = Array(source.utf8)
+        func line(_ include: LiteralInclude) -> ByteSpan? {
+            var start = include.source.start, end = include.source.end
+            while start > 0 && bytes[start-1] != 10 { start -= 1 }
+            while end < bytes.count && bytes[end] != 10 { end += 1 }
+            if end > start && bytes[end-1] == 13 { end -= 1 }
+            let prefix = source.bytes(ByteSpan(start,include.source.start)), suffix = source.bytes(ByteSpan(include.source.end,end)).trimmingCharacters(in:.whitespaces)
+            guard prefix.trimmingCharacters(in:.whitespaces).isEmpty, suffix.isEmpty || suffix.hasPrefix("//") else { return nil }
+            return ByteSpan(start,end)
+        }
+        let rows = includes.compactMap(line)
+        guard rows.count == includes.count else { return false }
+        var contents = rows.map { source.bytes($0) }
+        let moved = contents.remove(at:from), destination = target > from ? target-1 : target
+        contents.insert(moved,at:destination)
+        // Rotate only include-line contents. Every intervening newline, blank
+        // line and separate comment remains byte-for-byte in its original slot.
+        var text = source
+        for i in rows.indices.reversed() { text = text.replacingBytes(rows[i],with:contents[i]) }
+        let at = rows[destination].start+(0..<destination).reduce(0) { $0+contents[$1].utf8.count-rows[$1].count }
+        return commit(text,selection:EditSelection(at,at))
+    }
     @discardableResult public func commit(_ text: String, selection after: EditSelection, group: String = "", now: TimeInterval = Date.timeIntervalSinceReferenceDate) -> Bool {
         guard let patch = SourcePatch.difference(source, text) else { selection = after; return false }
         let before = selection
@@ -104,12 +130,14 @@ public final class DocumentBuffer {
                     for i in blocks.indices where i > index { blocks[i] = blocks[i].shifted(by:delta) }
                     source = text; parsedCache = nil; projection = Projection(blocks:blocks)
                     includes = includes.map { item in var item = item; if item.source.start >= patch.start { item.source = ByteSpan(item.source.start+delta,item.source.end+delta) }; return item }
+                    imports = imports.map { item in var item = item; if item.source.start >= patch.start { item.source = ByteSpan(item.source.start+delta,item.source.end+delta) }; return item }
                     revision += 1; lastEditWasLocal = true; return
                 }
             }
         }
         source = text; let fresh = ParsedSource.parse(text); parsedCache = fresh; hasSyntaxErrors = fresh.erroneous
         includes = literalIncludes(text,fresh)
+        imports = literalIncludes(text,fresh,kind:"ModuleImport")
         projection = Projection(source:text,parsed:fresh); revision += 1
     }
     public func undo() {

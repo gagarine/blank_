@@ -51,12 +51,14 @@ struct CommandsSheet: View {
                 .onKeyPress(.downArrow) { selectedCommand = min(selectedCommand+1,max(0,matches.count-1)); return .handled }
                 .onKeyPress(.upArrow) { selectedCommand = max(0,selectedCommand-1); return .handled }
                 .onChange(of:session.commandQuery) { _,_ in selectedCommand = 0 }
-            ScrollView {
-                VStack(spacing:2) {
-                    ForEach(Array(matches.enumerated()),id:\.offset) { index,action in
-                        Button { action.2() } label: { HStack { Text(action.0).font(.system(size:12)); Spacer(); Text(action.1).font(.system(size:10)).foregroundStyle(.tertiary) }.padding(10).background(index == selectedCommand ? Color.primary.opacity(0.05) : .clear).clipShape(RoundedRectangle(cornerRadius:5)).contentShape(Rectangle()) }.buttonStyle(.plain)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing:2) {
+                        ForEach(Array(matches.enumerated()),id:\.offset) { index,action in
+                            Button { action.2() } label: { HStack { Text(action.0).font(.system(size:12)); Spacer(); Text(action.1).font(.system(size:10)).foregroundStyle(.tertiary) }.padding(10).background(index == selectedCommand ? Color.primary.opacity(0.05) : .clear).clipShape(RoundedRectangle(cornerRadius:5)).contentShape(Rectangle()) }.buttonStyle(.plain).id(index)
+                        }
                     }
-                }
+                }.onChange(of:selectedCommand) { _,index in proxy.scrollTo(index) }.onChange(of:session.commandQuery) { _,_ in proxy.scrollTo(0) }
             }.frame(height:340)
         }.onAppear { focused = true }
     }

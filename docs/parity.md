@@ -17,17 +17,17 @@ Native framework defaults take precedence over early Go presentation choices. MC
 | Block handles/menu/drag | Native cursors, translucent snapshot, one insertion line | Implemented; pointer acceptance and object-adjacent navigation pending |
 | Hierarchy/section movement | Collapsible outline with elision and source section moves | Movement checked; pointer and repeated-title identity checks pending |
 | Scrolling at viewport edge | NSScrollView independent of text padding | Implemented; all-view/secondary-window long-document scrolling pending |
-| Source characters/colors/fonts/delimiters | Native attributed full source, literal delimiters and indent continuation | Exact clipboard/native delimiters checked; large-file styling remains full-file |
-| Preview/PDF/navigation/error retention | Background official compiler, native PDFKit/source maps | Compiler protocol, error retention and export pass; passage navigation/scroll page field inspection pending |
+| Source characters/colors/fonts/delimiters | Native attributed full source, literal delimiters and indent continuation | Exact clipboard/native delimiters, explicit bold/italic faces and heading sizes checked; large-file styling remains full-file |
+| Preview/PDF/navigation/error retention | Background official compiler, native PDFKit/source maps | Compiler protocol, error retention, queued export and native page-counter notification pass; passage navigation/physical scroll inspection pending |
 | Tables | Visible native cell controls, Tab/final Tab row, dimensions sheet | Mounting, Unicode typing, shared cell undo/redo/focus and valid row addition pass; all dimension cases pending |
 | Images/figures/captions/drop/paste | Native importing and NSImageView/PDF thumbnails, bounded cache | Native PNG/caption PDF export passes; PDF-page/size editing and SVG/multipage/drop variants pending |
 | Links/footnotes/math/labels/references | Native insertion sheets, conservative inline/source projection | Compiler fixture passes; existing-object editing needs refinement |
 | Zotero/citations/bibliography | Local API, stable keys, saved metadata/refresh, preset styles | Implemented; live integration, library picker, custom CSL and citation UI acceptance pending |
-| Multi-file manuscripts | Literal include loading and independent file editors | In-memory nested compilation/Save As passes; continuous view, live include refresh and chapter reordering pending |
+| Multi-file manuscripts | Literal include loading and independent file editors; local imports as dependencies | Live graph refresh, directory creation events, include reordering/undo, import-aware Save As and in-memory nested compilation implemented; continuous view/repeated occurrences and dynamic dependencies pending |
 | Search/replace/statistics | Active/project search and per-file/project counts, file metadata | Implemented; includes parsed from AST, prose counts checked; project grouping and continuous occurrences pending |
 | Settings/focus/typewriter | Persisted installed fonts, size/colors, dark option and focus modes | Implemented; synchronization across windows and system-theme refinement pending |
 | Document windows/Window menu | Native independent NSWindow sessions | Implemented; expanded secondary-window/lifetime/accessibility acceptance pending |
-| Autosave/recovery/external changes | Debounced writes, guarded collisions/conflicts/deletions, recovery | Disposable file checks pass; disjoint merge, directory watch, relaunch/disk failure matrix pending |
+| Autosave/recovery/external changes | Debounced writes, guarded collisions/conflicts/deletions, recovery | Disposable file checks pass; disjoint merge and relaunch/disk failure matrix pending |
 | Agent/MCP/selective agent undo | Planned native interface; disabled by default design | Not implemented; includes atomic revision-checked multi-file edits and per-window access |
 
 This records actual implementation and gaps. Automated input does not establish pointer, VoiceOver, real IME, bidirectional or release-distribution acceptance. Windows/Linux are outside the Swift frontend scope.

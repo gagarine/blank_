@@ -15,6 +15,9 @@ struct SlashCommand: Identifiable {
     var symbol: String
     var keywords: String
     var insertion = false
+    var systemSymbol: String {
+        ["paragraph":"paragraphsign","heading":"textformat.size","bullet":"list.bullet","number":"list.number","quote":"quote.bubble","image":"photo","table":"tablecells","citation":"books.vertical","footnote":"text.badge.plus","equation":"function","link":"link","label":"tag","reference":"arrow.turn.up.right"][kind] ?? "textformat"
+    }
     var id: String { kind+String(level) }
     static let all: [SlashCommand] = [
         .init(kind:"paragraph",label:"Paragraph",hint:"Plain text",symbol:"¶",keywords:"text"),
@@ -46,14 +49,14 @@ struct SlashMenu: View {
                     ForEach(Array(commands.enumerated()),id:\.element.id) { i,command in
                         Button { choose(i) } label: {
                             HStack(spacing:12) {
-                                Text(command.symbol).font(.system(size:18,design:.serif)).frame(width:28)
+                                Image(systemName:command.systemSymbol).font(.system(size:17)).frame(width:28)
                                 VStack(alignment:.leading,spacing:3) { Text(command.label).font(.system(size:12,weight:.medium)); Text(command.hint).font(.system(size:10)).foregroundStyle(.secondary) }
                                 Spacer()
                             }.padding(.horizontal,10).padding(.vertical,7).frame(height:44).background(i == index ? Color.primary.opacity(0.07) : .clear).clipShape(RoundedRectangle(cornerRadius:5))
                         }.buttonStyle(.plain).id(i)
                     }
                 }.padding(6)
-            }.onChange(of:index) { _,value in proxy.scrollTo(value) }
+            }.onAppear { proxy.scrollTo(index) }.onChange(of:index) { _,value in proxy.scrollTo(value) }
         }.frame(width:280).background(.background)
     }
 }
@@ -61,6 +64,7 @@ struct EditorRoot: View {
     @ObservedObject var session: DocumentSession
     @NativeState private var collapsed = Set<Int>()
     @NativeState private var draggingHeading: Int?
+    @NativeState private var draggingChapter: String?
     var chrome: Color { Color(nsColor:.windowBackgroundColor) }
     var body: some View {
         VStack(spacing:0) {
@@ -91,7 +95,7 @@ struct EditorRoot: View {
             HStack {
                 Text(session.root == nil ? "Unsaved document" : session.dirty ? "Saving…" : "Saved").font(.system(size:10)).foregroundStyle(.tertiary)
                 Spacer()
-                Button { session.sheet = .statistics } label: { Text("\(wordCount) words").font(.system(size:10)).foregroundStyle(.secondary) }.buttonStyle(.plain)
+                Button { session.sheet = .statistics } label: { Text("\(wordCount) \(wordCount == 1 ? "word" : "words")").font(.system(size:10)).foregroundStyle(.secondary) }.buttonStyle(.plain)
                 Text("⌘K").font(.system(size:10)).foregroundStyle(.tertiary).padding(.leading,18)
             }.padding(.horizontal,26).frame(height:30).background(chrome)
         }.frame(minWidth:660,minHeight:420).background(chrome).preferredColorScheme(session.dark ? .dark : nil)
@@ -155,6 +159,11 @@ struct EditorRoot: View {
                     if session.includes.count > 1 {
                         ForEach(session.includes,id:\.self) { path in
                             Button { session.switchFile(path) } label: { Label(path,systemImage:"doc.text").font(.system(size:11)).lineLimit(1).truncationMode(.middle).foregroundStyle(session.active == path ? .primary : .secondary).frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,6) }.buttonStyle(.plain)
+                                .onDrag { draggingChapter = path; return NSItemProvider(object:path as NSString) }
+                                .onDrop(of:["public.text"],isTargeted:nil) { _ in
+                                    guard let from = draggingChapter else { return false }; draggingChapter = nil
+                                    return session.moveChapter(from,before:path)
+                                }
                         }
                         Divider().padding(.vertical,12)
                     }
@@ -193,11 +202,27 @@ struct PreviewView: NSViewRepresentable {
 }
 final class NavigablePDFView: PDFView {
     weak var session: DocumentSession?
+    override init(frame: NSRect) {
+        super.init(frame:frame)
+        observePageChanges()
+    }
+    required init?(coder: NSCoder) {
+        super.init(coder:coder)
+        observePageChanges()
+    }
+    private func observePageChanges() {
+        NotificationCenter.default.addObserver(self,selector:#selector(pageChanged),name:.PDFViewPageChanged,object:self)
+    }
+    @objc private func pageChanged(_ notification: Notification) {
+        guard let session, let page = currentPage, let document else { return }
+        let number = document.index(for:page)+1
+        if session.previewPage != number { session.previewPage = number }
+    }
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with:event)
-        guard let session, let page = currentPage, let document else { return }
-        session.previewPage = document.index(for:page)+1
-        let location = convert(event.locationInWindow,from:nil), point = convert(location,to:page)
+        let location = convert(event.locationInWindow,from:nil)
+        guard let session, let page = page(for:location,nearest:true), let document else { return }
+        let point = convert(location,to:page)
         let height = page.bounds(for:.mediaBox).height
         let pageNumber = document.index(for:page)+1
         if let nearest = session.sourceMap.filter({ ($0["page"] as? Int) == pageNumber }).min(by: {

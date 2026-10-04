@@ -2,6 +2,37 @@ import AppKit
 import BlankCore
 
 @MainActor extension DocumentSession {
+    func refreshIncludes() {
+        var seen = Set<String>(), added = false
+        func visit(_ path: String) {
+            guard !seen.contains(path) else { return }; seen.insert(path)
+            if buffers[path] == nil, let root {
+                do {
+                    let target = try Self.dependencyTarget(path,root:root)
+                    if FileManager.default.fileExists(atPath:target.path) {
+                        let text = try String(contentsOf:target,encoding:.utf8)
+                        buffers[path] = DocumentBuffer(text); bases[path] = text; added = true
+                    }
+                } catch { self.error = "Could not open included chapter \(path): "+error.localizedDescription }
+            }
+            guard let model = buffers[path] else { return }
+            for include in model.includes+model.imports where !include.path.hasPrefix("@") { if let child = projectAssetPath(include.path,file:path) { visit(child) } }
+        }
+        visit(entry)
+        if added { revision += 1; installWatchers() }
+    }
+    @discardableResult func moveChapter(_ from: String,before target: String) -> Bool {
+        guard from != target, from != entry, target != entry else { return false }
+        for parent in includes {
+            guard let model = buffers[parent] else { continue }
+            let paths = model.includes.map { projectAssetPath($0.path,file:parent) }
+            let origins = paths.indices.filter { paths[$0] == from }, destinations = paths.indices.filter { paths[$0] == target }
+            guard origins.count == 1, destinations.count == 1 else { continue }
+            guard model.moveInclude(origins[0],before:destinations[0]) else { return false }
+            changed(); projectUndoPath = parent; return true
+        }
+        return false
+    }
     func projectAssetPath(_ literal: String, file: String? = nil) -> String? {
         let base = URL(fileURLWithPath:"/project").appendingPathComponent(((file ?? active) as NSString).deletingLastPathComponent)
         let target = base.appendingPathComponent(literal).standardizedFileURL

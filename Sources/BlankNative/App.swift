@@ -114,6 +114,8 @@ import Combine
         let app = menu("blank_")
         add(app,"About blank_",#selector(NSApplication.orderFrontStandardAboutPanel(_:)),target:NSApp)
         app.addItem(.separator()); add(app,"Settings…",#selector(settings(_:)),",",target:self)
+        let services = NSMenu(title:"Services"), servicesItem = NSMenuItem(title:"Services",action:nil,keyEquivalent:"")
+        servicesItem.submenu = services; app.addItem(servicesItem); NSApp.servicesMenu = services
         app.addItem(.separator()); add(app,"Hide blank_",#selector(NSApplication.hide(_:)),"h",target:NSApp); add(app,"Hide Others",#selector(NSApplication.hideOtherApplications(_:)),"h",[.command,.option],target:NSApp)
         app.addItem(.separator()); add(app,"Quit blank_",#selector(quit(_:)),"q",target:self)
         let file = menu("File")
@@ -145,13 +147,13 @@ import Combine
         self.session = session
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1060,height:780),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         super.init(window:window)
-        window.title = session.title; window.titlebarAppearsTransparent = true
+        window.title = session.title; window.representedURL = session.root?.appendingPathComponent(session.entry); window.titlebarAppearsTransparent = true
         if session.dark { window.appearance = NSAppearance(named:.darkAqua) }
         window.center(); window.delegate = self
         window.contentView = NSHostingView(rootView:EditorRoot(session:session)); window.minSize = NSSize(width:660,height:480)
         installToolbar()
         window.isReleasedWhenClosed = false; session.window = window
-        session.onTitle = { [weak window,weak session] in guard let session else { return }; window?.title = session.title; window?.isDocumentEdited = session.dirty }
+        session.onTitle = { [weak window,weak session] in guard let session else { return }; window?.title = session.title; window?.representedURL = session.root?.appendingPathComponent(session.entry); window?.isDocumentEdited = session.dirty }
     }
     required init?(coder: NSCoder) { fatalError() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -167,7 +169,7 @@ import Combine
         return false
     }
     func windowWillClose(_ notification: Notification) {
-        session.watchers.forEach { $0.cancel() }; session.saveWork?.cancel()
+        session.watchers.forEach { $0.cancel() }; session.saveWork?.cancel(); session.diskScanWork?.cancel()
         AppController.shared?.controllers.removeAll { $0 === self }
     }
 }

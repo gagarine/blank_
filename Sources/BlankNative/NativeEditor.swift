@@ -11,10 +11,8 @@ struct NativeEditor: NSViewRepresentable {
         let view = NativeTextView(usingTextLayoutManager:true)
         view.session = session; session.editor = view
         view.delegate = view; view.isRichText = true; view.importsGraphics = false
-        view.allowsUndo = false; view.isAutomaticQuoteSubstitutionEnabled = false
-        view.isAutomaticDashSubstitutionEnabled = false; view.isAutomaticTextReplacementEnabled = false
-        view.isAutomaticSpellingCorrectionEnabled = false; view.isContinuousSpellCheckingEnabled = true
-        view.isGrammarCheckingEnabled = false; view.usesFindBar = false
+        view.allowsUndo = false; view.usesFindBar = false
+        view.inputDefaults = NativeInputDefaults(view)
         view.isHorizontallyResizable = false; view.isVerticallyResizable = true
         view.autoresizingMask = [.width]; view.minSize = NSSize(width:0,height:scroll.contentSize.height)
         view.maxSize = NSSize(width:CGFloat.greatestFiniteMagnitude,height:CGFloat.greatestFiniteMagnitude)
@@ -34,7 +32,21 @@ struct NativeEditor: NSViewRepresentable {
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) { (scroll.documentView as? NativeTextView)?.slashPopover?.close() }
 }
 
+struct NativeInputDefaults {
+    var quotes: Bool, dashes: Bool, replacements: Bool, correction: Bool, spelling: Bool, grammar: Bool
+    init(_ view: NSTextView) {
+        quotes = view.isAutomaticQuoteSubstitutionEnabled; dashes = view.isAutomaticDashSubstitutionEnabled
+        replacements = view.isAutomaticTextReplacementEnabled; correction = view.isAutomaticSpellingCorrectionEnabled
+        spelling = view.isContinuousSpellCheckingEnabled; grammar = view.isGrammarCheckingEnabled
+    }
+    func apply(to view: NSTextView,source: Bool) {
+        view.isAutomaticQuoteSubstitutionEnabled = !source && quotes; view.isAutomaticDashSubstitutionEnabled = !source && dashes
+        view.isAutomaticTextReplacementEnabled = !source && replacements; view.isAutomaticSpellingCorrectionEnabled = !source && correction
+        view.isContinuousSpellCheckingEnabled = !source && spelling; view.isGrammarCheckingEnabled = !source && grammar
+    }
+}
 final class NativeTextView: NSTextView, NSTextViewDelegate {
+    var inputDefaults: NativeInputDefaults?
     weak var session: DocumentSession?
     var refreshing = false
     var composing = false
@@ -121,7 +133,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 result.addAttribute(.foregroundColor,value:color,range:NSRange(location:start,length:end-start))
             }
             func visit(_ node: SyntaxNode, bold: Bool = false, italic: Bool = false, heading: Int = 0) {
-                let strong = bold || node.kind == "Strong", emph = italic || node.kind == "Emph"
+                let function = node.kind == "FuncCall" ? node.children.first.map { b.source.bytes($0.span) } : nil
+                let strong = bold || node.kind == "Strong" || function == "strong", emph = italic || node.kind == "Emph" || function == "emph"
                 let level = node.kind == "Heading" ? b.source.bytes(node.span).prefix { $0 == "=" }.count : heading
                 if strong || emph || level > 0 {
                     var f = NSFont.monospacedSystemFont(ofSize:level == 1 ? 24 : level == 2 ? 20 : level > 0 ? 17 : 14,weight:strong || level > 0 ? .bold : .regular)
@@ -176,6 +189,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         updatePadding()
         let appearance = "\(session.fontFamily)/\(session.fontSize)/\(session.paragraphFocus)/\(session.paper)/\(session.ink)"
         guard reveal || lastRevision != session.buffer.revision || lastMode != session.mode || lastPath != session.active || lastAppearance != appearance else { return }
+        if lastMode != session.mode {
+            if lastMode == .write { inputDefaults = NativeInputDefaults(self) }
+            inputDefaults?.apply(to:self,source:session.mode == .source)
+        }
         refreshing = true; defer { refreshing = false }
         let local = session.mode == .write && lastMode == .write && lastPath == session.active && lastAppearance == appearance && lastRevision == session.buffer.revision-1 && session.buffer.lastEditWasLocal
         let localIndex = local ? session.buffer.projection.blockIndex(at:session.buffer.projection.displayOffset(at:session.buffer.selection.focus)) : nil
@@ -419,7 +436,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         var actual = NSRange()
         let screen = firstRect(forCharacterRange:NSRange(location:min(max(0,offset),(string as NSString).length),length:0),actualRange:&actual)
         let windowRect = window!.convertFromScreen(screen)
-        return convert(windowRect,from:nil)
+        var rect = convert(windowRect,from:nil)
+        // A zero-width native caret is an empty NSRect. Give popover positioning
+        // a nonempty anchor at the same insertion location.
+        rect.size.width = max(1,rect.width)
+        return rect
     }
     func blockRect(_ index: Int) -> NSRect {
         guard let b = session?.buffer.projection.blocks[index] else { return .zero }
@@ -555,7 +576,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         // AppKit's automatic popover sizing cannot collapse its visible rows.
         slashPopover?.contentViewController = NSHostingController(rootView:content.frame(width:280,height:height))
         slashPopover?.contentSize = NSSize(width:280,height:height)
-        if slashPopover?.isShown != true { slashPopover?.show(relativeTo:rectFor(slashStart ?? selectedRange().location),of:self,preferredEdge:.maxY) }
+        textLayoutManager?.ensureLayout(for:visibleRect)
+        // Filtering changes the hosted view's size. Re-associate the popover
+        // with the current native caret rectangle after each layout update.
+        slashPopover?.show(relativeTo:rectFor(slashStart ?? selectedRange().location),of:self,preferredEdge:.maxY)
         window?.makeFirstResponder(self)
     }
     func dismissSlash() { slashPopover?.close(); slashPopover = nil; slashStart = nil; slashQuery = "" }
@@ -563,10 +587,12 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard let start = slashStart, slashMatches.indices.contains(slashIndex), let session else { return }
         let command = slashMatches[slashIndex]
         let range = NSRange(location:start,length:selectedRange().location-start)
-        session.buffer.editWrite(range,text:"",group:""); dismissSlash()
-        let index = session.buffer.projection.blockIndex(at:start)
-        if command.insertion { session.changed(); session.chooseInsertion(command.kind) }
-        else { session.buffer.setKind(index,kind:command.kind,level:command.level); session.changed() }
+        let copy = DocumentBuffer(session.buffer.source); copy.selection = session.buffer.selection
+        copy.editWrite(range,text:"",group:"")
+        let index = copy.projection.blockIndex(at:start)
+        if !command.insertion { copy.setKind(index,kind:command.kind,level:command.level) }
+        session.buffer.commit(copy.source,selection:copy.selection); dismissSlash(); session.changed()
+        if command.insertion { session.chooseInsertion(command.kind) }
     }
 }
 final class BlockMenuItem: NSMenuItem {

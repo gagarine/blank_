@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import BlankCore
 
 @MainActor enum NativeAcceptance {
@@ -37,6 +38,7 @@ import BlankCore
         check(NSPasteboard.general.string(forType:.string) == session.buffer.source,"Source clipboard exact source")
         session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(session.editor?.textLayoutManager != nil,"TextKit 2 retained after switching")
+        check(session.editor?.isAutomaticQuoteSubstitutionEnabled == session.editor?.inputDefaults?.quotes,"Write restores native input preferences after Source")
         session.undo(); check(!session.buffer.source.contains("*Hello*"),"Undo shared across views")
         session.undo(true); check(session.buffer.source.contains("*Hello*"),"Redo shared across views")
         let editor = session.editor!
@@ -65,8 +67,19 @@ import BlankCore
         for scalar in "/heading".unicodeScalars { editor.insertText(String(scalar),replacementRange:editor.selectedRange()) }
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(editor.slashPopover?.isShown == true && (editor.slashPopover?.contentViewController?.view.bounds.height ?? 0) >= 140,"Slash popover retains visible filtered rows")
+        if let content = editor.slashPopover?.contentViewController?.view, let popoverWindow = content.window, let window = editor.window {
+            let menuRect = popoverWindow.convertToScreen(content.convert(content.bounds,to:nil))
+            let caret = window.convertToScreen(editor.convert(editor.rectFor(0),to:nil))
+            check(!menuRect.contains(NSPoint(x:caret.midX,y:caret.midY)),"Slash popover does not obscure the native caret")
+        } else { fatalError("Missing native popover window") }
+        if ProcessInfo.processInfo.environment["BLANK_GEOMETRY"] != nil {
+            var actual = NSRange()
+            print("Geometry",editor.frame,editor.visibleRect,editor.textContainerOrigin,editor.rectFor(0),editor.firstRect(forCharacterRange:NSRange(location:0,length:1),actualRange:&actual),editor.slashPopover?.contentViewController?.view.window?.frame as Any,controller.window?.frame as Any)
+            if let manager = editor.textLayoutManager, let start = manager.textContentManager?.documentRange.location, let fragment = manager.textLayoutFragment(for:start) { print("Fragment",fragment.layoutFragmentFrame,fragment.textLineFragments.map(\.typographicBounds)) }
+        }
         editor.slashIndex = 1; editor.chooseSlash()
         check(session.buffer.source == "== Slash target" && editor.slashPopover == nil,"Slash choice preserves content and dismisses menu")
+        session.undo(); check(session.buffer.source == "/headingSlash target","Slash conversion is one undo transaction")
         // Tables use view-backed TextKit 2 attachments and native field editors.
         session.buffer.loadExternal("#table(columns: 2, [Idea], [Step], [One], [Two])\n\nAfter")
         session.revision += 1; editor.lastRevision = -1; editor.refresh()
@@ -110,13 +123,27 @@ import BlankCore
         source.deleteBackward(nil); check(!source.string.hasSuffix("("),"Source uses native Backspace")
         source.insertText("\n  code",replacementRange:source.selectedRange()); source.insertNewline(nil)
         check(source.string.hasSuffix("\n  code\n  "),"Source Return retains leading indentation")
+        let styledSource = "#strong[Bold] #emph[Italic]\n\n= Heading"
+        session.buffer.loadExternal(styledSource); session.revision += 1; source.refresh()
+        func sourceFont(_ text: String) -> NSFont {
+            source.textStorage!.attribute(.font,at:(source.string as NSString).range(of:text).location,effectiveRange:nil) as! NSFont
+        }
+        check(NSFontManager.shared.traits(of:sourceFont("Bold")).contains(.boldFontMask) && NSFontManager.shared.traits(of:sourceFont("Italic")).contains(.italicFontMask),"Source renders strong/emph functions with actual font faces")
+        check(sourceFont("Heading").pointSize > sourceFont("Italic").pointSize && source.string == styledSource,"Source headings grow while retaining every character")
         session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
-        session.buffer.loadExternal("= Native PDF\n\nHello *Typst*.\n\n#table(columns: 2, [A], [B])\n\n#footnote[Native footnote]\n")
+        session.buffer.loadExternal("= Native PDF\n\nHello *Typst*.\n\n#table(columns: 2, [A], [B])\n\n#footnote[Native footnote]\n\n#pagebreak()\n\nSecond page.\n")
         session.revision += 1; session.compile()
         let deadline = Date().addingTimeInterval(25)
         while session.compiling && Date() < deadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
         check(session.pdf != nil,"Official Typst compiler produces native PDF")
         check(!session.sourceMap.isEmpty,"Preview carries source navigation map")
+        session.switchMode(.preview); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        guard let pdfView = session.pdfView, let secondPage = session.pdf?.page(at:1) else { fatalError("Missing two-page preview") }
+        // PDFKit sends this same notification for wheel/trackpad page changes.
+        // Navigate directly instead of routing through the page-counter action.
+        pdfView.go(to:secondPage); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(session.previewPage == 2,"Preview page counter follows native PDF navigation")
+        session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let good = session.pdf
         session.buffer.loadExternal("#unknown-function()")
         session.revision += 1; session.compile()
@@ -126,10 +153,10 @@ import BlankCore
         session.buffer.loadExternal("#figure(image(\"assets/test.png\"), caption: [A caption])")
         session.revision += 1
         let exported = FileManager.default.temporaryDirectory.appendingPathComponent("blank-export-"+UUID().uuidString+".pdf")
-        session.compile(export:exported)
+        session.compile(); session.compile(export:exported)
         let exportDeadline = Date().addingTimeInterval(10)
         while session.compiling && Date() < exportDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
-        check((try? Data(contentsOf:exported).starts(with:Data("%PDF-".utf8))) == true,"Native PDF export includes imported figure and caption")
+        check((try? Data(contentsOf:exported).starts(with:Data("%PDF-".utf8))) == true,"PDF export queued during compilation includes imported figure and caption")
         try? FileManager.default.removeItem(at:exported)
         print("Native acceptance completed")
         FileAcceptance.run()
