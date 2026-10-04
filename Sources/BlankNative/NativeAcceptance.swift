@@ -15,6 +15,7 @@ import BlankCore
         let session = DocumentSession()
         let controller = DocumentWindow(session:session); controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)
+        app.activate(ignoringOtherApps:true)
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         guard let view = session.editor else { fatalError("No native editor") }
         func check(_ condition: @autoclosure () -> Bool,_ label: String) { if !condition() { fatalError("FAIL: \(label) | source=\(session.buffer.source) | native=\(view.string)") }; print("PASS: \(label)") }
@@ -30,6 +31,7 @@ import BlankCore
         view.textLayoutManager?.ensureLayout(for:view.visibleRect)
         let emptyParagraph = view.rectFor(view.selectedRange().location)
         check(emptyParagraph.minY-firstLineEnd.minY >= firstLineEnd.height+12,"Return shows paragraph spacing before typing")
+        check(controller.window?.firstResponder === view && view.shouldDrawInsertionPoint,"Return keeps focus and a native insertion point")
         view.insertText("Second paragraph",replacementRange:view.selectedRange())
         check(session.buffer.projection.blocks.count == 2,"Return splits paragraph")
         view.textLayoutManager?.ensureLayout(for:view.visibleRect)
@@ -86,7 +88,9 @@ import BlankCore
             editor.setSelectedRange(NSRange(location:editor.string.utf16.count,length:0)); editor.captureSelection()
         }
         resetParagraphs("")
-        editor.insertNewline(nil); editor.insertNewline(nil); editor.insertText("Third",replacementRange:editor.selectedRange())
+        editor.insertNewline(nil); editor.insertNewline(nil)
+        check(controller.window?.firstResponder === editor && editor.shouldDrawInsertionPoint,"Repeated Return retains the native insertion point in an empty paragraph")
+        editor.insertText("Third",replacementRange:editor.selectedRange())
         check(session.buffer.projection.blocks.map(\.text) == ["","","Third"],"Repeated Return retains empty paragraphs")
         editor.setSelectedRange(NSRange(location:2,length:0)); editor.deleteBackward(nil)
         check(session.buffer.projection.blocks.map(\.text) == ["","Third"],"Backspace joins an empty paragraph")

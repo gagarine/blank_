@@ -12,6 +12,8 @@ The toolbar is a standard customizable NSToolbar with unified window layout and 
 
 Apple references: [TextKit](https://developer.apple.com/documentation/appkit/textkit), [NSTextView](https://developer.apple.com/documentation/appkit/nstextview), [AppKit's new design](https://developer.apple.com/videos/play/wwdc2025/310/), [transparent titlebars](https://developer.apple.com/documentation/appkit/nswindow/titlebarappearstransparent), [adopting Liquid Glass](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass). The system controls adapt to accessibility transparency/motion preferences; those configurations still need visual acceptance.
 
+Model-driven text storage changes explicitly complete AppKit’s `didChangeText()` notification and restart native insertion-point state with `updateInsertionPointStateAndRestartTimer(true)`. There is no custom blink timer. Active-app checks verify focus and insertion-point eligibility after single and repeated Returns; real keyboard inspection confirmed a visible caret in the new empty paragraphs. The legacy `drawInsertionPoint` override was not invoked by TextKit 2 on this SDK and is not used.
+
 ## Automated checks
 
 Host: Apple Silicon, macOS 27.0.1, Swift 6.4, Rust 1.98.1, Typst 0.15.1. Checks run on 2026-10-04 and 2026-10-05 using disposable documents. The existing Rust/Go branches and user files were preserved.

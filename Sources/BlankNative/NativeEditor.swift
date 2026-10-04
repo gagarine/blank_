@@ -201,10 +201,12 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let localIndex = local ? session.buffer.projection.blockIndex(at:session.buffer.projection.displayOffset(at:session.buffer.selection.focus)) : nil
         if !local { objectViews.values.forEach { $0.removeFromSuperview() }; objectViews.removeAll(); tableViews.removeAll() }
         let attributed = rendered(onlyBlock:localIndex), old = string
+        var textChanged = false
         // Insert text and attributes in one storage transaction. An attachment
         // character inserted without its attachment can be laid out as plain text.
         textStorage?.beginEditing()
         if let patch = SourcePatch.difference(old,attributed.string) {
+            textChanged = true
             let a = old.utf16Offset(byte:patch.start), z = old.utf16Offset(byte:patch.start+patch.removed.utf8.count)
             let start = attributed.string.utf16Offset(byte:patch.start)
             let replacement = attributed.attributedSubstring(from:NSRange(location:start,length:patch.inserted.utf16.count))
@@ -233,6 +235,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if session.typewriter { centerSelectionInVisibleArea(self) }
         updateSlash()
         positionObjects()
+        // Model transactions bypass NSTextView's normal edit completion. Finish
+        // the native notification and insertion-point lifecycle explicitly.
+        if textChanged { didChangeText() }
+        updateInsertionPointStateAndRestartTimer(true)
     }
     override func layout() { super.layout(); positionObjects() }
     func positionObjects() {
