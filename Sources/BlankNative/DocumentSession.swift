@@ -38,6 +38,9 @@ struct Recovery: Codable {
     @Published var fontSize: Double = UserDefaults.standard.object(forKey:"readingSize") as? Double ?? 18
     @Published var paper: Color = EditorPreferences.color("paper",fallback:.white)
     @Published var ink: Color = EditorPreferences.color("ink",fallback:NSColor(calibratedWhite:0.20,alpha:1))
+    @Published var systemColors = EditorPreferences.usesSystemColors
+    var paperColor: NSColor { systemColors ? .textBackgroundColor : NSColor(paper) }
+    var inkColor: NSColor { systemColors ? .labelColor : NSColor(ink) }
     @Published var dark = UserDefaults.standard.bool(forKey:"dark")
     var buffers: [String:DocumentBuffer] = ["Untitled.typ":DocumentBuffer()]
     var bases: [String:String] = [:]

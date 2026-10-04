@@ -25,6 +25,8 @@ Use ⌘1/⌘2/⌘3 for Write/Source/Preview, ⌘K for application commands and `
 
 In Write, Return starts a new paragraph with a visible gap, including empty paragraphs, and retains the focused native caret. Shift-Return inserts a line break within the current paragraph. Return continues lists; Return on an empty item exits the list. Hover a block to reveal its handle, then drag it to the single horizontal insertion line.
 
+The page, text, tables and Source colors follow the macOS appearance by default. Settings can force Dark appearance or disable “Use system colors” for a custom page and text palette.
+
 The native menus provide document windows, New Paper/New Thesis, Open Recent, save/rename, PDF export, shared undo/redo, formatting and search. Saved files autosave after 650 ms of inactivity. Unsaved writing gets recovery copies; File → Open Recovery Copy opens one as an unsaved document. External conflicts and deleted files require resolution before overwriting. Save As copies known project dependencies and imported assets after checking collisions. Local imports are loaded as dependencies; literal image/read/bibliography/custom-CSL paths are discovered from syntax rather than commented examples. Dynamic dependencies and package caches still need separate handling.
 
 ## Architecture

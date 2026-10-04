@@ -98,6 +98,20 @@ import BlankCore
         editor.setSelectedRange(NSRange(location:5,length:0)); editor.captureSelection(); editor.insertNewline(nil)
         editor.insertText("Middle",replacementRange:editor.selectedRange())
         check(session.buffer.projection.blocks.map(\.text) == ["First","Middle","Second"],"Return creates an editable paragraph between existing blocks")
+        let tutorial = try! String(contentsOf:Bundle.main.resourceURL!.appendingPathComponent("Tutorial.typ"),encoding:.utf8)
+        resetParagraphs(tutorial)
+        let titleEnd = NSMaxRange(session.buffer.projection.blocks[0].display)
+        editor.setSelectedRange(NSRange(location:titleEnd,length:0)); editor.captureSelection(); editor.insertNewline(nil)
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(session.buffer.projection.blocks[1].text.isEmpty && session.buffer.projection.blocks[1].kind == "paragraph","Tutorial title Return creates an empty body paragraph")
+        check(editor.selectedRange() == NSRange(location:titleEnd+1,length:0) && controller.window?.firstResponder === editor && editor.shouldDrawInsertionPoint,"Tutorial title Return retains the mapped native caret and focus")
+        let emptyBodyRect = editor.rectFor(titleEnd+1)
+        check(emptyBodyRect.height > 10 && emptyBodyRect.height < editor.rectFor(0).height && editor.visibleRect.intersects(emptyBodyRect),"Tutorial empty paragraph has visible body-sized caret geometry")
+        check((editor.textStorage!.attribute(.font,at:titleEnd+1,effectiveRange:nil) as? NSFont)?.pointSize == CGFloat(session.fontSize),"Tutorial empty paragraph uses body typography before typing")
+        session.undo(); check(session.buffer.source == tutorial,"Tutorial heading Return undo preserves the exact tutorial")
+        session.undo(true); check(session.buffer.projection.blocks[1].text.isEmpty,"Tutorial heading Return redo restores the empty paragraph")
+        editor.insertText("Body 👋",replacementRange:editor.selectedRange())
+        check(session.buffer.projection.blocks[1].text == "Body 👋","Tutorial heading Return inserts Unicode into the new body paragraph")
         resetParagraphs("= Heading")
         editor.insertNewline(nil); editor.insertText("Body",replacementRange:editor.selectedRange())
         check(session.buffer.projection.blocks.map(\.kind) == ["heading","paragraph"],"Return after a heading starts body text")
@@ -140,7 +154,7 @@ import BlankCore
         let gutter = NSRect(x:editor.textContainerInset.width-30,y:editor.rectFor(0).midY-9,width:20,height:20)
         guard let handlePixels = editor.bitmapImageRepForCachingDisplay(in:gutter) else { fatalError("Missing native gutter bitmap") }
         editor.cacheDisplay(in:gutter,to:handlePixels)
-        let paper = NSColor(session.paper).usingColorSpace(.deviceRGB)!
+        let paper = session.paperColor.usingColorSpace(.deviceRGB)!
         var visibleHandle = false
         for y in 0..<handlePixels.pixelsHigh { for x in 0..<handlePixels.pixelsWide {
             if let color = handlePixels.colorAt(x:x,y:y)?.usingColorSpace(.deviceRGB), color.alphaComponent > 0.8,
@@ -185,9 +199,41 @@ import BlankCore
         }
         check(table.fields.count == 4,"Native table cells created")
         check(table.window === controller.window,"Native table controls mounted in document")
-        controller.window?.makeFirstResponder(table.fields[2])
+        let originalAppearance = controller.window?.appearance
+        let originalSystemColors = session.systemColors
+        session.systemColors = true
+        for name in [NSAppearance.Name.aqua,.darkAqua] {
+            controller.window?.appearance = NSAppearance(named:name)
+            RunLoop.main.run(until:Date().addingTimeInterval(0.1)); editor.lastAppearance = ""; editor.refresh()
+            let themedTable = editor.tableViews[0]!.value!
+            var background: CGFloat = 0, foreground: CGFloat = 0
+            editor.effectiveAppearance.performAsCurrentDrawingAppearance {
+                background = editor.backgroundColor.usingColorSpace(.deviceRGB)!.brightnessComponent
+                foreground = themedTable.fields[0].textColor!.usingColorSpace(.deviceRGB)!.brightnessComponent
+            }
+            check(name == .darkAqua ? background < 0.25 && foreground > 0.7 : background > 0.9 && foreground < 0.3,"Native page and table text adapt to \(name.rawValue)")
+            controller.window?.makeFirstResponder(themedTable.fields[0])
+            if let cellEditor = themedTable.fields[0].currentEditor() as? NSTextView {
+                var editingColor: CGFloat = 0
+                editor.effectiveAppearance.performAsCurrentDrawingAppearance { editingColor = cellEditor.textColor!.usingColorSpace(.deviceRGB)!.brightnessComponent }
+                check(abs(editingColor-foreground) < 0.01,"Active table cell retains readable \(name.rawValue) text")
+            } else { fatalError("Missing themed table field editor") }
+            editor.objectEditing = false; controller.window?.makeFirstResponder(editor)
+        }
+        let originalPaper = session.paper, originalInk = session.ink
+        session.systemColors = false; session.paper = .white; session.ink = .black
+        controller.window?.appearance = NSAppearance(named:.darkAqua)
+        editor.lastAppearance = ""; editor.refresh()
+        editor.effectiveAppearance.performAsCurrentDrawingAppearance {
+            check(editor.backgroundColor.usingColorSpace(.deviceRGB)!.brightnessComponent > 0.9 && editor.tableViews[0]!.value!.fields[0].textColor!.usingColorSpace(.deviceRGB)!.brightnessComponent < 0.1,"Custom white page keeps black table text in a dark window")
+        }
+        session.paper = originalPaper; session.ink = originalInk
+        controller.window?.appearance = originalAppearance; session.systemColors = originalSystemColors
+        editor.lastAppearance = ""; editor.refresh(); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        let activeTable = editor.tableViews[0]!.value!
+        controller.window?.makeFirstResponder(activeTable.fields[2])
         RunLoop.main.run(until:Date().addingTimeInterval(0.05))
-        if let cellEditor = table.fields[2].currentEditor() as? NSTextView {
+        if let cellEditor = activeTable.fields[2].currentEditor() as? NSTextView {
             cellEditor.selectAll(nil); cellEditor.insertText("Café 👋",replacementRange:cellEditor.selectedRange())
         } else { fatalError("No native cell editor") }
         check(session.buffer.source.contains("[Café 👋]"),"Native table typing preserves source spans")

@@ -196,7 +196,7 @@ struct PreviewView: NSViewRepresentable {
     func makeNSView(context: Context) -> PDFView {
         let view = NavigablePDFView(); view.session = session; session.pdfView = view
         view.autoScales = true; view.displayMode = .singlePageContinuous; view.displayDirection = .vertical
-        view.backgroundColor = NSColor(calibratedWhite:0.96,alpha:1); view.displaysPageBreaks = true; view.pageBreakMargins = NSEdgeInsets(top:16,left:16,bottom:16,right:16)
+        view.backgroundColor = .windowBackgroundColor; view.displaysPageBreaks = true; view.pageBreakMargins = NSEdgeInsets(top:16,left:16,bottom:16,right:16)
         view.document = session.pdf
         return view
     }

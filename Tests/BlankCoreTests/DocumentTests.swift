@@ -78,6 +78,13 @@ final class DocumentTests {
         XCTAssertEqual(between.projection.displayOffset(at:between.selection.focus),6)
         between.editWrite(NSRange(location:6,length:0),text:"Middle")
         XCTAssertEqual(between.projection.blocks.map(\.text),["First","Middle","Second"])
+        let heading = DocumentBuffer("= Tutorial\n\nLearn by trying.")
+        let headingEnd = NSMaxRange(heading.projection.blocks[0].display)
+        let sourceEnd = heading.projection.sourceOffset(at:headingEnd)
+        heading.selection = EditSelection(sourceEnd,sourceEnd)
+        heading.split(NSRange(location:headingEnd,length:0))
+        XCTAssertEqual(heading.projection.blocks.map(\.text),["Tutorial","","Learn by trying."])
+        XCTAssertEqual(heading.projection.displayOffset(at:heading.selection.focus),headingEnd+1)
     }
     func testClipboardHeadingAndList() {
         let b = DocumentBuffer("== A *heading*\n\n- An _item_")

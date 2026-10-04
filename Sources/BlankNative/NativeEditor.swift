@@ -88,6 +88,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if textContainerInset != inset { textContainerInset = inset }
         textContainer?.containerSize = NSSize(width:max(80,bounds.width-padding*2),height:CGFloat.greatestFiniteMagnitude)
     }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        lastAppearance = ""
+        DispatchQueue.main.async { [weak self] in self?.refresh() }
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let track { removeTrackingArea(track) }
@@ -117,17 +122,17 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         style.paragraphSpacing = source ? 0 : 18
         let font = source ? NSFont.monospacedSystemFont(ofSize:14,weight:.regular) : readingFont(size:size)
         let baseRange = onlyBlock.map { b.projection.blocks[$0].display } ?? all
-        result.addAttributes([.font:font,.foregroundColor:NSColor(session.ink),.paragraphStyle:style,.ligature:1],range:baseRange)
+        result.addAttributes([.font:font,.foregroundColor:session.inkColor,.paragraphStyle:style,.ligature:1],range:baseRange)
         if source {
             for run in b.parsed.styles {
                 let start = b.source.utf16Offset(byte:run.start), end = b.source.utf16Offset(byte:run.end)
                 guard end > start, end <= result.length else { continue }
                 let color: NSColor
                 switch run.tag {
-                case "Comment": color = NSColor(calibratedWhite:0.57,alpha:1)
-                case "Keyword", "Function": color = NSColor(calibratedRed:0.40,green:0.32,blue:0.52,alpha:1)
-                case "String": color = NSColor(calibratedRed:0.31,green:0.44,blue:0.36,alpha:1)
-                case "Number", "MathOperator", "MathDelimiter": color = NSColor(calibratedRed:0.55,green:0.39,blue:0.29,alpha:1)
+                case "Comment": color = NSColor.secondaryLabelColor
+                case "Keyword", "Function": color = NSColor.systemPurple
+                case "String": color = NSColor.systemGreen
+                case "Number", "MathOperator", "MathDelimiter": color = NSColor.systemOrange
                 default: continue
                 }
                 result.addAttribute(.foregroundColor,value:color,range:NSRange(location:start,length:end-start))
@@ -166,7 +171,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 if paragraphRange.length > 0 { result.addAttribute(.paragraphStyle,value:p,range:paragraphRange) }
                 if range.length > 0 {
                     result.addAttributes([.paragraphStyle:p,.font:raw ? NSFont.monospacedSystemFont(ofSize:13,weight:.regular) : readingFont(size:textSize,bold:block.kind == "heading",italic:block.kind == "quote")],range:range)
-                    if raw { result.addAttribute(.foregroundColor,value:NSColor(session.ink).withAlphaComponent(0.65),range:range) }
+                    if raw { result.addAttribute(.foregroundColor,value:session.inkColor.withAlphaComponent(0.65),range:range) }
                     if block.text == "\u{FFFC}" {
                         let attachment = ObjectAttachment(editor:self,index:index,width:max(160,bounds.width-textContainerInset.width*2))
                         result.addAttribute(.attachment,value:attachment,range:range)
@@ -178,7 +183,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                         let r = NSRange(location:at,length:run.text.utf16.count)
                         if !raw && r.length > 0 {
                             result.addAttribute(.font,value:run.style.code ? NSFont.monospacedSystemFont(ofSize:size*0.83,weight:.regular) : readingFont(size:textSize,bold:run.style.bold || block.kind == "heading",italic:run.style.italic || block.kind == "quote"),range:r)
-                            if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:NSColor(calibratedRed:0.27,green:0.41,blue:0.33,alpha:1)],range:r) }
+                            if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:NSColor.linkColor],range:r) }
                         }
                         at += r.length
                     }
@@ -188,9 +193,12 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         return result
     }
     func refresh(reveal: Bool = false) {
+        effectiveAppearance.performAsCurrentDrawingAppearance { refreshContent(reveal:reveal) }
+    }
+    private func refreshContent(reveal: Bool) {
         guard !composing, !objectEditing, !hasMarkedText(), let session, session.mode != .preview else { return }
         updatePadding()
-        let appearance = "\(session.fontFamily)/\(session.fontSize)/\(session.paragraphFocus)/\(session.paper)/\(session.ink)"
+        let appearance = "\(effectiveAppearance.name.rawValue)/\(session.systemColors)/\(session.fontFamily)/\(session.fontSize)/\(session.paragraphFocus)/\(session.paper)/\(session.ink)"
         guard reveal || lastRevision != session.buffer.revision || lastMode != session.mode || lastPath != session.active || lastAppearance != appearance else { return }
         if lastMode != session.mode {
             if lastMode == .write { inputDefaults = NativeInputDefaults(self) }
@@ -201,11 +209,19 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let localIndex = local ? session.buffer.projection.blockIndex(at:session.buffer.projection.displayOffset(at:session.buffer.selection.focus)) : nil
         if !local { objectViews.values.forEach { $0.removeFromSuperview() }; objectViews.removeAll(); tableViews.removeAll() }
         let attributed = rendered(onlyBlock:localIndex), old = string
+        let displayPatch = SourcePatch.difference(old,attributed.string)
+        if let patch = displayPatch {
+            let start = old.utf16Offset(byte:patch.start)
+            let end = old.utf16Offset(byte:patch.start+patch.removed.utf8.count)
+            // Keep AppKit's selection and input state in the same edit lifecycle
+            // as a native keystroke, even when the source model owns the edit.
+            _ = shouldChangeText(in:NSRange(location:start,length:end-start),replacementString:patch.inserted)
+        }
         var textChanged = false
         // Insert text and attributes in one storage transaction. An attachment
         // character inserted without its attachment can be laid out as plain text.
         textStorage?.beginEditing()
-        if let patch = SourcePatch.difference(old,attributed.string) {
+        if let patch = displayPatch {
             textChanged = true
             let a = old.utf16Offset(byte:patch.start), z = old.utf16Offset(byte:patch.start+patch.removed.utf8.count)
             let start = attributed.string.utf16Offset(byte:patch.start)
@@ -217,6 +233,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             attributed.enumerateAttributes(in:range) { attrs,range,_ in self.textStorage?.setAttributes(attrs,range:range) }
         }
         textStorage?.endEditing()
+        if textChanged { didChangeText() }
         if !local, let manager = textLayoutManager, let range = manager.textContentManager?.documentRange {
             manager.invalidateLayout(for:range)
             manager.ensureLayout(for:visibleRect)
@@ -225,8 +242,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let a = session.mode == .source ? session.buffer.source.utf16Offset(byte:selected.anchor) : session.buffer.projection.displayOffset(at:selected.anchor)
         let z = session.mode == .source ? session.buffer.source.utf16Offset(byte:selected.focus) : session.buffer.projection.displayOffset(at:selected.focus)
         setSelectedRange(NSRange(location:min(a,z),length:abs(z-a)))
-        typingAttributes = [.font:session.mode == .source ? NSFont.monospacedSystemFont(ofSize:14,weight:.regular) : readingFont(size:CGFloat(session.fontSize)),.foregroundColor:NSColor(session.ink),.ligature:1]
-        backgroundColor = NSColor(session.paper); insertionPointColor = NSColor(session.ink)
+        typingAttributes = [.font:session.mode == .source ? NSFont.monospacedSystemFont(ofSize:14,weight:.regular) : readingFont(size:CGFloat(session.fontSize)),.foregroundColor:session.inkColor,.ligature:1]
+        backgroundColor = session.paperColor; insertionPointColor = session.systemColors ? .textInsertionPointColor : session.inkColor
         enclosingScrollView?.backgroundColor = backgroundColor
         lastRevision = session.buffer.revision; lastMode = session.mode; lastPath = session.active; lastAppearance = appearance
         setAccessibilityLabel("\(session.mode.rawValue) editor")
@@ -235,10 +252,17 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if session.typewriter { centerSelectionInVisibleArea(self) }
         updateSlash()
         positionObjects()
-        // Model transactions bypass NSTextView's normal edit completion. Finish
-        // the native notification and insertion-point lifecycle explicitly.
-        if textChanged { didChangeText() }
+        // Restart AppKit's insertion point after layout and the final selection.
         updateInsertionPointStateAndRestartTimer(true)
+        // keyDown can finish its own insertion-point bookkeeping after the
+        // command returns. Reconcile on the next main-loop turn, using the
+        // current selection so later keys and composition are never overwritten.
+        if textChanged {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window?.firstResponder === self, !self.hasMarkedText() else { return }
+                self.updateInsertionPointStateAndRestartTimer(true)
+            }
+        }
     }
     override func layout() { super.layout(); positionObjects() }
     func positionObjects() {
@@ -562,17 +586,17 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             let r = rectFor(b.display.location)
             guard r.intersects(visibleRect) else { continue }
             let label = b.kind == "bullet" ? "•" : "\(listNumber(index))."
-            (label as NSString).draw(at:NSPoint(x:textContainerInset.width,y:r.minY),withAttributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:NSColor(session.ink).withAlphaComponent(0.6)])
+            (label as NSString).draw(at:NSPoint(x:textContainerInset.width,y:r.minY),withAttributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:session.inkColor.withAlphaComponent(0.6)])
         }
         if let grabbed, draggingBlock {
             let raw = session.buffer.projection.blocks[grabbed].text
-            let preview = NSAttributedString(string:raw,attributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:NSColor(session.ink).withAlphaComponent(0.45)])
+            let preview = NSAttributedString(string:raw,attributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:session.inkColor.withAlphaComponent(0.45)])
             if let dragImage { dragImage.draw(in:NSRect(x:dragPoint.x+18,y:dragPoint.y+12,width:min(550,dragImage.size.width),height:dragImage.size.height),from:.zero,operation:.sourceOver,fraction:0.45,respectFlipped:true,hints:nil) }
             else { preview.draw(in:NSRect(x:dragPoint.x+18,y:dragPoint.y+12,width:350,height:150)) }
-            if let line = dropIndicatorRect() { NSColor(session.ink).withAlphaComponent(0.45).setFill(); line.fill() }
+            if let line = dropIndicatorRect() { session.inkColor.withAlphaComponent(0.45).setFill(); line.fill() }
         } else if let index = grabbed ?? hoverBlock {
             let rect = rectFor(session.buffer.projection.blocks[index].display.location)
-            NSColor(session.ink).withAlphaComponent(0.45).setFill()
+            session.inkColor.withAlphaComponent(0.45).setFill()
             for row in 0..<3 { for column in 0..<2 { NSBezierPath(ovalIn:NSRect(x:textContainerInset.width-26+CGFloat(column*5),y:rect.midY-6+CGFloat(row*5),width:3,height:3)).fill() } }
         }
     }

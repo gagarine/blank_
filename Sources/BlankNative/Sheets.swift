@@ -85,14 +85,15 @@ struct SettingsSheet: View {
             Form {
                 Picker("Reading font",selection:$session.fontFamily) { ForEach(fonts,id:\.self) { Text($0).tag($0) } }
                 HStack { Text("Text size"); Slider(value:$session.fontSize,in:13...28,step:1); Text("\(Int(session.fontSize)) pt").monospacedDigit().frame(width:45) }
-                ColorPicker("Page",selection:$session.paper,supportsOpacity:false)
-                ColorPicker("Text",selection:$session.ink,supportsOpacity:false)
-                Toggle("Dark appearance",isOn:$session.dark).onChange(of:session.dark) { _,dark in session.paper = dark ? Color(nsColor:NSColor(calibratedWhite:0.11,alpha:1)) : .white; session.ink = dark ? Color(nsColor:NSColor(calibratedWhite:0.87,alpha:1)) : Color(nsColor:NSColor(calibratedWhite:0.20,alpha:1)) }
+                Toggle("Use system colors",isOn:$session.systemColors)
+                ColorPicker("Page",selection:$session.paper,supportsOpacity:false).disabled(session.systemColors)
+                ColorPicker("Text",selection:$session.ink,supportsOpacity:false).disabled(session.systemColors)
+                Toggle("Dark appearance",isOn:$session.dark)
                 Toggle("Paragraph focus",isOn:$session.paragraphFocus)
                 Toggle("Typewriter scrolling",isOn:$session.typewriter)
-            }.formStyle(.grouped).frame(height:340)
+            }.formStyle(.grouped).frame(height:370)
             Text("Source uses the system monospace face. PDF typography is controlled by your Typst source.").font(.system(size:11)).foregroundStyle(.secondary)
-            HStack { Spacer(); Button("Done") { UserDefaults.standard.set(session.fontFamily,forKey:"readingFont"); UserDefaults.standard.set(session.fontSize,forKey:"readingSize"); EditorPreferences.store(session.paper,key:"paper"); EditorPreferences.store(session.ink,key:"ink"); UserDefaults.standard.set(session.dark,forKey:"dark"); session.sheet = nil; session.editor?.lastAppearance = ""; session.editor?.refresh() }.keyboardShortcut(.defaultAction) }
+            HStack { Spacer(); Button("Done") { UserDefaults.standard.set(session.fontFamily,forKey:"readingFont"); UserDefaults.standard.set(session.fontSize,forKey:"readingSize"); UserDefaults.standard.set(session.systemColors,forKey:"systemColors"); EditorPreferences.store(session.paper,key:"paper"); EditorPreferences.store(session.ink,key:"ink"); UserDefaults.standard.set(session.dark,forKey:"dark"); session.sheet = nil; session.editor?.lastAppearance = ""; session.editor?.refresh() }.keyboardShortcut(.defaultAction) }
         }
     }
 }

@@ -53,12 +53,13 @@ final class TableBlockView: NSView, NSTextFieldDelegate {
             let model = DocumentBuffer(session.buffer.source.bytes(span))
             let field = TableCellField(); field.index = i; field.model = model; field.stringValue = model.projection.text
             field.isBordered = false; field.drawsBackground = false; field.isEditable = true; field.isSelectable = true
+            field.textColor = session.inkColor
             field.font = editor.readingFont(size:CGFloat(session.fontSize)*0.85,bold:i < columns)
             field.cell?.wraps = true; field.cell?.isScrollable = false; field.lineBreakMode = .byWordWrapping
             field.delegate = self; field.setAccessibilityLabel("Table row \(i/columns+1), column \(i%columns+1)")
             addSubview(field); fields.append(field)
         }
-        let controls = NSButton(title:"Table options…",target:self,action:#selector(options(_:))); controls.isBordered = false; controls.font = .systemFont(ofSize:10); controls.contentTintColor = .secondaryLabelColor
+        let controls = NSButton(title:"Table options…",target:self,action:#selector(options(_:))); controls.isBordered = false; controls.font = .systemFont(ofSize:10); controls.contentTintColor = session.systemColors ? .secondaryLabelColor : session.inkColor.withAlphaComponent(0.65)
         controls.frame = NSRect(x:0,y:frame.height-27,width:115,height:24); addSubview(controls)
         layoutFields()
     }
@@ -69,7 +70,7 @@ final class TableBlockView: NSView, NSTextFieldDelegate {
     }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        NSColor.separatorColor.withAlphaComponent(0.6).setStroke()
+        (editor?.session?.inkColor ?? .labelColor).withAlphaComponent(0.22).setStroke()
         let path = NSBezierPath(); path.lineWidth = 0.5
         let rows = (fields.count+columns-1)/columns
         for row in 0...rows { let y = CGFloat(row)*54+7; path.move(to:NSPoint(x:0,y:y)); path.line(to:NSPoint(x:bounds.width,y:y)) }
@@ -142,7 +143,7 @@ final class FigureBlockView: NSView {
         let parsed = ParsedSource.parse(raw)
         let caption = parsed.tree.descendants("Named").first { raw.bytes($0.span).hasPrefix("caption:") }?.descendants("ContentBlock").first?.markup
         let text = caption.map { DocumentBuffer(raw.bytes($0.span)).projection.text } ?? (imageView.image == nil ? "Figure unavailable · Edit source to check the path" : "")
-        let label = NSTextField(wrappingLabelWithString:text); label.font = editor.readingFont(size:14,italic:true); label.textColor = .secondaryLabelColor; label.alignment = .center
+        let label = NSTextField(wrappingLabelWithString:text); label.font = editor.readingFont(size:14,italic:true); label.textColor = session.systemColors ? .secondaryLabelColor : session.inkColor.withAlphaComponent(0.65); label.alignment = .center
         label.frame = NSRect(x:20,y:frame.height-57,width:frame.width-40,height:40); addSubview(label)
         setAccessibilityLabel("Figure: "+text)
     }
