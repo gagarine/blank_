@@ -1,0 +1,36 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
+export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/module-cache"
+mkdir -p "$CLANG_MODULE_CACHE_PATH" .build/cache
+cargo build --offline --release --locked --manifest-path typst-syntax-bridge/Cargo.toml
+cargo build --offline --release --locked --manifest-path helper/Cargo.toml
+configuration=${1:-debug}
+swift build --disable-sandbox --cache-path .build/cache -c "$configuration"
+app="$PWD/build/blank_.app"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+cp ".build/$configuration/blank_" "$app/Contents/MacOS/blank_"
+cp typst-syntax-bridge/target/release/libblank_syntax.dylib "$app/Contents/MacOS/"
+cp helper/target/release/writer-helper "$app/Contents/MacOS/"
+cp examples/Tutorial.typ "$app/Contents/Resources/"
+install_name_tool -id @rpath/libblank_syntax.dylib "$app/Contents/MacOS/libblank_syntax.dylib"
+install_name_tool -change "$PWD/typst-syntax-bridge/target/release/libblank_syntax.dylib" @rpath/libblank_syntax.dylib "$app/Contents/MacOS/blank_"
+cat > "$app/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>blank_</string>
+<key>CFBundleDisplayName</key><string>blank_</string>
+<key>CFBundleIdentifier</key><string>local.blank.swift-native</string>
+<key>CFBundleExecutable</key><string>blank_</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Typst document</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSItemContentTypes</key><array><string>public.plain-text</string></array><key>CFBundleTypeExtensions</key><array><string>typ</string></array></dict></array>
+</dict></plist>
+PLIST
+codesign --force --deep --sign - "$app"
+codesign --verify --deep --strict "$app"
