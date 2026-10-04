@@ -1,4 +1,5 @@
 mod commands;
+mod confirmation;
 mod editor;
 #[cfg(target_os = "macos")]
 mod menus;
@@ -37,6 +38,9 @@ struct App {
     bookmark: usize,
     source_focus: bool,
     source_new_step: bool,
+    source_history_selection: Option<blank_document::SourceSelection>,
+    source_last_selection: Option<blank_document::SourceSelection>,
+    source_last_delete: bool,
     last_edit: Instant,
     seen_revision: u64,
     compiler: preview::Compiler,
@@ -54,7 +58,7 @@ struct App {
     zoom: f32,
     error: Option<String>,
     conflict: bool,
-    message_dialog: rfd::MessageDialog,
+    confirmation: confirmation::Confirmation,
     file_dialog: rfd::FileDialog,
     window_title: String,
     picker: Picker,
@@ -66,6 +70,7 @@ struct App {
     slash_start: Option<blank_document::Position>,
     caret_anchor: Option<egui::Pos2>,
     dragging_block: Option<usize>,
+    drag_offset: egui::Vec2,
     block_menu: Option<(usize, egui::Pos2)>,
     block_transform: bool,
     #[cfg(test)]
@@ -84,6 +89,9 @@ impl App {
         style.visuals.window_fill = Color32::WHITE;
         style.visuals.override_text_color = Some(Color32::from_rgb(52, 58, 55));
         style.visuals.text_cursor.stroke = egui::Stroke::new(2.0, Color32::from_rgb(52, 58, 55));
+        // A gentle coverage adjustment gives small serif strokes presence on white.
+        style.visuals.text_options.color_transfer_function =
+            egui::epaint::FontColorTransferFunction::Gamma(0.85);
         // Standard egui components with the app's quiet palette.
         ctx.set_global_style(style);
         let reading_faces = typography::install(ctx);
@@ -101,6 +109,9 @@ impl App {
             bookmark: 0,
             source_focus: false,
             source_new_step: true,
+            source_history_selection: None,
+            source_last_selection: None,
+            source_last_delete: false,
             last_edit: Instant::now(),
             seen_revision: 0,
             compiler: preview::Compiler::new(ctx.clone()),
@@ -118,7 +129,7 @@ impl App {
             zoom: 1.0,
             error: None,
             conflict: false,
-            message_dialog: rfd::MessageDialog::new().set_parent(cc),
+            confirmation: confirmation::Confirmation::new(cc),
             file_dialog: rfd::FileDialog::new().set_parent(cc),
             window_title: String::new(),
             picker: Picker::default(),
@@ -130,6 +141,7 @@ impl App {
             slash_start: None,
             caret_anchor: None,
             dragging_block: None,
+            drag_offset: egui::Vec2::ZERO,
             block_menu: None,
             block_transform: false,
             #[cfg(test)]
@@ -181,6 +193,8 @@ impl App {
         self.restore_focus = true;
         self.last_input = Instant::now();
         self.source_new_step = true;
+        self.source_history_selection = None;
+        self.source_last_selection = None;
         self.pages.clear();
         self.pdf.clear();
         self.preview_revision = None;
@@ -383,22 +397,12 @@ impl App {
             return true;
         }
         let answer = self
-            .message_dialog
-            .clone()
-            .set_title("Save your writing?")
-            .set_description("Save changes before opening another document.")
-            .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
-                "Save".into(),
-                "Discard".into(),
-                "Keep writing".into(),
-            ))
-            .show();
+            .confirmation
+            .ask("Save changes before opening another document.", false);
         match answer {
-            rfd::MessageDialogResult::Yes => self.save(false),
-            rfd::MessageDialogResult::No => true,
-            rfd::MessageDialogResult::Custom(label) if label == "Save" => self.save(false),
-            rfd::MessageDialogResult::Custom(label) if label == "Discard" => true,
-            _ => false,
+            confirmation::Choice::Save => self.save(false),
+            confirmation::Choice::Discard => true,
+            confirmation::Choice::Cancel => false,
         }
     }
     fn open(&mut self) {
@@ -441,10 +445,16 @@ impl App {
             self.source_new_step = true;
             self.changed();
             self.source_focus = self.mode == Mode::Source;
-            if self.mode == Mode::Write {
-                self.editor.select(Selection::caret(editor_position(
-                    self.model.document.position_at(self.bookmark),
-                )));
+            if let Some(selection) = self.model.document.history_selection() {
+                self.bookmark = selection.focus;
+                if self.mode == Mode::Write {
+                    self.editor.select(Selection {
+                        anchor: editor_position(self.model.document.position_at(selection.anchor)),
+                        focus: editor_position(self.model.document.position_at(selection.focus)),
+                    });
+                } else if self.mode == Mode::Source {
+                    self.source_history_selection = Some(selection);
+                }
             }
         }
     }
@@ -558,7 +568,11 @@ impl App {
             .filter(|&c| {
                 self.enabled(c)
                     && c != Command::Palette
-                    && (!self.picker.slash || c.block().is_some())
+                    && (if self.picker.slash {
+                        c.formatting()
+                    } else {
+                        !c.formatting()
+                    })
                     && words.iter().all(|w| c.label().to_lowercase().contains(w))
             })
             .collect()
@@ -574,9 +588,9 @@ impl App {
                 .document
                 .replace(from, to, "", false)
                 .and_then(|pos| {
-                    self.model
-                        .document
-                        .set_kind_step(pos, command.block().unwrap(), false)?;
+                    if let Some(kind) = command.block() {
+                        self.model.document.set_kind_step(pos, kind, false)?;
+                    }
                     Ok(pos)
                 });
             match result {
@@ -586,6 +600,9 @@ impl App {
                 }
                 Err(e) => self.error = Some(e),
             }
+        }
+        if matches!(command, Command::Bold | Command::Italic) {
+            self.execute(command, ctx);
         }
         self.restore_editor_focus(ctx);
     }
@@ -955,6 +972,15 @@ impl App {
                     Command::Bullet,
                     Command::Numbered,
                 ] {
+                    if self
+                        .model
+                        .document
+                        .paragraphs
+                        .get(index)
+                        .is_some_and(|p| Some(&p.kind) == command.block().as_ref())
+                    {
+                        continue;
+                    }
                     if ui.button(command.label()).clicked() {
                         action = Some(command);
                     }
@@ -1011,6 +1037,8 @@ impl App {
     }
     fn writing(&mut self, ui: &mut egui::Ui) {
         let mut drop_target = None;
+        let mut drag_preview = None;
+        let mut handle_cursor = None;
         let mut bounds = Vec::new();
         #[cfg(test)]
         self.block_rects.clear();
@@ -1025,8 +1053,22 @@ impl App {
                     ui.add_space(margin);
                     ui.vertical(|ui| {
                         ui.set_width(width);
+                        ui.spacing_mut().item_spacing.y = 0.0;
                         ui.add_space(48.0);
+                        let mut previous = None;
+                        let mut first = true;
                         for block in self.model.document.blocks.clone() {
+                            let current = match &block {
+                                Block::Editable(index) => {
+                                    Some(&self.model.document.paragraphs[*index].kind)
+                                }
+                                Block::Source { .. } => None,
+                            };
+                            if !first {
+                                ui.add_space(typography::block_gap(previous, current));
+                            }
+                            first = false;
+                            previous = current;
                             match block {
                                 Block::Source { range, kind } => {
                                     let raw = self.model.document.text()[range.clone()].to_owned();
@@ -1046,23 +1088,34 @@ impl App {
                                             });
                                     });
                                     bounds.push((None, response.response.rect));
-                                    ui.add_space(8.0);
                                 }
                                 Block::Editable(index) => {
                                     let p = &self.model.document.paragraphs[index];
-                                    if index > 0 && matches!(p.kind, BlockKind::Heading(_)) {
-                                        ui.add_space(18.0);
-                                    }
                                     let number = 1 + self.model.document.paragraphs[..index]
                                         .iter()
                                         .rev()
                                         .take_while(|p| matches!(p.kind, BlockKind::Numbered))
                                         .count();
+                                    let marker =
+                                        typography::list_marker(&p.kind, number).map(|text| {
+                                            ui.fonts_mut(|fonts| {
+                                                fonts.layout_no_wrap(
+                                                    text,
+                                                    egui::FontId::new(
+                                                        18.0,
+                                                        egui::FontFamily::Name("reading".into()),
+                                                    ),
+                                                    Color32::from_rgb(126, 132, 128),
+                                                )
+                                            })
+                                        });
+                                    let indent = marker
+                                        .as_ref()
+                                        .map_or(0.0, |g| (g.size().x + 12.0).max(26.0));
                                     let job = typography::paragraph(
                                         p,
-                                        width - 24.0,
+                                        width - indent,
                                         self.reading_faces,
-                                        number,
                                     );
                                     let (job, map) = job.into_parts();
                                     let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
@@ -1070,6 +1123,35 @@ impl App {
                                         vec2(width, galley.size().y),
                                         Sense::click_and_drag(),
                                     );
+                                    let opacity = ui.painter().opacity();
+                                    if self.dragging_block == Some(index) {
+                                        ui.multiply_opacity(0.3);
+                                    }
+                                    let origin = rect.min + vec2(indent, 0.0);
+                                    let mut marker_position = None;
+                                    if let Some(marker) = &marker {
+                                        let first = &galley.rows[0];
+                                        let marker_row = &marker.rows[0];
+                                        let marker_baseline =
+                                            marker_row.pos.y + marker_row.glyphs[0].pos.y;
+                                        let baseline = first.pos.y
+                                            + first.glyphs.first().map_or(
+                                                (first.size.y - marker_row.size.y) / 2.0
+                                                    + marker_baseline,
+                                                |glyph| glyph.pos.y,
+                                            );
+                                        let pos = rect.min
+                                            + vec2(
+                                                indent - 12.0 - marker.size().x,
+                                                baseline - marker_baseline,
+                                            );
+                                        ui.painter().galley(
+                                            pos,
+                                            marker.clone(),
+                                            Color32::PLACEHOLDER,
+                                        );
+                                        marker_position = Some(pos);
+                                    }
                                     bounds.push((Some(index), rect));
                                     if let Some(selection) = self.editor.selection()
                                         && selection.focus.paragraph == index
@@ -1090,7 +1172,7 @@ impl App {
                                             ));
                                         let caret = galley
                                             .pos_from_cursor(cursor)
-                                            .translate(rect.min.to_vec2());
+                                            .translate(origin.to_vec2());
                                         self.caret_anchor =
                                             Some(caret.left_bottom() + vec2(0.0, 6.0));
                                     }
@@ -1103,7 +1185,7 @@ impl App {
                                         Laid {
                                             galley: galley.clone(),
                                             map,
-                                            origin: rect.min,
+                                            origin,
                                         },
                                     );
                                     ui.visuals_mut().text_cursor.stroke = cursor_stroke;
@@ -1122,7 +1204,7 @@ impl App {
                                         typography::paint_caret(
                                             ui,
                                             &galley,
-                                            rect.min,
+                                            origin,
                                             transform.inverse() * caret,
                                             self.last_input.elapsed().as_secs_f32(),
                                         );
@@ -1131,9 +1213,10 @@ impl App {
                                         .pos_from_cursor(egui::text::CCursor::new(
                                             egui::text::CharIndex::ZERO,
                                         ))
-                                        .translate(rect.min.to_vec2());
+                                        .translate(origin.to_vec2());
+                                    ui.set_opacity(opacity);
                                     let line_center =
-                                        typography::caret_rect(&galley, rect.min, first_line, 2.0)
+                                        typography::caret_rect(&galley, origin, first_line, 2.0)
                                             .center()
                                             .y;
                                     let handle_rect = egui::Rect::from_center_size(
@@ -1150,15 +1233,30 @@ impl App {
                                         Id::new(("block-handle", index)),
                                         Sense::click_and_drag(),
                                     );
+                                    let pressed = ui.input(|i| {
+                                        i.pointer.primary_down()
+                                            && i.pointer
+                                                .press_origin()
+                                                .is_some_and(|pos| handle_rect.contains(pos))
+                                    });
+                                    if self.dragging_block.is_some() || pressed {
+                                        handle_cursor = Some(egui::CursorIcon::Grabbing);
+                                    } else if handle.hovered() {
+                                        handle_cursor = Some(egui::CursorIcon::Grab);
+                                    }
                                     let hovering = ui.input(|i| {
                                         i.pointer.hover_pos().is_some_and(|pos| {
                                             rect.union(handle_rect).contains(pos)
                                         })
                                     });
-                                    if hovering
-                                        || self.dragging_block == Some(index)
-                                        || self.block_menu.is_some_and(|(i, _)| i == index)
-                                    {
+                                    let show_handle = match self.dragging_block {
+                                        Some(dragged) => dragged == index,
+                                        None => {
+                                            hovering
+                                                || self.block_menu.is_some_and(|(i, _)| i == index)
+                                        }
+                                    };
+                                    if show_handle {
                                         handle.widget_info(|| {
                                             egui::WidgetInfo::labeled(
                                                 egui::WidgetType::Button,
@@ -1179,17 +1277,25 @@ impl App {
                                     }
                                     if handle.drag_started() {
                                         self.dragging_block = Some(index);
+                                        self.drag_offset = ui
+                                            .input(|i| i.pointer.press_origin())
+                                            .unwrap_or(handle_rect.center())
+                                            - rect.min;
                                         self.block_menu = None;
+                                        handle_cursor = Some(egui::CursorIcon::Grabbing);
                                     }
                                     if handle.clicked() {
                                         self.block_menu = Some((index, handle_rect.left_bottom()));
                                         self.block_transform = false;
                                     }
-                                    ui.add_space(if matches!(p.kind, BlockKind::Heading(_)) {
-                                        22.0
-                                    } else {
-                                        23.0
-                                    });
+                                    if self.dragging_block == Some(index) {
+                                        drag_preview = Some((
+                                            rect,
+                                            origin,
+                                            galley,
+                                            marker.zip(marker_position),
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -1243,6 +1349,25 @@ impl App {
                     }
                 }
             });
+        if let Some(cursor) = handle_cursor {
+            ui.ctx().set_cursor_icon(cursor);
+        }
+        if let Some((rect, origin, galley, marker)) = drag_preview
+            && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
+            && !ui.input(|i| i.pointer.any_released())
+        {
+            let offset = pointer - self.drag_offset - rect.min;
+            let mut painter = ui.ctx().layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip,
+                Id::new("block-drag-preview"),
+            ));
+            painter.set_opacity(0.72);
+            painter.rect_filled(rect.translate(offset).expand(8.0), 6, Color32::WHITE);
+            painter.galley(origin + offset, galley, Color32::PLACEHOLDER);
+            if let Some((marker, pos)) = marker {
+                painter.galley(pos + offset, marker, Color32::PLACEHOLDER);
+            }
+        }
         if ui.input(|i| i.pointer.any_released())
             && let Some(from) = self.dragging_block.take()
             && let Some((to, after)) = drop_target
@@ -1286,22 +1411,33 @@ impl App {
                     {
                         let mut state =
                             egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-                        let byte = self.bookmark.min(self.source_buffer.len());
-                        let char_index = self
-                            .source_buffer
-                            .char_indices()
-                            .take_while(|(i, _)| *i < byte)
-                            .count();
+                        let selection = self.source_history_selection.take().unwrap_or(
+                            blank_document::SourceSelection {
+                                anchor: self.bookmark,
+                                focus: self.bookmark,
+                            },
+                        );
+                        let cursor = |byte| {
+                            egui::text::CCursor::new(egui::text::CharIndex(
+                                self.source_buffer
+                                    .char_indices()
+                                    .take_while(|(i, _)| *i < byte)
+                                    .count(),
+                            ))
+                        };
                         state
                             .cursor
-                            .set_char_range(Some(egui::text::CCursorRange::one(
-                                egui::text::CCursor::new(egui::text::CharIndex(char_index)),
+                            .set_char_range(Some(egui::text::CCursorRange::two(
+                                cursor(selection.anchor),
+                                cursor(selection.focus),
                             )));
                         state.store(ui.ctx(), id);
                     }
                     ui.memory_mut(|m| m.request_focus(id));
                     self.source_focus = false;
                 }
+                let previous_cursor = egui::TextEdit::load_state(ui.ctx(), id)
+                    .and_then(|state| state.cursor.char_range());
                 let paired = if self.picker.open {
                     None
                 } else {
@@ -1336,6 +1472,9 @@ impl App {
                     output.cursor_range = Some(cursor);
                     ui.ctx().request_repaint();
                 }
+                // The document owns shared Write/Source history. Do not retain
+                // TextEdit's separate whole-string snapshots as well.
+                output.state.clear_undoer();
                 if let Some(cursor) = output.cursor_range {
                     if output.response.has_focus() {
                         let caret = output
@@ -1357,12 +1496,56 @@ impl App {
                         .map_or(self.source_buffer.len(), |(i, _)| i);
                 }
                 if output.response.changed() {
-                    let new_step =
-                        self.source_new_step || self.last_edit.elapsed() > Duration::from_secs(1);
+                    let structural = ui.input(|input| {
+                        input.events.iter().any(|event| {
+                            matches!(event, egui::Event::Paste(_) | egui::Event::Cut)
+                                || matches!(
+                                    event,
+                                    egui::Event::Key {
+                                        key: Key::Enter,
+                                        pressed: true,
+                                        ..
+                                    }
+                                )
+                        })
+                    });
+                    let selection = |text: &str, cursor: egui::text::CCursorRange| {
+                        let byte = |index| {
+                            text.char_indices()
+                                .nth(index)
+                                .map_or(text.len(), |(i, _)| i)
+                        };
+                        blank_document::SourceSelection {
+                            anchor: byte(cursor.secondary.index.0),
+                            focus: byte(cursor.primary.index.0),
+                        }
+                    };
+                    let before =
+                        previous_cursor.map(|cursor| selection(self.model.document.text(), cursor));
+                    let deleting = self.source_buffer.len() < self.model.document.text().len();
+                    let new_step = self.source_new_step
+                        || structural
+                        || self.last_edit.elapsed() > Duration::from_secs(1)
+                        || before.is_some_and(|before| {
+                            before.anchor != before.focus
+                                || self
+                                    .source_last_selection
+                                    .is_some_and(|last| last != before)
+                        })
+                        || deleting != self.source_last_delete;
                     self.model
                         .document
                         .replace_source(&self.source_buffer, new_step);
-                    self.source_new_step = false;
+                    if let Some(before) = before
+                        && let Some(cursor) = output.cursor_range
+                    {
+                        self.model
+                            .document
+                            .record_selection(before, selection(&self.source_buffer, cursor));
+                        self.source_last_selection = Some(selection(&self.source_buffer, cursor));
+                    }
+                    self.source_new_step = structural;
+                    self.source_last_delete = deleting;
                     self.editor.document_replaced();
                 }
             });
@@ -1500,30 +1683,15 @@ impl eframe::App for App {
         if ctx.input(|i| i.viewport().close_requested()) && self.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             let answer = self
-                .message_dialog
-                .clone()
-                .set_title("Save your writing?")
-                .set_description("This document has unsaved changes.")
-                .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
-                    "Save and close".into(),
-                    "Discard and close".into(),
-                    "Keep writing".into(),
-                ))
-                .show();
+                .confirmation
+                .ask("This document has unsaved changes.", true);
             let close = match answer {
-                rfd::MessageDialogResult::Yes => self.save(false),
-                rfd::MessageDialogResult::No => {
+                confirmation::Choice::Save => self.save(false),
+                confirmation::Choice::Discard => {
                     self.disk_text = self.model.document.text().to_owned();
                     true
                 }
-                rfd::MessageDialogResult::Custom(label) if label == "Save and close" => {
-                    self.save(false)
-                }
-                rfd::MessageDialogResult::Custom(label) if label == "Discard and close" => {
-                    self.disk_text = self.model.document.text().to_owned();
-                    true
-                }
-                _ => false,
+                confirmation::Choice::Cancel => false,
             };
             if close {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1822,6 +1990,90 @@ mod app_tests {
         }
     }
     #[test]
+    fn lists_have_hanging_text_and_tighter_spacing_than_paragraphs() {
+        let text = "A long list item with enough words to wrap comfortably across several lines. "
+            .repeat(3);
+        let (ctx, mut app) = setup(&format!("- {text}\n- Second item\n\nFollowing paragraph"));
+        let displayed = app.model.document.paragraphs[0].text();
+        let output = frame(&ctx, &mut app, vec![]);
+        let galley = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.job.text == displayed => Some(t),
+                _ => None,
+            })
+            .expect("list content has its own text layout");
+        assert!(galley.galley.rows.len() > 1);
+        assert!(galley.galley.rows.iter().all(|row| row.pos.x == 0.0));
+        assert!(galley.pos.x >= app.block_rects[0].left() + 26.0);
+        let list_gap = app.block_rects[1].top() - app.block_rects[0].bottom();
+        let paragraph_gap = app.block_rects[2].top() - app.block_rects[1].bottom();
+        assert!(list_gap <= 5.0);
+        assert!(paragraph_gap >= 18.0);
+        app.editor
+            .select(Selection::caret(egui_richedit::Position::new(0, 0)));
+        frame(&ctx, &mut app, vec![egui::Event::Text("New ".into())]);
+        assert!(
+            app.model.document.paragraphs[0]
+                .text()
+                .starts_with("New A long")
+        );
+        assert!(app.model.document.text().starts_with("- New A long"));
+    }
+    #[test]
+    fn undo_redo_restores_the_edit_selection_in_write_and_source() {
+        let (ctx, mut app) = setup("Before after");
+        app.editor
+            .select(Selection::caret(egui_richedit::Position::new(0, 7)));
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("é".into())]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("!".into())]);
+        app.history(false);
+        assert_eq!(app.model.document.text(), "Before after");
+        assert_eq!(app.editor.selection().unwrap().focus.offset, 7);
+        app.history(true);
+        assert_eq!(app.editor.selection().unwrap().focus.offset, 9);
+        app.switch_mode(Mode::Source, &ctx);
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("Ω".into())]);
+        app.history(false);
+        frame(&ctx, &mut app, vec![]);
+        let state = egui::TextEdit::load_state(&ctx, Id::new(SOURCE_ID)).unwrap();
+        let before = state.cursor.char_range().unwrap();
+        app.history(true);
+        frame(&ctx, &mut app, vec![]);
+        let state = egui::TextEdit::load_state(&ctx, Id::new(SOURCE_ID)).unwrap();
+        assert_eq!(
+            state.cursor.char_range().unwrap().primary.index.0,
+            before.primary.index.0 + 1
+        );
+    }
+    #[test]
+    fn source_history_separates_cursor_moves_paste_and_deletion_from_typing() {
+        let (ctx, mut app) = setup("abc");
+        app.switch_mode(Mode::Source, &ctx);
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("X".into())]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("Y".into())]);
+        assert_eq!(app.model.document.text(), "XYabc");
+        frame(&ctx, &mut app, vec![key(Key::ArrowRight)]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("Z".into())]);
+        app.history(false);
+        assert_eq!(app.model.document.text(), "XYabc");
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![egui::Event::Paste("paste".into())]);
+        app.history(false);
+        assert_eq!(app.model.document.text(), "XYabc");
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![key(Key::Backspace)]);
+        frame(&ctx, &mut app, vec![key(Key::Backspace)]);
+        app.history(false);
+        assert_eq!(app.model.document.text(), "XYabc");
+        let state = egui::TextEdit::load_state(&ctx, Id::new(SOURCE_ID)).unwrap();
+        assert!(!state.undoer().has_undo(&Default::default()));
+    }
+    #[test]
     fn outline_indents_and_folds_children_and_keeps_titles_on_one_line() {
         let (ctx, mut app) = setup("= Chapter\n\n== Section\n\n=== Topic\n\n= Next chapter");
         ctx.global_style_mut(|style| style.animation_time = 0.0);
@@ -1853,6 +2105,8 @@ mod app_tests {
         assert!(app.block_menu.is_some());
         assert!(app.block_transform);
         let output = frame(&ctx, &mut app, vec![]);
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.job.text == "Paragraph")));
         click(&ctx, &mut app, text_rect(&output, "← Back").center());
         assert!(!app.block_transform);
         let output = frame(&ctx, &mut app, vec![]);
@@ -1931,7 +2185,7 @@ mod app_tests {
         let rects = app.block_rects.clone();
         let handle = rects[2].left_top() + vec2(-14.0, 15.0);
         frame(&ctx, &mut app, vec![egui::Event::PointerMoved(handle)]);
-        frame(
+        let output = frame(
             &ctx,
             &mut app,
             vec![egui::Event::PointerButton {
@@ -1940,6 +2194,11 @@ mod app_tests {
                 pressed: true,
                 modifiers: Modifiers::NONE,
             }],
+        );
+        assert_eq!(
+            output.platform_output.cursor_icon,
+            egui::CursorIcon::Grabbing,
+            "press closes the hand without waiting for the drag threshold"
         );
         let midpoint = (rects[0].bottom() + rects[1].top()) / 2.0;
         for y in [rects[0].bottom() - 2.0, midpoint, rects[1].top() + 2.0] {
@@ -2048,24 +2307,39 @@ mod app_tests {
         assert_eq!(app.requested_revision, None);
     }
     #[test]
-    fn palette_and_slash_execute_the_shared_block_commands() {
+    fn palette_excludes_formatting_and_slash_applies_block_and_inline_commands() {
         let (ctx, mut app) = setup("Hello");
         frame(&ctx, &mut app, vec![]);
         app.execute(Command::Palette, &ctx);
+        assert!(app.matching_commands().iter().all(|c| !c.formatting()));
         frame(&ctx, &mut app, vec![]);
         frame(&ctx, &mut app, vec![egui::Event::Text("Heading 3".into())]);
-        frame(&ctx, &mut app, vec![key(Key::Enter)]);
-        assert!(!app.picker.open);
-        assert_eq!(app.model.document.text(), "=== Hello");
+        assert!(app.matching_commands().is_empty());
+        frame(&ctx, &mut app, vec![key(Key::Escape)]);
+        app.execute(Command::Heading3, &ctx);
         frame(&ctx, &mut app, vec![]);
+        assert_eq!(app.model.document.text(), "=== Hello");
         frame(&ctx, &mut app, vec![egui::Event::Text("/".into())]);
-        assert!(app.picker.open && app.picker.slash);
         frame(&ctx, &mut app, vec![egui::Event::Text("number".into())]);
         frame(&ctx, &mut app, vec![key(Key::Enter)]);
         assert_eq!(app.model.document.text(), "+ Hello");
         assert!(!app.picker.open);
         app.history(false);
         assert_eq!(app.model.document.text(), "=== Hello");
+        frame(&ctx, &mut app, vec![]);
+        app.load("".into(), None);
+        frame(&ctx, &mut app, vec![]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("/".into())]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("bold".into())]);
+        frame(&ctx, &mut app, vec![key(Key::Enter)]);
+        frame(&ctx, &mut app, vec![egui::Event::Text("Strong".into())]);
+        assert_eq!(app.model.document.paragraphs[0].text(), "Strong");
+        assert!(
+            app.model.document.paragraphs[0]
+                .glyphs
+                .iter()
+                .all(|g| g.bold)
+        );
     }
     #[test]
     fn dismissing_slash_keeps_a_literal_slash_and_search_does_not_edit_source() {
@@ -2268,7 +2542,8 @@ mod app_tests {
         frame(&ctx, &mut app, vec![]);
         let original = app.block_rects.clone();
         let handle = original[1].left_top() + vec2(-14.0, 15.0);
-        frame(&ctx, &mut app, vec![egui::Event::PointerMoved(handle)]);
+        let output = frame(&ctx, &mut app, vec![egui::Event::PointerMoved(handle)]);
+        assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::Grab);
         assert_eq!(
             app.block_rects, original,
             "hover handles must not change paragraph layout"
@@ -2286,6 +2561,51 @@ mod app_tests {
         let destination = original[0].left_top() + vec2(10.0, 2.0);
         frame(&ctx, &mut app, vec![egui::Event::PointerMoved(destination)]);
         assert_eq!(app.dragging_block, Some(1));
+        let output = frame(&ctx, &mut app, vec![]);
+        assert_eq!(
+            output.platform_output.cursor_icon,
+            egui::CursorIcon::Grabbing
+        );
+        let dots: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) if circle.radius == 1.2 => Some(circle),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(dots.len(), 6, "only the grabbed block's handle is visible");
+        assert!(
+            dots.iter()
+                .all(|dot| original[1].y_range().contains(dot.center.y))
+        );
+        let text: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Second" => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text.len(), 2, "paint a source and a floating drag preview");
+        let alpha = |text: &egui::epaint::TextShape| {
+            text.galley
+                .rows
+                .iter()
+                .flat_map(|row| &row.visuals.mesh.vertices)
+                .map(|vertex| vertex.color.a())
+                .max()
+                .unwrap()
+        };
+        assert!(
+            text.iter()
+                .any(|text| alpha(text) < 100 && text.pos.y == original[1].top())
+        );
+        assert!(
+            text.iter().any(|text| alpha(text) > 150
+                && alpha(text) < 200
+                && text.pos.y < original[1].top())
+        );
         frame(
             &ctx,
             &mut app,

@@ -1,5 +1,6 @@
 //! Source-backed document state. GUI types deliberately stay out of this crate.
 
+use std::collections::VecDeque;
 use std::ops::Range;
 use typst_syntax::{
     Source, SyntaxKind, SyntaxNode,
@@ -108,14 +109,62 @@ pub struct Patch {
     pub reparsed: Range<usize>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceSelection {
+    pub anchor: usize,
+    pub focus: usize,
+}
+
+struct SourceEdit {
+    start: usize,
+    removed: String,
+    inserted: String,
+}
+
+struct HistoryStep {
+    edits: Vec<SourceEdit>,
+    before: Option<SourceSelection>,
+    after: Option<SourceSelection>,
+}
+
+impl HistoryStep {
+    fn bytes(&self) -> usize {
+        self.edits
+            .iter()
+            .map(|e| e.removed.len() + e.inserted.len())
+            .sum()
+    }
+    fn push(&mut self, edit: SourceEdit) {
+        if let Some(last) = self.edits.last_mut() {
+            if last.removed.is_empty()
+                && edit.removed.is_empty()
+                && edit.start == last.start + last.inserted.len()
+            {
+                last.inserted.push_str(&edit.inserted);
+                return;
+            }
+            if last.inserted.is_empty()
+                && edit.inserted.is_empty()
+                && edit.start + edit.removed.len() == last.start
+            {
+                last.start = edit.start;
+                last.removed.insert_str(0, &edit.removed);
+                return;
+            }
+        }
+        self.edits.push(edit);
+    }
+}
+
 pub struct Document {
     source: Source,
     pub paragraphs: Vec<Paragraph>,
     pub blocks: Vec<Block>,
     pub revision: u64,
     pub last_patch: Option<Patch>,
-    undo: Vec<Source>,
-    redo: Vec<Source>,
+    undo: VecDeque<HistoryStep>,
+    redo: Vec<HistoryStep>,
+    history_selection: Option<SourceSelection>,
 }
 
 impl Document {
@@ -126,8 +175,9 @@ impl Document {
             blocks: vec![],
             revision: 0,
             last_patch: None,
-            undo: vec![],
+            undo: VecDeque::new(),
             redo: vec![],
+            history_selection: None,
         };
         doc.project();
         doc
@@ -175,14 +225,31 @@ impl Document {
         true
     }
     fn patch(&mut self, range: Range<usize>, insert: &str, new_step: bool) {
-        if new_step || self.undo.is_empty() {
-            self.undo.push(self.source.clone());
-            // A bounded history makes prototype memory use predictable.
-            if self.undo.len() > 200 {
-                self.undo.remove(0);
-            }
+        let removed = self.text()[range.clone()].to_owned();
+        if removed == insert {
+            return;
+        }
+        let branch = !self.redo.is_empty();
+        if new_step || branch || self.undo.is_empty() {
+            self.undo.push_back(HistoryStep {
+                edits: vec![],
+                before: None,
+                after: None,
+            });
         }
         self.redo.clear();
+        self.history_selection = None;
+        self.undo.back_mut().unwrap().push(SourceEdit {
+            start: range.start,
+            removed,
+            inserted: insert.to_owned(),
+        });
+        // Keep at least the latest operation, even if one paste exceeds the budget.
+        while self.undo.len() > 1
+            && (self.undo.len() > 200 || self.history_bytes() > 8 * 1024 * 1024)
+        {
+            self.undo.pop_front();
+        }
         let reparsed = self.source.edit(range.clone(), insert);
         self.last_patch = Some(Patch {
             replaced: range,
@@ -193,26 +260,63 @@ impl Document {
         self.project();
     }
     pub fn undo(&mut self) -> bool {
-        let Some(source) = self.undo.pop() else {
+        let Some(step) = self.undo.pop_back() else {
             return false;
         };
-        self.redo.push(self.source.clone());
-        self.restore(source);
+        for edit in step.edits.iter().rev() {
+            self.source
+                .edit(edit.start..edit.start + edit.inserted.len(), &edit.removed);
+        }
+        self.history_selection = step.before.or_else(|| {
+            step.edits.first().map(|edit| SourceSelection {
+                anchor: edit.start,
+                focus: edit.start,
+            })
+        });
+        self.redo.push(step);
+        self.finish_history();
         true
     }
     pub fn redo(&mut self) -> bool {
-        let Some(source) = self.redo.pop() else {
+        let Some(step) = self.redo.pop() else {
             return false;
         };
-        self.undo.push(self.source.clone());
-        self.restore(source);
+        for edit in &step.edits {
+            self.source
+                .edit(edit.start..edit.start + edit.removed.len(), &edit.inserted);
+        }
+        self.history_selection = step.after.or_else(|| {
+            step.edits.last().map(|edit| SourceSelection {
+                anchor: edit.start + edit.inserted.len(),
+                focus: edit.start + edit.inserted.len(),
+            })
+        });
+        self.undo.push_back(step);
+        self.finish_history();
         true
     }
-    fn restore(&mut self, source: Source) {
-        self.source = source;
+    fn finish_history(&mut self) {
         self.revision += 1;
         self.last_patch = None;
         self.project();
+    }
+    /// Payload retained by history, independent of the document's total size.
+    pub fn history_bytes(&self) -> usize {
+        self.undo
+            .iter()
+            .chain(&self.redo)
+            .map(HistoryStep::bytes)
+            .sum()
+    }
+    pub fn history_selection(&self) -> Option<SourceSelection> {
+        self.history_selection
+    }
+    /// Record source selections around an edit; a group keeps its first selection.
+    pub fn record_selection(&mut self, before: SourceSelection, after: SourceSelection) {
+        if let Some(step) = self.undo.back_mut() {
+            step.before.get_or_insert(before);
+            step.after = Some(after);
+        }
     }
     fn valid(&self, pos: Position) -> Result<&Paragraph, String> {
         self.paragraphs
@@ -566,21 +670,27 @@ impl Document {
         let raw = self.text()[source.clone()]
             .trim_end_matches('\n')
             .to_owned();
-        let mut text = self.text().to_owned();
-        text.replace_range(source.clone(), "");
+        self.patch(source.clone(), "", true);
         let destination = if destination > source.start {
             destination - source.len()
         } else {
             destination
         };
-        let before = if destination > 0 && !text[..destination].ends_with("\n\n") {
+        let before = if destination > 0 && !self.text()[..destination].ends_with("\n\n") {
             "\n\n"
         } else {
             ""
         };
-        let after = if destination < text.len() { "\n\n" } else { "" };
-        text.insert_str(destination, &format!("{before}{raw}{after}"));
-        self.replace_source(&text, true);
+        let after = if destination < self.text().len() {
+            "\n\n"
+        } else {
+            ""
+        };
+        self.patch(
+            destination..destination,
+            &format!("{before}{raw}{after}"),
+            false,
+        );
         Ok(self.position_at(destination + before.len()))
     }
     pub fn set_kind(&mut self, at: Position, kind: BlockKind) -> Result<(), String> {

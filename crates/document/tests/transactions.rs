@@ -1,6 +1,61 @@
 use blank_document::{BlockKind, Document, Mark, Position as P, minimal_patch};
 
 #[test]
+fn history_keeps_small_utf8_deltas_groups_typing_and_branches_after_undo() {
+    let original = format!("Start\n\n{}", "unchanged paragraph\n\n".repeat(1000));
+    let mut doc = Document::new(&original);
+    let mut at = P::new(0, 5);
+    for (index, c) in " café".chars().enumerate() {
+        at = doc.replace(at, at, &c.to_string(), index == 0).unwrap();
+    }
+    assert!(
+        doc.history_bytes() < 32,
+        "typing must retain the edit, not a document snapshot"
+    );
+    let edited = doc.text().to_owned();
+    assert!(doc.undo());
+    assert_eq!(doc.text(), original);
+    assert!(doc.redo());
+    assert_eq!(doc.text(), edited);
+    assert!(doc.undo());
+    doc.replace(P::new(0, 5), P::new(0, 5), "!", false).unwrap();
+    assert!(!doc.can_redo());
+    assert!(doc.undo());
+    assert_eq!(doc.text(), original);
+}
+
+#[test]
+fn moving_a_block_retains_only_that_block_and_undoes_both_edits() {
+    let original = format!("First\n\n{}Last", "Middle\n\n".repeat(500));
+    let mut doc = Document::new(&original);
+    let last = doc.paragraphs.len() - 1;
+    doc.move_block(0, last, true).unwrap();
+    assert!(doc.history_bytes() < 32);
+    let moved = doc.text().to_owned();
+    assert!(doc.undo());
+    assert_eq!(doc.text(), original);
+    assert!(doc.redo());
+    assert_eq!(doc.text(), moved);
+}
+
+#[test]
+fn grouped_deletions_and_invalid_source_round_trip_without_snapshots() {
+    let mut doc = Document::new("Café Ω");
+    doc.replace_source("Café ", true);
+    doc.replace_source("Café", false);
+    doc.replace_source("Caf", false);
+    assert!(doc.undo());
+    assert_eq!(doc.text(), "Café Ω");
+    assert!(doc.redo());
+    assert_eq!(doc.text(), "Caf");
+    doc.replace_source("#strong[unfinished", true);
+    assert!(doc.undo());
+    assert_eq!(doc.text(), "Caf");
+    assert!(doc.redo());
+    assert_eq!(doc.text(), "#strong[unfinished");
+}
+
+#[test]
 fn clipboard_fragments_keep_heading_level_nested_marks_and_one_undo_step() {
     let source = "== Café *bold _title_*\n\n#set text(size: 11pt)";
     let original = Document::new(source);

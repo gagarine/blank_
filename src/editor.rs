@@ -1,4 +1,6 @@
-use blank_document::{BlockKind, Document, Mark as DocumentMark, Position as DocumentPosition};
+use blank_document::{
+    BlockKind, Document, Mark as DocumentMark, Position as DocumentPosition, SourceSelection,
+};
 use egui_richedit::{Edit, Fragment, Mark, Model, Position};
 
 pub struct EditorModel {
@@ -113,11 +115,26 @@ impl Model for EditorModel {
         new_step: bool,
     ) -> Option<Position<usize>> {
         let fragment = fragment.get::<blank_document::Fragment>()?;
+        let byte = self.document.source_offset(position(at));
+        let before = SourceSelection {
+            anchor: byte,
+            focus: byte,
+        };
         match self
             .document
             .paste_fragment(position(at), fragment, new_step)
         {
-            Ok(at) => Some(editor_position(at)),
+            Ok(at) => {
+                let byte = self.document.source_offset(at);
+                self.document.record_selection(
+                    before,
+                    SourceSelection {
+                        anchor: byte,
+                        focus: byte,
+                    },
+                );
+                Some(editor_position(at))
+            }
             Err(error) => {
                 self.error = Some(error);
                 None
@@ -125,6 +142,24 @@ impl Model for EditorModel {
         }
     }
     fn apply(&mut self, edit: Edit<'_, usize>, new_step: bool) -> Option<Position<usize>> {
+        let before = match &edit {
+            Edit::Replace { from, to, .. } | Edit::Format { from, to, .. } => SourceSelection {
+                anchor: self.document.source_offset(position(from)),
+                focus: self.document.source_offset(position(to)),
+            },
+            Edit::Split { at } => {
+                let byte = self.document.source_offset(position(at));
+                SourceSelection {
+                    anchor: byte,
+                    focus: byte,
+                }
+            }
+        };
+        let formatting_from = match &edit {
+            Edit::Format { from, .. } => Some(position(from)),
+            _ => None,
+        };
+        let revision = self.document.revision;
         let result = match edit {
             Edit::Replace { from, to, text } => self
                 .document
@@ -146,7 +181,24 @@ impl Model for EditorModel {
             }
         };
         match result {
-            Ok(p) => Some(editor_position(p)),
+            Ok(p) => {
+                if revision != self.document.revision {
+                    let byte = self.document.source_offset(p);
+                    let after = if let Some(from) = formatting_from {
+                        SourceSelection {
+                            anchor: self.document.source_offset(from),
+                            focus: byte,
+                        }
+                    } else {
+                        SourceSelection {
+                            anchor: byte,
+                            focus: byte,
+                        }
+                    };
+                    self.document.record_selection(before, after);
+                }
+                Some(editor_position(p))
+            }
             Err(e) => {
                 self.error = Some(e);
                 None

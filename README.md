@@ -61,7 +61,7 @@ References: [egui_richedit](https://docs.rs/egui_richedit/0.7.0/egui_richedit/),
 - [ ] Native scrollbar integration; egui currently draws the scrollbar.
 - [ ] Incremental document projection and layout; both currently scan the document.
 - [ ] Render preview pages on demand; rasterization currently processes all pages.
-- [ ] Reduce undo memory use; history currently retains up to 200 source snapshots.
+- [x] Store grouped undo/redo edits and selections; retain changed text rather than document snapshots, with a 200-step / 8 MiB payload budget (the latest operation is always kept).
 
 The bundled tutorial includes instructions for some features on this roadmap.
 

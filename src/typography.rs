@@ -1,6 +1,11 @@
 use blank_document::{BlockKind, Paragraph};
 use eframe::egui::{self, Color32, FontId, TextFormat, text::LayoutJob};
 use egui_richedit::ParagraphJob;
+use std::sync::OnceLock;
+
+// All faces in a collection share its immutable bytes, across editor contexts.
+static READING_COLLECTION: OnceLock<Option<Vec<u8>>> = OnceLock::new();
+static SOURCE_COLLECTION: OnceLock<Option<Vec<u8>>> = OnceLock::new();
 
 pub fn install(ctx: &egui::Context) -> bool {
     let mut fonts = egui::FontDefinitions::default();
@@ -10,13 +15,13 @@ pub fn install(ctx: &egui::Context) -> bool {
         "reading-italic",
         "reading-bold-italic",
     ];
-    let faces = if let Ok(bytes) =
-        std::fs::read("/System/Library/Fonts/Supplemental/Iowan Old Style.ttc")
-    {
+    let faces = if let Some(bytes) = READING_COLLECTION.get_or_init(|| {
+        std::fs::read("/System/Library/Fonts/Supplemental/Iowan Old Style.ttc").ok()
+    }) {
         Some(
             (0..4)
                 .map(|index| {
-                    let mut data = egui::FontData::from_owned(bytes.clone());
+                    let mut data = egui::FontData::from_static(bytes);
                     data.index = index;
                     data
                 })
@@ -90,11 +95,13 @@ pub fn install(ctx: &egui::Context) -> bool {
 }
 
 fn install_source_faces(fonts: &mut egui::FontDefinitions) {
-    let faces = if let Ok(bytes) = std::fs::read("/System/Library/Fonts/Menlo.ttc") {
+    let faces = if let Some(bytes) =
+        SOURCE_COLLECTION.get_or_init(|| std::fs::read("/System/Library/Fonts/Menlo.ttc").ok())
+    {
         Some(
             (0..4)
                 .map(|index| {
-                    let mut data = egui::FontData::from_owned(bytes.clone());
+                    let mut data = egui::FontData::from_static(bytes);
                     data.index = index;
                     data
                 })
@@ -153,18 +160,42 @@ fn install_source_faces(fonts: &mut egui::FontDefinitions) {
     }
 }
 
-pub fn paragraph(p: &Paragraph, width: f32, real_faces: bool, number: usize) -> ParagraphJob {
-    let (size, line_height) = match p.kind {
-        BlockKind::Heading(1) => (34.0, 44.2),
-        BlockKind::Heading(2) => (24.0, 33.6),
-        BlockKind::Heading(_) => (19.0, 30.4),
-        _ => (18.0, 34.56),
+/// Space between blocks belongs to the document, not the toolkit's widget spacing.
+pub fn block_gap(previous: Option<&BlockKind>, current: Option<&BlockKind>) -> f32 {
+    match (previous, current) {
+        (_, Some(BlockKind::Heading(1))) => 36.0,
+        (_, Some(BlockKind::Heading(2))) => 30.0,
+        (_, Some(BlockKind::Heading(_))) => 24.0,
+        (Some(BlockKind::Heading(1)), _) => 22.0,
+        (Some(BlockKind::Heading(_)), _) => 14.0,
+        (Some(BlockKind::Bullet), Some(BlockKind::Bullet))
+        | (Some(BlockKind::Numbered), Some(BlockKind::Numbered)) => 4.0,
+        (None, None) => 10.0,
+        _ => 18.0,
+    }
+}
+
+pub fn list_marker(kind: &BlockKind, number: usize) -> Option<String> {
+    match kind {
+        BlockKind::Bullet => Some("•".into()),
+        BlockKind::Numbered => Some(format!("{number}.")),
+        _ => None,
+    }
+}
+
+pub fn paragraph(p: &Paragraph, width: f32, real_faces: bool) -> ParagraphJob {
+    let (size, line_height, tracking) = match p.kind {
+        BlockKind::Heading(1) => (34.0, 42.0, -0.45),
+        BlockKind::Heading(2) => (25.0, 33.0, -0.2),
+        BlockKind::Heading(_) => (20.0, 28.0, 0.0),
+        _ => (18.0, 30.0, 0.0),
     };
     let mut base = TextFormat::simple(
         FontId::new(size, egui::FontFamily::Name("reading".into())),
         Color32::from_rgb(52, 58, 55),
     );
     base.line_height = Some(line_height);
+    base.extra_letter_spacing = tracking;
     let mut job = ParagraphJob::new(LayoutJob {
         wrap: egui::text::TextWrapping {
             max_width: width,
@@ -172,11 +203,6 @@ pub fn paragraph(p: &Paragraph, width: f32, real_faces: bool, number: usize) -> 
         },
         ..Default::default()
     });
-    match p.kind {
-        BlockKind::Bullet => job.atom("•  ", 0, base.clone()),
-        BlockKind::Numbered => job.atom(&format!("{number}.  "), 0, base.clone()),
-        _ => {}
-    }
     let mut run = String::new();
     let mut run_format: Option<TextFormat> = None;
     for glyph in &p.glyphs {

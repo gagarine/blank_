@@ -114,6 +114,9 @@ impl Command {
             _ => return None,
         })
     }
+    pub fn formatting(self) -> bool {
+        self.block().is_some() || matches!(self, Self::Bold | Self::Italic)
+    }
 }
 #[derive(Default)]
 pub struct Picker {
