@@ -697,6 +697,7 @@ impl App {
                 }
             });
         } else {
+            let list_height = (ctx.content_rect().height() - 200.0).clamp(160.0, 480.0);
             let response = egui::Modal::new(Id::new("command-picker"))
                 .area(egui::Modal::default_area(Id::new("command-picker")).movable(false))
                 .backdrop_color(Color32::from_black_alpha(25))
@@ -715,6 +716,7 @@ impl App {
                         });
                     });
                     ui.add_space(12.0);
+                    let mut reveal_selected = self.picker.focus;
                     let response = ui.add(
                         egui::TextEdit::singleline(&mut self.picker.query)
                             .id(Id::new("command-query"))
@@ -728,6 +730,7 @@ impl App {
                     }
                     if response.changed() {
                         self.picker.index = 0;
+                        reveal_selected = true;
                     }
                     ui.add_space(8.0);
                     ui.separator();
@@ -736,20 +739,25 @@ impl App {
                     if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowDown)) {
                         self.picker.index =
                             (self.picker.index + 1).min(commands.len().saturating_sub(1));
+                        reveal_selected = true;
                     }
                     if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowUp)) {
                         self.picker.index = self.picker.index.saturating_sub(1);
+                        reveal_selected = true;
                     }
                     self.picker.index = self.picker.index.min(commands.len().saturating_sub(1));
                     if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
                         chosen = commands.get(self.picker.index).copied();
                     }
                     egui::ScrollArea::vertical()
-                        .max_height(420.0)
+                        .id_salt("command-results")
+                        .auto_shrink([false, false])
+                        .min_scrolled_height(list_height)
+                        .max_height(list_height)
                         .show(ui, |ui| {
                             for (index, command) in commands.into_iter().enumerate() {
                                 let response = command_row(ui, command, index == self.picker.index);
-                                if index == self.picker.index {
+                                if index == self.picker.index && reveal_selected {
                                     response.scroll_to_me(None);
                                 }
                                 if response.clicked() {
@@ -1774,6 +1782,44 @@ mod app_tests {
                 modifiers: Modifiers::NONE,
             }],
         )
+    }
+    #[test]
+    fn command_panel_keeps_a_tall_viewport_when_navigating_and_filtering() {
+        for size in [vec2(1100.0, 800.0), vec2(680.0, 480.0)] {
+            let (ctx, mut app) = setup("");
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                },
+                |_| {},
+            );
+            output.textures_delta.clear();
+            frame(&ctx, &mut app, vec![]);
+            app.execute(Command::Palette, &ctx);
+            for _ in 0..3 {
+                frame(&ctx, &mut app, vec![]);
+            }
+            let panel = || ctx.memory(|m| m.area_rect(Id::new("command-picker")).unwrap());
+            let initial = panel();
+            assert!(initial.height() > size.y * 0.7, "{initial:?}");
+            assert!(screen.contains_rect(initial), "{initial:?}");
+            frame(&ctx, &mut app, vec![key(Key::ArrowDown)]);
+            assert_eq!(app.picker.index, 1);
+            frame(&ctx, &mut app, vec![]);
+            assert!((panel().height() - initial.height()).abs() < 1.0);
+            frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::Text("no matching command".into())],
+            );
+            assert!(app.matching_commands().is_empty());
+            frame(&ctx, &mut app, vec![]);
+            assert!((panel().height() - initial.height()).abs() < 1.0);
+            assert!(screen.contains_rect(panel()));
+        }
     }
     #[test]
     fn outline_indents_and_folds_children_and_keeps_titles_on_one_line() {
