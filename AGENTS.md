@@ -1,0 +1,69 @@
+# Working on blank_
+
+## Start here
+
+Read `README.md`, `docs/parity.md` and `docs/acceptance.md` for implemented features, roadmap, evidence and known gaps. Inspect Git status before editing and preserve existing changes. These files describe the current native frontend; the unfinished Rust interface is not the specification.
+
+The Go reference is preserved on `codex/legacy-go`. Inspect it with `git show` or a separate checkout without switching away from or resetting ongoing work. The Rust prototype, including its saved work, is preserved on `codex/rust-native-prototype` at `d8e8448`. Preserve both branches. The native Swift frontend has been merged into `main`; `codex/swift-native` retains its development history. Check current Git state rather than assuming these heads never change.
+
+## Product direction
+
+- macOS 26 and 27 are the targets. Prefer modern Apple GUI defaults and native Liquid Glass controls over imitating an early prototype.
+- SwiftUI supplies the interface. AppKit supplies native windows, menus, panels, scrolling and text editing. There is no web renderer, Go frontend or UIKit `UITextView` in this app.
+- Launch directly into an empty editor with a focused, blinking native caret. Do not restore a home/welcome screen.
+- Keep the interface quiet and minimal, with readable typography and dependable editing. Use system fonts and real bold/italic faces; the initial reading font is Iowan Old Style.
+- The Go app is a reference for block/document behavior and feature coverage, not a mandate to copy its toolbar, paragraph spacing or other GUI decisions. Keep the exact original `examples/Tutorial.typ` unchanged. New features such as MCP should follow the current native architecture; they need not imitate Go.
+- Use the standard menu bar, customizable unified toolbar and native sheets/file panels. Leave glass, selection colors and caret blinking to the system. Do not add white toolbar backgrounds, green selection highlighting, custom blink timers or draggable in-document dialogs.
+- Keep scrollbars at the document viewport edge, independently of text padding. Page/text/table colors follow appearance by default, with an optional custom palette.
+
+## Architecture and invariants
+
+- `Sources/BlankCore` owns canonical Typst source, syntax-backed structured projections, UTF-16/native-to-UTF-8/source mapping, localized edits and range-based history. Preserve comments, custom expressions and unaffected source exactly. Never regenerate an entire document from its visible rich text.
+- `Sources/BlankNative` owns SwiftUI views, AppKit integration, document sessions, file handling, background compilation and PDFKit preview.
+- `Sources/CTypst` and `typst-syntax-bridge` expose the official Typst parser through a C-compatible library. `helper` provides the official compiler through a JSON-line process interface. Rust is used for Typst integration, not frontend rendering or a competing document model. Parser/compiler versions are pinned in Cargo manifests/lockfiles.
+- **TextKit 1 is now an intentional, user-approved choice.** Create `NSTextView(usingTextLayoutManager: false)` explicitly for Write and Source. Integrated native `NSTextTable`/`NSTextTableBlock` editing was required, and TextKit 2 was evaluated and found to fall back for these tables. Do not silently switch engines, reintroduce separate per-cell field editors/NSTableView overlays, or replace native tables with a drawn grid. Historical investigation is in `docs/acceptance.md` and `scripts/text-table-probe.swift`.
+- Table cells share the document's NSTextView/text storage. Their local projections map native positions into canonical cell spans. Synthetic cell terminators are layout characters, not source delimiters. Preserve table options and surrounding syntax during cell edits, composition, selection, clipboard and undo.
+- Write and Source share canonical source/history and source selections. Included files retain independent histories. Keep sensible adjacent-typing groups and bounded changed-range history. Native AppKit pre-edit/change notifications and final selection updates are necessary for reliable caret behavior after model-driven changes.
+- Source retains and copies every source character, with syntax colors and actual font faces. Disable prose substitutions in Source and restore native input preferences in Write.
+- Use `typstStringLiteral` for generated Typst string arguments. JSON slash escaping (`\/`) breaks Typst file paths; do not use a plain JSONEncoder for path/URL insertion.
+- Finish marked-text composition before Save, view/file changes and Quit snapshots. Ordinary autosave must not interrupt an active IME composition.
+- Compile off the UI thread. Preserve the last successful PDF on compilation failure. Use PDFKit page rendering on demand and bounded app-owned caches. Keep export revision checks.
+- Preflight all files before writes. External conflicts, deletion, unreadable UTF-8 and newly created dependency collisions must not overwrite another file. Selecting the disk version keeps discarded local writing in a separate durable conflict recovery copy. Save As rebases literal references when relocating a nested entry and preserves unrelated source/dependencies.
+- `NativeState` names the SwiftUI State property wrapper explicitly for the CLT SDK's macro/plugin compatibility. Understand that workaround before replacing it.
+
+## Editing behavior to preserve
+
+- Cmd-1/2/3 selects Write/Source/Preview. Cmd-K opens application commands; `/` opens formatting/insertion beside the caret with filtering, arrows, Return and Escape.
+- Typed characters remain visible, including incomplete `=`, `-` and `+` markers. Space completes supported heading/list shortcuts outside tables.
+- Return makes a paragraph; Shift-Return makes a soft line break. Lists continue on Return and exit on an empty item. Return within a table makes a cell paragraph.
+- Table insertion immediately creates an empty 2×2 table and focuses its first cell. Tab/Shift-Tab navigates cells; Tab at the end adds a row. The block menu edits dimensions. Cell slash menus expose only supported cell operations.
+- Structured clipboard preserves block kinds and inline marks; paste at a mid-paragraph caret splits there. Source clipboard contains exact plain source.
+- Handles reveal on hover, use open-hand/closed-hand cursors, and offer Turn into, Duplicate and Delete. Exclude the current kind from Turn into. Dragging shows a translucent block preview, hides other handles and draws one insertion line between blocks.
+- Keep the heading hierarchy collapsible and titles restrained; preserve sidebar pin/hover behavior and native keyboard/mouse selection.
+
+## Build, run and verify
+
+Use the repository scripts, which package the native parser/compiler and sign the app:
+
+```sh
+bash scripts/build.sh          # debug frontend, release Rust components
+bash scripts/build.sh release  # optimized frontend
+open build/blank_.app
+bash scripts/check.sh          # release build and full acceptance suite
+```
+
+Requirements: Swift 6 with a macOS 26 or 27 SDK, Rust 1.98.1 (root `rust-toolchain.toml`, including rustfmt) and Python 3 for checks. First builds download locked Rust dependencies; `BLANK_OFFLINE=1` requires cached dependencies. `BLANK_SDK_PATH` selects an installed SDK by absolute path. Both configurations update the **same** `build/blank_.app`; quit/reopen to test a newly built version. Keep `.build` and Rust target caches for iteration unless cleanup is needed; avoid accumulating alternate app bundles.
+
+The build script guards SDK 27-only toolbar APIs at compile time and runtime, targets macOS 26, rewrites the parser dependency to the adjacent bundled dylib and verifies the ad-hoc signature. Do not bypass that packaging step by distributing the raw Swift executable. Verify relocated bundles when changing packaging; a build that works only with libraries in the checkout is not portable.
+
+`scripts/check.sh` runs production-model checks, parser checks, the bundled official compiler and native editing/file acceptance. The model harness is `BlankCoreChecks`, not XCTest in this CLT setup. Native checks need a logged-in macOS window-server session; restricted execution may require ordinary tool escalation. Use disposable documents and `BLANK_DATA_DIR` to isolate recovery data. The harness restores clipboard/recents and cleans temporary data. Do not test destructive file behavior on user documents or leave input tracing enabled.
+
+Run checks appropriate to the change. Editing/model changes warrant meaningful Unicode, selection, history, composition and clipboard regressions, not tests that merely mirror implementation. Visually inspect typography/layout/interaction changes using the actual app. Update README/parity/acceptance notes when behavior or evidence changes. Measure CPU/memory/latency and state measurement limits; do not promise resource use without evidence.
+
+GitHub Actions builds/checks macOS 26 and Xcode 27 and uploads app archives. These are ad-hoc signed; notarization and Intel support are not verified. GitHub caches are branch-scoped, so the first build on a new/default branch can be slow.
+
+## Remaining work and working style
+
+The README roadmap is the functionality backlog. Real IME candidate panels, VoiceOver, bidirectional navigation, live Zotero and several broader file/window/object scenarios remain unverified; synthetic/native acceptance does not establish physical-session coverage. Large-table editing and full Source reprojection still need performance work. Keep these distinctions accurate.
+
+Favor small, native improvements and fixes over adding UI complexity. Proceed with authorized local edits, builds and disposable testing; do not repeatedly ask for permission already given. Preserve user changes, make reviewable milestone commits, and merge/push only within the user's authorized scope. Do not infer permission to message others. Use independent review or parallel agents when the user requests it, rather than automatically delegating every task.
