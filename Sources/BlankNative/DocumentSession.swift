@@ -39,7 +39,7 @@ struct Recovery: Codable {
     @Published var searchVisible = false
     @Published var searchFocusRequest = 0
     func showSearch() { editor?.finishComposition(); searchVisible = true; searchFocusRequest += 1 }
-    func hideSearch() { searchVisible = false; window?.makeFirstResponder(editor) }
+    func hideSearch() { searchVisible = false; let target: NSResponder? = mode == .preview ? pdfView : editor; window?.makeFirstResponder(target) }
     @Published var searchQuery = ""
     @Published var replaceText = ""
     @Published var caseSensitive = false
@@ -81,6 +81,8 @@ struct Recovery: Codable {
     weak var window: NSWindow?
     let compiler = TypstCompiler()
     var compileRevision = -1
+    var pdfData: Data?
+    var pendingPDFRequests: [(Int,(Result<Data,any Error>) -> Void)] = []
     var pendingExport: (URL,Int)?
     var sourceMap: [[String:Any]] = []
     var insertionKind = "footnote"
@@ -343,7 +345,7 @@ struct Recovery: Codable {
         let snapshot = buffers.mapValues(\.source), current = revision
         let directory = root ?? AppController.dataDirectory.appendingPathComponent("drafts/\(id)")
         do { try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true); for (path,data) in assets { try Self.writeDependency(data,path:path,root:directory) } }
-        catch { self.error = error.localizedDescription; compiling = false; return }
+        catch { self.error = error.localizedDescription; compiling = false; finishPDFRequests(.failure(error),revision:current); return }
         compiler.compile(root:directory,entry:entry,files:snapshot,revision:current) { [weak self] response in
             guard let self else { return }; self.compiling = false
             defer {
@@ -352,15 +354,17 @@ struct Recovery: Codable {
                     if requestedRevision == self.revision { self.compile(export:url) }
                     else { self.error = "Document changed while waiting to export. Try again." }
                 }
+                if !self.pendingPDFRequests.isEmpty && !self.compiling { self.compile() }
             }
             switch response {
             case let .success(result):
-                if result.revision != self.revision { if export != nil { self.error = "Document changed during export. Try again." }; if self.mode == .preview { self.compile() }; return }
+                if result.revision != self.revision { self.finishPDFRequests(.failure(NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"Document changed while preparing the PDF. Try again."])),revision:current); if export != nil { self.error = "Document changed during export. Try again." }; if self.mode == .preview { self.compile() }; return }
                 if let data = result.data, let document = PDFDocument(data:data) {
-                    self.pdf = document; self.compileRevision = current; self.sourceMap = result.map; self.error = nil
+                    self.pdf = document; self.pdfData = data; self.compileRevision = current; self.sourceMap = result.map; self.error = nil
+                    self.finishPDFRequests(.success(data),revision:current)
                     if let export { do { try data.write(to:export,options:.atomic) } catch { self.error = error.localizedDescription } }
-                } else { self.error = result.diagnostics.joined(separator:"\n") }
-            case let .failure(error): self.error = error.localizedDescription
+                } else { self.error = result.diagnostics.joined(separator:"\n"); self.finishPDFRequests(.failure(NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:self.error ?? "PDF compilation failed."])),revision:current) }
+            case let .failure(error): self.error = error.localizedDescription; self.finishPDFRequests(.failure(error),revision:current)
             }
         }
     }
@@ -384,7 +388,21 @@ struct Recovery: Codable {
         panel.beginSheetModal(for:window) { [weak self] result in if result == .OK, let url = panel.url { self?.compile(export:url) } }
     }
     func find(next: Bool = true) {
-        guard !searchQuery.isEmpty, let editor else { return }
+        guard !searchQuery.isEmpty else { return }
+        if mode == .preview {
+            guard let pdf, let view = pdfView else { return }
+            let options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
+            let matches = pdf.findString(searchQuery,withOptions:options)
+            guard !matches.isEmpty else { return }
+            let current = view.currentSelection
+            let index = matches.firstIndex { match in
+                guard let current, match.pages.first === current.pages.first, let page = match.pages.first else { return false }
+                return match.bounds(for:page) == current.bounds(for:page)
+            }
+            let target = index.map { ($0+(next ? 1 : matches.count-1)) % matches.count } ?? (next ? 0 : matches.count-1)
+            view.setCurrentSelection(matches[target],animate:true); view.go(to:matches[target]); return
+        }
+        guard let editor else { return }
         if projectSearch { findInProject(next:next); return }
         let text = editor.string as NSString
         let selection = editor.selectedRange()

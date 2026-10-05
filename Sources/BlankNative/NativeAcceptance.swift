@@ -24,13 +24,17 @@ import BlankCore
         check(view.textLayoutManager == nil && view.layoutManager != nil,"TextKit 1 selected explicitly at creation")
         check(controller.window?.firstResponder === view,"Empty editor is focused")
         check(view.string.isEmpty,"Launch has no welcome screen")
+        check(controller.window?.contentViewController === controller.splitController && controller.splitController.contentsItem.behavior == .sidebar,"Native split-view controller supplies sidebar behavior")
+        check(controller.searchItem != nil && controller.shareButton != nil,"Search and Share use native toolbar controls")
+        check(controller.sidebarItem?.isBordered == true && controller.modeItem?.isBordered == true,"Interactive toolbar controls opt into the system glass backing")
         AppController.shared.commands(nil)
         for character in "fast café" {
             let key = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:String(character),charactersIgnoringModifiers:String(character),isARepeat:false,keyCode:0)!
             view.keyDown(with:key)
         }
         check(view.string.isEmpty && session.buffer.source.isEmpty,"Typing immediately after Cmd-K cannot reach the document")
-        RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+        let commandDeadline = Date().addingTimeInterval(3)
+        while (session.pendingCommandKeys.isEmpty == false || controller.window?.attachedSheet?.firstResponder as? NSTextView == nil) && Date() < commandDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
         let commandField = controller.window?.attachedSheet?.firstResponder as? NSTextView
         check(session.commandQuery == "fast café" && commandField?.string == "fast café" && session.pendingCommandKeys.isEmpty,"Opening Commands delivers early Unicode keys to its native field editor")
         session.sheet = nil
@@ -320,9 +324,14 @@ import BlankCore
         if let duplicate = handleMenu?.items.first(where:{ $0.item.title == "Duplicate" }) { handleMenu?.choose(duplicate.item) }
         check(session.buffer.projection.blocks.count == 4 && controller.window?.firstResponder === editor,"Popover Duplicate uses the document transaction and restores editing focus")
         session.undo(); check(session.buffer.source == menuSource,"Popover block actions share exact-source undo")
+        let selectionBeforeSidebar = editor.selectedRange(), editorBeforeSidebar = session.editor
         session.sidebarHover = true; controller.toggleContents(nil)
+        RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+        check(!controller.splitController.contentsItem.isCollapsed && session.editor === editorBeforeSidebar && editor.selectedRange() == selectionBeforeSidebar,"Native sidebar reveal preserves the editor instance and selection")
         check(session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Pinning contents clears transient hover and updates toolbar")
         session.sidebarHover = true; session.toggleSidebar()
+        RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+        check(controller.splitController.contentsItem.isCollapsed && session.editor === editorBeforeSidebar && editor.selectedRange() == selectionBeforeSidebar,"Native sidebar collapse preserves the editor instance and selection")
         check(!session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Unpinning contents restores transient behavior")
         // Navigation rows use the native arrow; closed-hand feedback belongs
         // to an active move, independently of pinned/hover presentation.
@@ -612,6 +621,15 @@ import BlankCore
         let deadline = Date().addingTimeInterval(25)
         while session.compiling && Date() < deadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
         check(session.pdf != nil,"Official Typst compiler produces native PDF")
+        let sharedFile = try! SharedPDF(data:session.pdfData!,name:session.title)
+        check(sharedFile.url.pathExtension == "pdf" && sharedFile.url.lastPathComponent == session.title+".pdf","Share prepares a named PDF file without Typst source")
+        check((try? Data(contentsOf:sharedFile.url)) == session.pdfData && PDFDocument(url:sharedFile.url)?.string?.contains("Native PDF") == true,"Native sharing supplies the current compiler PDF")
+        let clipboardPDF = try! SharedPDF(data:session.pdfData!,name:"Clipboard PDF").url
+        NSPasteboard.general.clearContents(); NSPasteboard.general.writeObjects([clipboardPDF as NSURL])
+        for index in 0..<12 { _ = try! SharedPDF(data:session.pdfData!,name:"Cache \(index)") }
+        let shareCache = AppController.dataDirectory.appendingPathComponent("shared-pdfs")
+        let cachedCount = (try? FileManager.default.contentsOfDirectory(atPath:shareCache.path).count) ?? 100
+        check(FileManager.default.fileExists(atPath:clipboardPDF.path) && cachedCount <= 10,"Share cache stays bounded while preserving the PDF copied to the native clipboard (\(cachedCount) cached, clipboard exists: \(FileManager.default.fileExists(atPath:clipboardPDF.path)))")
         check(!session.sourceMap.isEmpty,"Preview carries source navigation map")
         session.switchMode(.preview); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         guard let pdfView = session.pdfView, let secondPage = session.pdf?.page(at:1) else { fatalError("Missing two-page preview") }
@@ -619,6 +637,17 @@ import BlankCore
         // Navigate directly instead of routing through the page-counter action.
         pdfView.go(to:secondPage); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(session.previewPage == 2,"Preview page counter follows native PDF navigation")
+        let zoom = controller.zoomItem!
+        check(!zoom.isHidden,"PDF zoom controls appear in Preview")
+        zoom.selectedIndex = 1; controller.zoomPreview(zoom)
+        check(pdfView.scaleFactor == 1 && !pdfView.autoScales,"Actual Size uses PDFKit's 100-percent scale")
+        zoom.selectedIndex = 2; controller.zoomPreview(zoom)
+        check(pdfView.scaleFactor > 1,"Zoom In increases native PDF scale")
+        zoom.selectedIndex = 0; controller.zoomPreview(zoom)
+        check(pdfView.scaleFactor <= 1.001,"Zoom Out reverses native PDF zoom")
+        session.searchQuery = "Second page"; session.find()
+        check(pdfView.currentSelection?.string?.contains("Second page") == true,"Toolbar Find selects text in PDF Preview")
+        session.searchQuery = ""
         session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let good = session.pdf
         session.buffer.loadExternal("#unknown-function()")
@@ -626,6 +655,28 @@ import BlankCore
         let failureDeadline = Date().addingTimeInterval(10)
         while session.compiling && Date() < failureDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
         check(session.pdf === good && session.error != nil,"Compilation errors preserve last successful PDF")
+        var failedShare: Result<Data,any Error>?
+        session.requestPDF { failedShare = $0 }
+        let failedShareDeadline = Date().addingTimeInterval(10)
+        while failedShare == nil && Date() < failedShareDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
+        if case .failure? = failedShare { check(session.pdf === good,"Sharing invalid source reports an error instead of sharing the previous PDF") }
+        else { fatalError("Invalid source was shared as a PDF") }
+        session.buffer.loadExternal("= Share snapshot\n\nPDF sharing revision check."); session.revision += 1
+        var staleShare: Result<Data,any Error>?
+        session.requestPDF { staleShare = $0 }; session.revision += 1
+        let staleShareDeadline = Date().addingTimeInterval(10)
+        while staleShare == nil && Date() < staleShareDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
+        if case .failure? = staleShare { check(true,"Changing source during PDF preparation rejects a stale share") }
+        else { fatalError("Stale PDF revision was shared") }
+        // A share requested during an older compilation must wait for its own
+        // revision, provided no further edit occurs after the request.
+        session.compile(); session.buffer.loadExternal("= Latest share\n\nNewest revision."); session.revision += 1
+        var latestShare: Result<Data,any Error>?
+        session.requestPDF { latestShare = $0 }
+        let latestShareDeadline = Date().addingTimeInterval(10)
+        while latestShare == nil && Date() < latestShareDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
+        if case let .success(data)? = latestShare { check(PDFDocument(data:data)?.string?.contains("Latest share") == true,"Share waits for its current revision behind an older compilation") }
+        else { fatalError("Current PDF share did not finish behind older compilation") }
         session.buffer.loadExternal("#figure(image(\"assets/test.png\"), caption: [A caption])")
         session.revision += 1
         let exported = FileManager.default.temporaryDirectory.appendingPathComponent("blank-export-"+UUID().uuidString+".pdf")

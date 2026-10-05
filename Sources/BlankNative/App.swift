@@ -173,6 +173,14 @@ import Combine
     var toolbarSubscriptions = Set<AnyCancellable>()
     var modeItem: NSToolbarItemGroup?
     var sidebarItem: NSToolbarItem?
+    var searchItem: NSSearchToolbarItem?
+    var searchWidth: NSLayoutConstraint?
+    var zoomItem: NSToolbarItemGroup?
+    var shareButton: NSButton?
+    var sharePicker: NSSharingServicePicker?
+    var sharedPDF: SharedPDF?
+    var activePDFShares: [ObjectIdentifier:SharedPDF] = [:]
+    var splitController: DocumentSplitViewController!
     init(session: DocumentSession,nativeDocument: NativeDocument? = nil) {
         self.session = session
         self.nativeDocument = nativeDocument ?? NativeDocument(session:session)
@@ -182,7 +190,10 @@ import Combine
         if session.dark { window.appearance = NSAppearance(named:.darkAqua) }
         window.center(); window.delegate = self
         window.acceptsMouseMovedEvents = true
-        window.contentView = NSHostingView(rootView:EditorRoot(session:session)); window.minSize = NSSize(width:660,height:480)
+        splitController = DocumentSplitViewController(session:session)
+        window.contentViewController = splitController; window.minSize = NSSize(width:660,height:480)
+        window.setContentSize(NSSize(width:1060,height:780))
+        window.titlebarSeparatorStyle = .none
         installToolbar()
         window.isReleasedWhenClosed = false; session.window = window
         self.nativeDocument.addWindowController(self)

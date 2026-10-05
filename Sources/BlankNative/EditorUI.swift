@@ -140,29 +140,25 @@ final class SlashMenuCursorView: NSView {
 }
 struct EditorRoot: View {
     @ObservedObject var session: DocumentSession
-    @StateObject private var contentsDrag = ContentsDrag()
-    @FocusState private var searchFocused: Bool
+    @ObservedObject var contentsDrag: ContentsDrag
     @NativeState private var searchAfterSheet = false
     var chrome: Color { Color(nsColor:.windowBackgroundColor) }
     var body: some View {
         VStack(spacing:0) {
             if session.searchVisible { searchBar }
             if session.mode == .preview { previewControls }
-            HStack(spacing:0) {
-                if session.sidebar { contents.frame(width:235) }
-                GeometryReader { geometry in
-                    ZStack(alignment:.leading) {
-                        if session.mode == .preview { PreviewView(session:session) }
-                        else { NativeEditor(session:session).ignoresSafeArea(.container,edges:.top) }
-                        if !session.sidebar && (!session.headings.isEmpty || session.includes.count > 1) {
-                            let revealWidth = EditorLayout.sidebarRevealWidth(width:geometry.size.width,mode:session.mode)
-                            ZStack(alignment:.leading) {
-                                Color.clear
-                                if session.sidebarHover || session.sidebarDragging {
-                                    contents.frame(width:235).background(chrome).shadow(color:.black.opacity(0.07),radius:12,x:4).transition(.opacity)
-                                }
-                            }.frame(width:session.sidebarHover || session.sidebarDragging ? max(235,revealWidth) : revealWidth).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
-                        }
+            GeometryReader { geometry in
+                ZStack(alignment:.leading) {
+                    if session.mode == .preview { PreviewView(session:session) }
+                    else { NativeEditor(session:session).ignoresSafeArea(.container,edges:.top) }
+                    if !session.sidebar && (!session.headings.isEmpty || session.includes.count > 1) {
+                        let revealWidth = EditorLayout.sidebarRevealWidth(width:geometry.size.width,mode:session.mode)
+                        ZStack(alignment:.leading) {
+                            Color.clear
+                            if session.sidebarHover || session.sidebarDragging {
+                                ContentsView(session:session,contentsDrag:contentsDrag).frame(width:235).background(.regularMaterial).shadow(color:.black.opacity(0.07),radius:12,x:4).transition(.opacity)
+                            }
+                        }.frame(width:session.sidebarHover || session.sidebarDragging ? max(235,revealWidth) : revealWidth).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
                     }
                 }
             }
@@ -184,7 +180,7 @@ struct EditorRoot: View {
                 Button { session.sheet = .statistics } label: { Text("\(wordCount) \(wordCount == 1 ? "word" : "words")").font(.system(size:10)).foregroundStyle(.secondary) }.buttonStyle(.plain)
                 Text("⌘K").font(.system(size:10)).foregroundStyle(.tertiary).padding(.leading,18)
             }.padding(.horizontal,26).frame(height:30).background(chrome)
-        }.frame(minWidth:660,minHeight:420).background(chrome).preferredColorScheme(session.dark ? .dark : nil)
+        }.frame(minWidth:420,minHeight:420).background(chrome).preferredColorScheme(session.dark ? .dark : nil)
         .sheet(item:$session.sheet,onDismiss:{
             if searchAfterSheet { searchAfterSheet = false; focusSearch() }
             let action = session.pendingDocumentAction; session.pendingDocumentAction = nil; action?()
@@ -200,16 +196,14 @@ struct EditorRoot: View {
         }
         .onChange(of:session.searchFocusRequest) { _,_ in
             // Repeated Cmd-F re-enters the existing field rather than editing
-            // the document. Defer until SwiftUI has installed the search bar.
+            // the document. Defer until the search options have been laid out.
             if session.window?.attachedSheet != nil { searchAfterSheet = true }
             else { focusSearch() }
         }
-        .onChange(of:session.active) { _,_ in contentsDrag.collapsed.removeAll() }
         .onChange(of:session.dark) { _,dark in session.window?.appearance = dark ? NSAppearance(named:.darkAqua) : nil }
     }
     private func focusSearch() {
-        searchFocused = false
-        DispatchQueue.main.async { if session.searchVisible && session.sheet == nil { searchFocused = true } }
+        DispatchQueue.main.async { (session.window?.windowController as? DocumentWindow)?.focusNativeSearch() }
     }
     var wordCount: Int { session.buffer.counts.words }
     var previewControls: some View {
@@ -225,19 +219,24 @@ struct EditorRoot: View {
     }
     var searchBar: some View {
         HStack(spacing:8) {
-            Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
-            TextField("Find",text:$session.searchQuery).focused($searchFocused).onAppear { searchFocused = true }.onSubmit { session.find() }.onExitCommand { session.hideSearch() }.frame(maxWidth:180)
             Button { session.find(next:false) } label: { Image(systemName:"chevron.up") }.help("Previous match").accessibilityLabel("Previous match")
             Button { session.find() } label: { Image(systemName:"chevron.down") }.help("Next match").accessibilityLabel("Next match")
             Toggle("Aa",isOn:$session.caseSensitive).toggleStyle(.button).help("Match case")
-            Toggle("Project",isOn:$session.projectSearch).toggleStyle(.button).help("Search included files")
-            Divider().frame(height:18)
-            TextField("Replace",text:$session.replaceText).onExitCommand { session.hideSearch() }.frame(maxWidth:170)
-            Button("Replace") { session.replace() }; Button("All") { session.replace(all:true) }
+            if session.mode != .preview {
+                Toggle("Project",isOn:$session.projectSearch).toggleStyle(.button).help("Search included files")
+                Divider().frame(height:18)
+                TextField("Replace",text:$session.replaceText).onExitCommand { session.hideSearch() }.frame(maxWidth:170)
+                Button("Replace") { session.replace() }; Button("All") { session.replace(all:true) }
+            }
             Spacer()
             Button { session.hideSearch() } label: { Image(systemName:"xmark").frame(width:24,height:24).contentShape(Rectangle()) }.buttonStyle(.plain).help("Close search · Esc").accessibilityLabel("Close search")
         }.font(.system(size:11)).controlSize(.small).padding(.horizontal,24).padding(.vertical,9).background(chrome)
     }
+}
+struct ContentsView: View {
+    @ObservedObject var session: DocumentSession
+    @ObservedObject var contentsDrag: ContentsDrag
+    var body: some View { contents.onChange(of:session.active) { _,_ in contentsDrag.collapsed.removeAll() } }
     var visibleHeadings: [(Int,ProjectedBlock)] {
         var hiddenLevel: Int?
         let headings = session.headings
@@ -278,7 +277,7 @@ struct EditorRoot: View {
                 }.padding(.horizontal,16)
             }
             Spacer(minLength:0)
-        }.background(chrome).background(ContentsCursorArea(session:session).allowsHitTesting(false))
+        }.background(ContentsCursorArea(session:session).allowsHitTesting(false))
     }
 }
 struct PreviewView: NSViewRepresentable {
