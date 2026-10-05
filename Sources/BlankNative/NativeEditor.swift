@@ -601,13 +601,23 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
     }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with:event) }
+    private func updateSlashMenuCursor(for event: NSEvent) -> Bool {
+        guard slashPopover?.isShown == true,
+              let popoverWindow = slashPopover?.contentViewController?.view.window,
+              let eventWindow = event.window ?? window,
+              popoverWindow.frame.contains(eventWindow.convertPoint(toScreen:event.locationInWindow)) else { return false }
+        if hoverBlock != nil { hoverBlock = nil; needsDisplay = true }
+        NSCursor.arrow.set(); return true
+    }
     override func cursorUpdate(with event: NSEvent) {
+        if updateSlashMenuCursor(for:event) { return }
         if session?.mode != .write { super.cursorUpdate(with:event) }
         else if grabbed != nil { NSCursor.closedHand.set() }
         else { mouseMoved(with:event) }
     }
     override func mouseMoved(with event: NSEvent) {
         guard session?.mode == .write, grabbed == nil else { return }
+        if updateSlashMenuCursor(for:event) { return }
         let point = convert(event.locationInWindow,from:nil)
         if codeButtons.values.contains(where:{ $0.frame.contains(point) }) || tableButtons.contains(where:{ $0.frame.contains(point) && !$0.isHidden }) { NSCursor.arrow.set(); return }
         let offset = characterIndexForInsertion(at:point)

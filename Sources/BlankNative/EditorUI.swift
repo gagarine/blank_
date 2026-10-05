@@ -64,7 +64,7 @@ struct SlashMenu: View {
                     }
                 }.padding(6)
             }.onAppear { proxy.scrollTo(index) }.onChange(of:index) { _,value in proxy.scrollTo(value) }
-        }.background(.background)
+        }.background(.background).background(SlashMenuCursorArea().allowsHitTesting(false))
     }
 }
 // A native button supplies one rectangular target beneath the SwiftUI label.
@@ -99,7 +99,33 @@ struct MenuButtonTarget: NSViewRepresentable {
 final class MenuActionButton: NSButton {
     var perform: ()->Void = {}
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds,cursor:.arrow)
+    }
     @objc func activate(_ sender: Any?) { perform() }
+}
+// The editor stays first responder for slash filtering. Track the popover
+// throughout the active app, including its padding and empty-results area.
+struct SlashMenuCursorArea: NSViewRepresentable {
+    func makeNSView(context: Context) -> SlashMenuCursorView { SlashMenuCursorView() }
+    func updateNSView(_ view: SlashMenuCursorView,context: Context) {}
+}
+final class SlashMenuCursorView: NSView {
+    private var cursorTracking: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let cursorTracking { removeTrackingArea(cursorTracking) }
+        let area = NSTrackingArea(rect:.zero,options:[.cursorUpdate,.mouseEnteredAndExited,.mouseMoved,.activeInActiveApp,.inVisibleRect],owner:self,userInfo:nil)
+        addTrackingArea(area); cursorTracking = area
+    }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds,cursor:.arrow)
+    }
+    override func cursorUpdate(with event: NSEvent) { NSCursor.arrow.set() }
+    override func mouseEntered(with event: NSEvent) { NSCursor.arrow.set() }
+    override func mouseMoved(with event: NSEvent) { NSCursor.arrow.set() }
 }
 struct EditorRoot: View {
     @ObservedObject var session: DocumentSession

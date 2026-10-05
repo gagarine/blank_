@@ -151,12 +151,40 @@ import BlankCore
         check(editor.slashPopover?.isShown == true && (editor.slashPopover?.contentViewController?.view.bounds.height ?? 0) >= 140,"Slash popover retains visible filtered rows")
         if let content = editor.slashPopover?.contentViewController?.view, let popoverWindow = content.window, let window = editor.window {
             func menuButtons(_ view: NSView) -> [MenuActionButton] { (view as? MenuActionButton).map { [$0] } ?? view.subviews.flatMap(menuButtons) }
+            func cursorAreas(_ view: NSView) -> [SlashMenuCursorView] { (view as? SlashMenuCursorView).map { [$0] } ?? view.subviews.flatMap(cursorAreas) }
             let buttons = menuButtons(content)
+            let cursorArea = cursorAreas(content).first!
+            check(cursorArea.bounds.size == content.bounds.size,"Slash cursor tracking covers the entire native popover content")
             check(!buttons.isEmpty && buttons.allSatisfy { $0.bounds.width > content.bounds.width*0.8 },"Native command rows fill the menu width")
             check(buttons.allSatisfy { $0.hitTest(NSPoint(x:$0.frame.maxX-3,y:$0.frame.midY)) === $0 },"Empty trailing row space hits its native button")
             let menuRect = popoverWindow.convertToScreen(content.convert(content.bounds,to:nil))
             let caret = window.convertToScreen(editor.convert(editor.rectFor(0),to:nil))
             check(!menuRect.contains(NSPoint(x:caret.midX,y:caret.midY)),"Slash popover does not obscure the native caret")
+            func menuPointer(_ screenPoint: NSPoint,in eventWindow: NSWindow) -> NSEvent {
+                NSEvent.mouseEvent(with:.mouseMoved,location:eventWindow.convertPoint(fromScreen:screenPoint),modifierFlags:[],timestamp:0,windowNumber:eventWindow.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
+            }
+            let source = session.buffer.source, selection = editor.selectedRange()
+            for point in [NSPoint(x:menuRect.midX,y:menuRect.midY),NSPoint(x:menuRect.maxX-3,y:menuRect.midY),NSPoint(x:menuRect.minX+3,y:menuRect.minY+3)] {
+                NSCursor.iBeam.set(); cursorArea.cursorUpdate(with:menuPointer(point,in:popoverWindow))
+                check(NSCursor.current == .arrow,"Slash menu owns the arrow cursor over rows and padding")
+                editor.hoverBlock = 0
+                editor.mouseMoved(with:menuPointer(point,in:window))
+                check(NSCursor.current == .arrow && editor.hoverBlock == nil,"Menu hover cannot activate editor text or block handles underneath")
+                editor.hoverBlock = 0; NSCursor.openHand.set(); editor.cursorUpdate(with:menuPointer(point,in:popoverWindow))
+                check(NSCursor.current == .arrow && editor.hoverBlock == nil,"Popover-window cursor events use screen coordinates and clear underlying handles")
+            }
+            editor.cursorUpdate(with:menuPointer(NSPoint(x:caret.midX,y:caret.midY),in:window))
+            check(NSCursor.current == .iBeam,"Text outside the open slash menu retains its native cursor")
+            editor.slashQuery = "No such command"; editor.showSlash()
+            RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+            let emptyMenu = editor.slashPopover!.contentViewController!.view
+            let emptyWindow = emptyMenu.window!
+            let emptyRect = emptyWindow.convertToScreen(emptyMenu.convert(emptyMenu.bounds,to:nil))
+            NSCursor.iBeam.set(); cursorAreas(emptyMenu).first!.cursorUpdate(with:menuPointer(NSPoint(x:emptyRect.midX,y:emptyRect.midY),in:emptyWindow))
+            editor.mouseMoved(with:menuPointer(NSPoint(x:emptyRect.midX,y:emptyRect.midY),in:window))
+            check(NSCursor.current == .arrow,"Empty slash results retain the arrow cursor after filtering")
+            check(session.buffer.source == source && editor.selectedRange() == selection && window.firstResponder === editor,"Menu pointer tracking preserves source, selection and typing focus")
+            editor.slashQuery = "heading"; editor.showSlash()
         } else { fatalError("Missing native popover window") }
         if ProcessInfo.processInfo.environment["BLANK_GEOMETRY"] != nil {
             var actual = NSRange()
@@ -165,6 +193,10 @@ import BlankCore
         }
         editor.slashIndex = 1; editor.chooseSlash()
         check(session.buffer.source == "== Slash target" && editor.slashPopover == nil,"Slash choice preserves content and dismisses menu")
+        let restoredCaret = editor.rectFor(editor.selectedRange().location)
+        let restoredPointer = NSEvent.mouseEvent(with:.mouseMoved,location:editor.convert(NSPoint(x:restoredCaret.midX,y:restoredCaret.midY),to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
+        NSCursor.arrow.set(); editor.cursorUpdate(with:restoredPointer)
+        check(NSCursor.current == .iBeam,"Dismissing slash restores the editor text cursor")
         session.undo(); check(session.buffer.source == "/headingSlash target","Slash conversion is one undo transaction")
         session.buffer.loadExternal(""); session.revision += 1; editor.lastRevision = -1; editor.refresh()
         for character in "/table" { editor.insertText(String(character),replacementRange:editor.selectedRange()) }
