@@ -37,6 +37,8 @@ install_binary target/release/typst-compiler "$app/Contents/MacOS/typst-compiler
 # Remove the previous compiler name when rebuilding an existing bundle.
 rm -f "$app/Contents/MacOS/writer-helper"
 cp examples/Tutorial.typ Resources/AppIcon.icns "$app/Contents/Resources/"
+mkdir -p "$app/Contents/Resources/Templates"
+cp Resources/Templates/*.typ "$app/Contents/Resources/Templates/"
 install_name_tool -id @rpath/libblank_syntax.dylib "$app/Contents/MacOS/libblank_syntax.dylib"
 parser_dependency=$(otool -L "$app/Contents/MacOS/blank_" | sed -n 's/^[[:space:]]*\(.*libblank_syntax\.dylib\) (compatibility.*$/\1/p')
 if [[ -z "$parser_dependency" ]]; then echo 'Missing Typst parser dependency in editor executable' >&2; exit 1; fi

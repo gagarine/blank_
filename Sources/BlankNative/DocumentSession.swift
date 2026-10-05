@@ -363,6 +363,7 @@ struct Recovery: Codable {
         }
         for (path,data) in assets { try Self.writeDependency(data,path:path,root:root) }
         dirty = false; onTitle?(); installWatchers()
+        NotificationCenter.default.post(name:.blankDocumentSaved,object:self)
     }
     func compile(export: URL? = nil) {
         guard !compiling else {

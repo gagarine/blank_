@@ -106,6 +106,7 @@ import BlankCore
         if active == old { active = newEntry }; entry = newEntry; root = destination; bases = buffers.mapValues(\.source); dirty = false
         if identityChanged { revision += 1 }
         installWatchers(); onTitle?(); persistRecovery(); NSDocumentController.shared.noteNewRecentDocumentURL(url)
+        NotificationCenter.default.post(name:.blankDocumentSaved,object:self)
         if identityChanged && mode == .preview { compile() }
     }
     func moveEntry(to url: URL) throws {
@@ -152,6 +153,7 @@ import BlankCore
         }
         let old = entry; buffers[next] = buffers.removeValue(forKey:old); bases[next] = bases.removeValue(forKey:old)
         if active == old { active = next }; entry = next; revision += 1; installWatchers(); persistRecovery(); onTitle?()
+        NotificationCenter.default.post(name:.blankDocumentSaved,object:self)
     }
 
 }

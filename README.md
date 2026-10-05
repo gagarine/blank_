@@ -4,6 +4,8 @@ A quiet native macOS editor for [Typst](https://typst.app). Write, Source and PD
 
 Supports block editing and dragging, sidebar contents/thumbnails with an order lock, a full-window zoomable contact sheet in all three views, collapsible code, inline table row/column menus, shared undo, formatted clipboard, figures/captions, links, footnotes, citations with Zotero, included files/chapter movement, live document/project search, statistics, settings, document windows and recovery. Generated or complex Typst stays editable in Source.
 
+**File → Templates…** (also Cmd-K) opens a thumbnail library with Standard, Thesis, Paper, Letter A4 and Book. Create independent documents, preview, add, duplicate, edit or trash templates; Save in a template editor updates the library. **Save as Template…** captures the current project. New Document remains empty.
+
 ## First launch
 
 Current releases are not notarized. If macOS blocks the app:

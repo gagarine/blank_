@@ -22,7 +22,22 @@ import Combine
         return FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("blank_-swift")
     }
     var controllers: [DocumentWindow] = []
-    var current: DocumentSession? { controllers.first { $0.window === NSApp.keyWindow }?.session ?? controllers.last?.session }
+    var templateGallery: TemplateGalleryWindow?
+    @objc func templates(_ sender: Any?) {
+        do {
+            if templateGallery == nil { templateGallery = TemplateGalleryWindow(library:try TemplateLibrary()) }
+            try templateGallery?.library.reload()
+            templateGallery?.showWindow(nil); templateGallery?.window?.makeKeyAndOrderFront(nil)
+        } catch { NSAlert(error:error).runModal() }
+    }
+    @objc func saveAsTemplate(_ sender: Any?) {
+        guard let session = current else { return }; session.editor?.finishComposition()
+        templates(sender); templateGallery?.addDocument(session)
+    }
+    var current: DocumentSession? {
+        if let key = NSApp.keyWindow { return controllers.first { $0.window === (key.sheetParent ?? key) }?.session }
+        return controllers.last?.session
+    }
     func applicationWillFinishLaunching(_ notification: Notification) {
         Self.shared = self
         NSApp.setActivationPolicy(.regular)
@@ -118,6 +133,8 @@ import Combine
         if menuItem.action == #selector(go(_:)), let action = menuItem.representedObject as? GoAction {
             return (NSApp.keyWindow == nil || current?.window === NSApp.keyWindow) && current?.canNavigate(action) == true
         }
+        let documentActions: [Selector] = [#selector(save(_:)),#selector(saveAs(_:)),#selector(saveAsTemplate(_:)),#selector(export(_:)),#selector(renameDocument(_:)),#selector(moveDocument(_:)),#selector(commands(_:)),#selector(undo(_:)),#selector(redo(_:)),#selector(bold(_:)),#selector(italic(_:)),#selector(find(_:)),#selector(writeMode(_:)),#selector(sourceMode(_:)),#selector(previewMode(_:)),#selector(outline(_:)),#selector(settings(_:)),#selector(statistics(_:)),#selector(refresh(_:)),#selector(refreshReferences(_:))]
+        if documentActions.contains(where:{ $0 == menuItem.action }) { return current != nil }
         return true
     }
     @objc func fullscreen(_ sender: Any?) { NSApp.keyWindow?.toggleFullScreen(nil) }
@@ -158,10 +175,11 @@ import Combine
         app.addItem(.separator()); add(app,"Hide blank_",#selector(NSApplication.hide(_:)),"h",target:NSApp); add(app,"Hide Others",#selector(NSApplication.hideOtherApplications(_:)),"h",[.command,.option],target:NSApp)
         app.addItem(.separator()); add(app,"Quit blank_",#selector(quit(_:)),"q",target:self)
         let file = menu("File")
-        add(file,"New Document",#selector(newDocument(_:)),"n",target:self); add(file,"Open…",#selector(openDocument(_:)),"o",target:self)
+        add(file,"New Document",#selector(newDocument(_:)),"n",target:self); add(file,"Templates…",#selector(templates(_:)),target:self); add(file,"Open…",#selector(openDocument(_:)),"o",target:self)
         let recent = NSMenuItem(title:"Open Recent",action:nil,keyEquivalent:""); recent.submenu = NSMenu(title:"Open Recent"); recent.submenu?.delegate = self; file.addItem(recent)
         add(file,"Open Recovery Copy…",#selector(recover(_:)),target:self); file.addItem(.separator())
         add(file,"Close Window",#selector(NSWindow.performClose(_:)),"w"); add(file,"Save",#selector(save(_:)),"s",target:self); add(file,"Save As…",#selector(saveAs(_:)),"s",[.command,.shift],target:self)
+        add(file,"Save as Template…",#selector(saveAsTemplate(_:)),target:self)
         add(file,"Export PDF…",#selector(export(_:)),"e",[.command,.shift],target:self)
         add(file,"Rename Document…",#selector(renameDocument(_:)),target:self)
         add(file,"Move To…",#selector(moveDocument(_:)),target:self)

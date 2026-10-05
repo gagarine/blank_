@@ -30,6 +30,7 @@ import BlankCore
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
         NativeGoAcceptance.text(original:controller)
+        NativeTemplateAcceptance.run(original:controller)
         AppController.shared.commands(nil)
         for character in "fast café" {
             let key = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:String(character),charactersIgnoringModifiers:String(character),isARepeat:false,keyCode:0)!

@@ -58,6 +58,7 @@ struct CommandsSheet: View {
             ("Source mode","⌘2",{ session.sheet = nil; session.switchMode(.source) }),
             ("Preview mode","⌘3",{ session.sheet = nil; session.switchMode(.preview) }),
             ("Find in document","⌘F",{ session.sheet = nil; session.showSearch() }),
+            ("Templates…","",{ session.pendingDocumentAction = { AppController.shared.templates(nil) }; session.sheet = nil }),
             ("New document","⌘N",{ session.sheet = nil; AppController.shared.newDocument(nil) }),
             ("Rename document","",{ session.performDocumentAction { $0.rename(nil) } }),
             ("Move document","",{ session.performDocumentAction { $0.move(nil) } }),
@@ -84,6 +85,7 @@ struct CommandsSheet: View {
         case "Source mode": return "chevron.left.forwardslash.chevron.right"
         case "Preview mode": return "doc.richtext"
         case "Find in document": return "magnifyingglass"
+        case "Templates…": return "square.grid.2x2"
         case "New document": return "doc.badge.plus"
         case "Rename document": return "character.cursor.ibeam"
         case "Move document": return "folder"
