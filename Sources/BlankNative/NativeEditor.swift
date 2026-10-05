@@ -508,7 +508,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             if event.charactersIgnoringModifiers == "b" { formatNative(false); return }
             if event.charactersIgnoringModifiers == "i" { formatNative(true); return }
         }
-        if event.modifierFlags.contains(.option), [125,126].contains(event.keyCode), session?.mode == .write, let session {
+        if event.modifierFlags.intersection([.command,.option,.control,.shift]) == [.option], [125,126].contains(event.keyCode), session?.mode == .write, let session {
             guard session.requestEditing() else { return }
             let index = session.buffer.projection.blockIndex(at:selectedRange().location)
             session.buffer.moveBlock(index,before:event.keyCode == 126 ? max(0,index-1) : min(session.buffer.projection.blocks.count,index+2)); session.changed(); return

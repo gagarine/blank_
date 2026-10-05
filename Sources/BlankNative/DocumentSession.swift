@@ -4,7 +4,7 @@ import PDFKit
 import BlankCore
 
 enum EditorMode: String, CaseIterable { case write = "Write", source = "Source", preview = "Preview" }
-enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict; var id: String { rawValue } }
+enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict, page; var id: String { rawValue } }
 struct Recovery: Codable {
     var id: String
     var entry: String
@@ -114,6 +114,8 @@ struct Recovery: Codable {
     var pendingPDFRequests: [(Int,(Result<Data,any Error>) -> Void)] = []
     var pendingExport: (URL,Int)?
     var sourceMap: [[String:Any]] = []
+    var navigationBack: [SourceDestination] = []
+    var navigationForward: [SourceDestination] = []
     var insertionKind = "footnote"
     var insertionAnchor = EditSelection(0,0)
     var objectIndex = 0
@@ -140,6 +142,7 @@ struct Recovery: Codable {
         buffer.projection.blocks.enumerated().filter { $0.element.kind == "heading" }.map { ($0.offset,$0.element) }
     }
     func changed() {
+        navigationBack.removeAll(); navigationForward.removeAll()
         projectUndoPath = nil
         if !buffer.lastEditWasLocal { refreshIncludes() }
         revision += 1; dirty = true; error = nil; editor?.refresh(); onTitle?()

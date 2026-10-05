@@ -15,7 +15,7 @@ import Combine
         withExtendedLifetime(delegate) {}
     }
 }
-@MainActor final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
+@MainActor final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     static var shared: AppController!
     static var dataDirectory: URL {
         if let custom = ProcessInfo.processInfo.environment["BLANK_DATA_DIR"] { return URL(fileURLWithPath:custom) }
@@ -109,6 +109,17 @@ import Combine
     @objc func redo(_ sender: Any?) { current?.undo(true) }
     @objc func bold(_ sender: Any?) { current?.editor?.formatNative(false) }
     @objc func italic(_ sender: Any?) { current?.editor?.formatNative(true) }
+    @objc func go(_ sender: NSMenuItem) {
+        guard NSApp.keyWindow == nil || current?.window === NSApp.keyWindow,
+              let action = sender.representedObject as? GoAction else { return }
+        current?.navigate(action)
+    }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(go(_:)), let action = menuItem.representedObject as? GoAction {
+            return (NSApp.keyWindow == nil || current?.window === NSApp.keyWindow) && current?.canNavigate(action) == true
+        }
+        return true
+    }
     @objc func fullscreen(_ sender: Any?) { NSApp.keyWindow?.toggleFullScreen(nil) }
     @objc func refresh(_ sender: Any?) { current?.compileRevision = -1; current?.compile() }
     @objc func refreshReferences(_ sender: Any?) { if let current { ZoteroIntegration.refresh(current) } }
@@ -160,6 +171,21 @@ import Combine
         let format = menu("Format"); add(format,"Bold",#selector(bold(_:)),"b",target:self); add(format,"Italic",#selector(italic(_:)),"i",target:self)
         let view = menu("View"); add(view,"Write",#selector(writeMode(_:)),"1",target:self); add(view,"Source",#selector(sourceMode(_:)),"2",target:self); add(view,"Preview",#selector(previewMode(_:)),"3",target:self)
         view.addItem(.separator()); add(view,"Toggle Sidebar",#selector(outline(_:)),"l",[.command,.shift],target:self); add(view,"Commands…",#selector(commands(_:)),"k",target:self); add(view,"Refresh Preview",#selector(refresh(_:)),target:self); add(view,"Enter Full Screen",#selector(fullscreen(_:)),"f",[.command,.control],target:self)
+        let go = menu("Go")
+        func navigation(_ title: String,_ action: GoAction,_ key: String = "",_ modifiers: NSEvent.ModifierFlags = .command) {
+            add(go,title,#selector(self.go(_:)),key,modifiers,target:self)
+            go.items.last?.representedObject = action
+        }
+        navigation("Up",.up)
+        navigation("Down",.down)
+        // Option-arrow already moves blocks in Write and is native paragraph
+        // navigation in Source. Keep those editing keys free of menu interception.
+        navigation("Previous Item",.previousItem,String(UnicodeScalar(NSUpArrowFunctionKey)!),[.command,.option])
+        navigation("Next Item",.nextItem,String(UnicodeScalar(NSDownArrowFunctionKey)!),[.command,.option])
+        navigation("Go to Page…",.page,"g",[.command,.option])
+        go.addItem(.separator())
+        navigation("Back",.back,"[")
+        navigation("Forward",.forward,"]")
         let window = menu("Window"); NSApp.windowsMenu = window
         add(window,"Minimize",#selector(NSWindow.performMiniaturize(_:)),"m"); add(window,"Zoom",#selector(NSWindow.performZoom(_:))); window.addItem(.separator()); add(window,"Bring All to Front",#selector(NSApplication.arrangeInFront(_:)),target:NSApp)
         let help = menu("Help"); NSApp.helpMenu = help

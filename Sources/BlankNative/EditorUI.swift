@@ -166,6 +166,7 @@ struct EditorRoot: View {
             case .insertion: InsertionSheet(session:session)
             case .object: ObjectSheet(session:session)
             case .conflict: ConflictSheet(session:session)
+            case .page: GoToPageSheet(session:session)
             }
         }
         .onChange(of:session.searchFocusRequest) { _,_ in
@@ -178,17 +179,6 @@ struct EditorRoot: View {
     }
     private func focusSearch() {
         DispatchQueue.main.async { (session.window?.windowController as? DocumentWindow)?.focusNativeSearch() }
-    }
-    var previewControls: some View {
-        HStack(spacing:12) {
-            if session.compiling { ProgressView().controlSize(.mini); Text("Typesetting…").font(.system(size:10)).foregroundStyle(.secondary) }
-            Spacer()
-            Button { session.goPage(session.previewPage-1) } label: { Image(systemName:"chevron.left") }.disabled(session.previewPage <= 1)
-            TextField("Page",value:$session.previewPage,format:.number).frame(width:36).textFieldStyle(.roundedBorder).onSubmit { session.goPage(session.previewPage) }
-            Text("of \(session.pdf?.pageCount ?? 0)").foregroundStyle(.secondary)
-            Button { session.goPage(session.previewPage+1) } label: { Image(systemName:"chevron.right") }.disabled(session.previewPage >= (session.pdf?.pageCount ?? 0))
-            Spacer()
-        }.font(.system(size:11)).controlSize(.small).padding(.horizontal,24).frame(height:35)
     }
     var searchBar: some View {
         HStack(spacing:8) {
@@ -245,7 +235,7 @@ struct ContentsView: View {
                         HStack(spacing:5) {
                             let hasChildren = session.headings.contains { $0.0 > index && $0.1.level > b.level && $0.0 < (session.headings.first { $0.0 > index && $0.1.level <= b.level }?.0 ?? Int.max) }
                             Button { if contentsDrag.collapsed.contains(index) { contentsDrag.collapsed.remove(index) } else { contentsDrag.collapsed.insert(index) } } label: { Image(systemName:contentsDrag.collapsed.contains(index) ? "chevron.right" : "chevron.down").font(.system(size:8)).opacity(hasChildren ? 0.6 : 0).frame(width:20,height:28).contentShape(Rectangle()) }.buttonStyle(.plain).disabled(!hasChildren).accessibilityLabel((contentsDrag.collapsed.contains(index) ? "Expand " : "Collapse ")+b.text).accessibilityHidden(!hasChildren)
-                            ContentsRow(session:session,drag:contentsDrag,item:.heading(index),title:b.text,activate:{ session.editor?.finishComposition(); session.buffer.selection = EditSelection(b.body.start,b.body.start); if session.mode == .preview { session.switchMode(.write) }; session.editor?.refresh(reveal:true) })
+                            ContentsRow(session:session,drag:contentsDrag,item:.heading(index),title:b.text,activate:{ session.navigateToSource(path:session.active,selection:EditSelection(b.body.start,b.body.start)) })
                         }.padding(.leading,CGFloat(max(0,b.level-(session.headings.filter { $0.1.level == 1 }.count == 1 ? 2 : 1)))*12).frame(height:28)
                     }
                 }.padding(.horizontal,16)

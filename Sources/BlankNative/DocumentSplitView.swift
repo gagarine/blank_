@@ -34,8 +34,8 @@ import Combine
         detail.automaticallyAdjustsSafeAreaInsets = true
         detailItem = detail
         addSplitViewItem(contentsItem); addSplitViewItem(detail)
-        session.$mode.combineLatest(session.$searchVisible,session.$contactSheet).sink { [weak self] mode,search,contact in
-            DispatchQueue.main.async { self?.updateAccessory(mode:mode,search:search,contact:contact) }
+        session.$searchVisible.combineLatest(session.$contactSheet).sink { [weak self] search,contact in
+            DispatchQueue.main.async { self?.updateAccessory(search:search,contact:contact) }
         }.store(in:&subscriptions)
         collapseObservation = contentsItem.observe(\.isCollapsed,options:[.new]) { [weak self] item,_ in
             MainActor.assumeIsolated {
@@ -88,8 +88,8 @@ import Combine
               let target = sidebarResizeRect, target.contains(splitView.convert(event.locationInWindow,from:nil)) else { return false }
         NSCursor.resizeLeftRight.set(); return true
     }
-    private func updateAccessory(mode: EditorMode,search: Bool,contact: Bool) {
-        let height: CGFloat = contact ? 38 : (search ? 38 : 0)+(mode == .preview ? 35 : 0)
+    private func updateAccessory(search: Bool,contact: Bool) {
+        let height: CGFloat = contact ? 38 : (search ? 38 : 0)
         if height == 0 { detailItem.topAlignedAccessoryViewControllers = []; accessory = nil; return }
         if accessory == nil {
             let controller = NSSplitViewItemAccessoryViewController()
@@ -115,7 +115,6 @@ struct DocumentAccessory: View {
                 }.font(.system(size:11)).controlSize(.small).padding(.horizontal,24).frame(height:38)
             } else {
                 if session.searchVisible { EditorRoot(session:session).searchBar }
-                if session.mode == .preview { EditorRoot(session:session).previewControls }
             }
         }.frame(maxWidth:.infinity)
     }

@@ -8,7 +8,7 @@ Learn by trying. This is your own editable copy of the guide. Press ⌘S to keep
 - *⌘2 — Source:* edit the underlying Typst file.
 - *⌘3 — Preview:* see the typeset pages.
 
-Try ⌘2, then ⌘3, then ⌘1 to come back here. These are three views of the same document. In Preview, enter a page number to jump to it. Press ⌘F and type to see search results in the sidebar; Return moves to the next match.
+Try ⌘2, then ⌘3, then ⌘1 to come back here. These are three views of the same document. Use the Go menu to navigate sections in Write and Source, or pages in Preview. Go → Go to Page jumps to a page in a multipage PDF. Press ⌘F and type to see search results in the sidebar; Return moves to the next match.
 
 == 2. Write and format
 

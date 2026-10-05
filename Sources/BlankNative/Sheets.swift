@@ -14,6 +14,34 @@ struct SheetFrame<Content: View>: View {
         }.padding(28).frame(width:width).background(Color(nsColor:.windowBackgroundColor))
     }
 }
+struct GoToPageSheet: View {
+    @ObservedObject var session: DocumentSession
+    @NativeState private var page = ""
+    @FocusState private var focused: Bool
+    var destination: Int? {
+        guard session.canGoToPage, let number = Int(page.trimmingCharacters(in:.whitespaces)),
+              (1...(session.pdf?.pageCount ?? 1)).contains(number) else { return nil }
+        return number
+    }
+    var body: some View {
+        SheetFrame(title:"Go to Page",width:300,dismiss:{ session.sheet = nil }) {
+            HStack {
+                Text("Page:")
+                TextField("Page number",text:$page).textFieldStyle(.roundedBorder).focused($focused)
+                Text("of \(session.pdf?.pageCount ?? 0)").foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction)
+                Button("Go") {
+                    guard let destination else { return }
+                    session.goPage(destination); session.sheet = nil
+                    session.window?.makeFirstResponder(session.pdfView)
+                }.keyboardShortcut(.defaultAction).disabled(destination == nil)
+            }
+        }.onAppear { page = String(session.previewPage); focused = true }
+    }
+}
 struct CommandsSheet: View {
     @ObservedObject var session: DocumentSession
     @NativeState var selectedCommand = 0

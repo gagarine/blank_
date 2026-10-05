@@ -19,7 +19,7 @@ import BlankCore
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         guard let view = session.editor else { fatalError("No native editor") }
         func check(_ condition: @autoclosure () -> Bool,_ label: String) { if !condition() { fatalError("FAIL: \(label) | source=\(session.buffer.source) | native=\(view.string)") }; print("PASS: \(label)") }
-        check(app.activationPolicy() == .regular && app.mainMenu?.items.map(\.title) == ["blank_","File","Edit","Format","View","Window","Help"],"Complete application menus are installed during launch preparation")
+        check(app.activationPolicy() == .regular && app.mainMenu?.items.map(\.title) == ["blank_","File","Edit","Format","View","Go","Window","Help"],"Complete application menus are installed during launch preparation")
         check(app.mainMenu?.items.allSatisfy { $0.submenu?.items.isEmpty == false } == true && app.servicesMenu != nil && app.windowsMenu != nil && app.helpMenu != nil,"Launch menus include populated submenus and native Services, Window and Help integration")
         check(view.textLayoutManager == nil && view.layoutManager != nil,"TextKit 1 selected explicitly at creation")
         check(controller.window?.firstResponder === view,"Empty editor is focused")
@@ -29,6 +29,7 @@ import BlankCore
         check(controller.sidebarItem?.isBordered == true && controller.modeItem?.isBordered == true,"Interactive toolbar controls opt into the system glass backing")
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
+        NativeGoAcceptance.text(original:controller)
         AppController.shared.commands(nil)
         for character in "fast café" {
             let key = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:String(character),charactersIgnoringModifiers:String(character),isARepeat:false,keyCode:0)!
@@ -622,6 +623,7 @@ import BlankCore
         // Navigate directly instead of routing through the page-counter action.
         pdfView.go(to:secondPage); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(session.previewPage == 2,"Preview page counter follows native PDF navigation")
+        NativeGoAcceptance.preview(controller:controller)
         let zoom = controller.zoomItem!
         check(!zoom.isHidden,"PDF zoom controls appear in Preview")
         zoom.selectedIndex = 1; controller.zoomPreview(zoom)
