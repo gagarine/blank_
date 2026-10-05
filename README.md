@@ -4,6 +4,16 @@ A quiet native macOS editor for [Typst](https://typst.app). Write, Source and PD
 
 Supports block editing and dragging, collapsible code, inline table row/column menus, shared undo, formatted clipboard, figures/captions, links, footnotes, citations with Zotero, included files/chapter movement, project search, statistics, settings, document windows and recovery. Generated or complex Typst stays editable in Source.
 
+## First launch
+
+Current releases are not notarized. If macOS blocks the app:
+
+1. Click **Done** in the warning.
+2. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open Anyway** for blank_.
+3. Authenticate if asked, then click **Open**.
+
+See [Apple’s instructions](https://support.apple.com/en-us/102445).
+
 ## Development
 
 Requires macOS 26+, Swift 6 with a macOS 26/27 SDK, Rust 1.98.1 (pinned) and Python 3 for checks.
@@ -16,7 +26,7 @@ bash scripts/check.sh
 
 Both configurations update `build/blank_.app`; quit and reopen after rebuilding. Checks cover the document model, official compiler and native editing/file behavior. Native checks require a logged-in desktop session. See [AGENTS.md](AGENTS.md) for architecture and development conventions.
 
-[GitHub Actions](.github/workflows/build-macos.yml) tests pull requests and pushes on macOS 26 and 27. Publishing a release tagged `vX.Y.Z` (prerelease suffixes supported) builds that commit and attaches `blank_-macos-arm64.zip` and `SHA256SUMS` after both jobs pass. Builds are ad-hoc signed; notarization and Intel support remain unverified.
+[GitHub Actions](.github/workflows/build-macos.yml) tests pull requests and pushes on macOS 26 and 27. Publishing a release tagged `vX.Y.Z` (prerelease suffixes supported) builds that commit and attaches `blank_-macos-arm64.zip` and `SHA256SUMS` after both jobs pass. Builds are ad-hoc signed and not notarized; Intel support remains unverified.
 
 ## Remaining work
 
