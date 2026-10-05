@@ -17,6 +17,7 @@ struct Recovery: Codable {
     @Published var mode: EditorMode = .write
     @Published var active = "Untitled.typ"
     @Published var sidebar = false
+    @Published var sidebarOrderLocked = false
     @Published var sidebarHover = false
     @Published var sidebarDragging = false
     func toggleSidebar() { sidebarHover = false; sidebar.toggle() }
@@ -63,6 +64,7 @@ struct Recovery: Codable {
     var conflictDisk: [String:String] = [:]
     var deletedFiles = Set<String>()
     var buffer: DocumentBuffer { buffers[active]! }
+    var windowTitle: String { title+(dirty ? " — Edited" : "") }
     var title: String { entry.replacingOccurrences(of:".typ",with:"") }
     var onTitle: (() -> Void)?
     weak var contentsCursorView: ContentsCursorView?

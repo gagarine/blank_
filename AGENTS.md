@@ -39,8 +39,8 @@ The Go reference is preserved on `codex/legacy-go`. Inspect it with `git show` o
 - Return makes a paragraph; Shift-Return makes a soft line break. Lists continue on Return and exit on an empty item. Return within a table makes a cell paragraph.
 - Table insertion immediately creates an empty 2×2 table and focuses its first cell. Tab/Shift-Tab navigates cells; Tab at the end adds a row. Native row/column controls and context menus edit dimensions in place; do not duplicate cell editing in a sheet. Cell slash menus expose only supported cell operations.
 - Structured clipboard preserves block kinds and inline marks; paste at a mid-paragraph caret splits there. Source clipboard contains exact plain source.
-- Handles reveal on hover, use open-hand/closed-hand cursors, and offer Turn into, Duplicate and Delete. Exclude the current kind from Turn into. Dragging shows a translucent block preview, hides other handles and draws one insertion line between blocks.
-- Keep the heading hierarchy collapsible and titles restrained; preserve sidebar pin/hover behavior and native keyboard/mouse selection.
+- Handles reveal only near the left text edge or handle gutter, use open-hand/closed-hand cursors, and offer Turn into, Duplicate and Delete. Exclude the current kind from Turn into. Dragging shows a translucent block preview, hides other handles and draws one insertion line between blocks.
+- Keep the heading hierarchy collapsible and titles restrained; use the leading native toolbar toggle to show/hide it and retain the floating shadow. Use the first H1 as its title, ordinary arrow navigation and native click-drag section movement (closed hand only while moving); do not add a reorder mode or a pin button. The footer’s “Lock section order” toggle disables only sidebar moves; text/block editing stays available. Unsaved changes use the native window’s edited flag and an Edited title suffix.
 
 ## Build, run and verify
 

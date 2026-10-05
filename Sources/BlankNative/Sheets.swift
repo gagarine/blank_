@@ -23,7 +23,7 @@ struct CommandsSheet: View {
             ("Statistics & info","",{ session.sheet = .statistics }),
             ("Open document","⌘O",{ session.sheet = nil; AppController.shared.openDocument(nil) }),
             ("Save","⌘S",{ session.sheet = nil; session.save() }),
-            (session.sidebar ? "Unpin table of contents" : "Pin table of contents","⌘⇧L",{ session.toggleSidebar(); session.sheet = nil }),
+            (session.sidebar ? "Hide sidebar" : "Show sidebar","⌘⇧L",{ session.toggleSidebar(); session.sheet = nil }),
             (session.paragraphFocus ? "Turn off paragraph focus" : "Paragraph focus","",{ session.paragraphFocus.toggle(); session.editor?.lastAppearance = ""; session.editor?.refresh(); session.sheet = nil }),
             (session.typewriter ? "Turn off typewriter scrolling" : "Typewriter scrolling","",{ session.typewriter.toggle(); session.sheet = nil }),
             ("Write mode","⌘1",{ session.sheet = nil; session.switchMode(.write) }),
@@ -66,7 +66,7 @@ struct CommandsSheet: View {
         case "Refresh Zotero references": return "arrow.triangle.2.circlepath"
         case "Open recovery copy": return "clock.arrow.circlepath"
         default:
-            if title.contains("contents") { return "sidebar.left" }
+            if title.contains("contents") || title.contains("sidebar") { return "sidebar.left" }
             if title.contains("focus") { return "text.alignleft" }
             return "arrow.up.and.down.text.horizontal"
         }

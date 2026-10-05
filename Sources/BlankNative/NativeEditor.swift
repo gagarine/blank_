@@ -30,7 +30,7 @@ struct NativeEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         if let view = scroll.documentView as? NativeTextView { view.refresh() }
     }
-    static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) { (scroll.documentView as? NativeTextView)?.slashPopover?.close() }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) { if let editor = scroll.documentView as? NativeTextView { editor.slashPopover?.close(); editor.blockPopover?.close() } }
 }
 
 struct NativeInputDefaults {
@@ -53,6 +53,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var composing = false
     var compositionOriginal = ""
     var slashPopover: NSPopover?
+    var blockPopover: NSPopover?
+    var blockMenuRevision = -1
+    var blockMenuPath = ""
     var slashStart: Int?
     var slashIndex = 0
     var slashQuery = ""
@@ -268,6 +271,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         layoutManager?.ensureLayout(forBoundingRect:visibleRect.offsetBy(dx:-textContainerOrigin.x,dy:-textContainerOrigin.y),in:textContainer)
     }
     func refresh(reveal: Bool = false) {
+        if let session, blockPopover?.isShown == true,
+           session.buffer.revision != blockMenuRevision || session.active != blockMenuPath { blockPopover?.close() }
+
         effectiveAppearance.performAsCurrentDrawingAppearance { refreshContent(reveal:reveal) }
     }
     private func refreshContent(reveal: Bool) {
@@ -644,7 +650,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         return session.buffer.projection.blocks.indices.first { index in
             let rect = blockRect(index)
             if tableBlockHandleRect(index)?.contains(point) == true { return true }
-            return point.y >= rect.minY-5 && point.y < rect.maxY+5 && point.x >= textContainerInset.width-38 && point.x < bounds.width-textContainerInset.width
+            return point.y >= rect.minY-5 && point.y < rect.maxY+5 && point.x >= textContainerInset.width-38 && point.x <= textContainerInset.width+14
         }
     }
     func tableBlockHandleRect(_ index: Int) -> NSRect? {
@@ -658,8 +664,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with:event) }
     private func updateSlashMenuCursor(for event: NSEvent) -> Bool {
-        guard slashPopover?.isShown == true,
-              let popoverWindow = slashPopover?.contentViewController?.view.window,
+        guard let popover = [blockPopover,slashPopover].compactMap({ $0 }).first(where:{ $0.isShown }),
+              let popoverWindow = popover.contentViewController?.view.window,
               let eventWindow = event.window ?? window,
               popoverWindow.frame.contains(eventWindow.convertPoint(toScreen:event.locationInWindow)) else { return false }
         if hoverBlock != nil { hoverBlock = nil; needsDisplay = true }
@@ -708,7 +714,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             let index = session.buffer.projection.blockIndex(at:characterIndexForInsertion(at:point))
             if session.buffer.projection.blocks[index].collapsed { toggleCode(index); return }
         }
-        dismissSlash(); super.mouseDown(with:event)
+        blockPopover?.close(); dismissSlash(); super.mouseDown(with:event)
     }
     override func mouseDragged(with event: NSEvent) {
         guard grabbed != nil, let session else { super.mouseDragged(with:event); return }
@@ -758,7 +764,20 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         for title in ["Duplicate","Delete"] {
             let item = BlockMenuItem(title:title,action:#selector(blockMenuAction(_:)),keyEquivalent:""); item.target = self; item.blockIndex = index; item.blockAction = title.lowercased(); menu.addItem(item)
         }
-        NSMenu.popUpContextMenu(menu,with:event,for:self)
+        dismissSlash(); blockPopover?.close()
+        blockMenuRevision = session.buffer.revision; blockMenuPath = session.active
+        let popover = NSPopover(); popover.behavior = .transient; popover.animates = false
+        blockPopover = popover
+        let content = BlockActionMenu(items:BlockAction.items(from:menu),choose:{ [weak self] item in
+            guard let self, let session = self.session,
+                  session.active == self.blockMenuPath, session.buffer.revision == self.blockMenuRevision else { self?.blockPopover?.close(); return }
+            self.blockPopover?.close(); self.window?.makeFirstResponder(self)
+            if let action = item.action { NSApp.sendAction(action,to:item.target,from:item) }
+        },resize:{ [weak popover] size in popover?.contentSize = size })
+        popover.contentViewController = NSHostingController(rootView:content)
+        popover.contentSize = content.size
+        let anchor = tableBlockHandleRect(index) ?? NSRect(x:textContainerInset.width-38,y:rectFor(block.display.location).minY,width:32,height:28)
+        popover.show(relativeTo:anchor,of:self,preferredEdge:.maxX)
     }
     @objc func blockMenuAction(_ item: BlockMenuItem) {
         guard let session else { return }

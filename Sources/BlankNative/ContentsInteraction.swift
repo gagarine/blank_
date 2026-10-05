@@ -51,7 +51,7 @@ enum ContentsItem: Equatable {
         canMove(to:row,placement:after ? .after : .before)
     }
     func canMove(to row: ContentsRowView,placement: SectionPlacement) -> Bool {
-        guard let source, let session = row.session, source.session === session,
+        guard let source, let session = row.session, !session.sidebarOrderLocked, source.session === session,
               path == session.active, revision == session.buffer.revision, source.item != row.item else { return false }
         switch (source.item,row.item) {
         case let (.heading(from),.heading(to)):
@@ -127,17 +127,28 @@ final class ContentsRowView: NSButton, NSDraggingSource {
     }
     override func hitTest(_ point: NSPoint) -> NSView? { bounds.contains(convert(point,from:superview)) ? self : nil }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func resetCursorRects() { super.resetCursorRects(); addCursorRect(bounds,cursor:.openHand) }
+    override func resetCursorRects() { super.resetCursorRects(); addCursorRect(bounds,cursor:.arrow) }
     override func accessibilityPerformPress() -> Bool { activate(); return true }
     @objc func activateRow(_ sender: Any?) { activate() }
-    override func mouseDown(with event: NSEvent) { press = convert(event.locationInWindow,from:nil); NSCursor.closedHand.set() }
+    override func mouseDown(with event: NSEvent) {
+        guard session?.sidebarOrderLocked != true else { super.mouseDown(with:event); return }
+        press = convert(event.locationInWindow,from:nil)
+        // Track the whole native gesture here. Hosting an NSButton inside a
+        // SwiftUI outline must not depend on SwiftUI forwarding drag events.
+        while let next = window?.nextEvent(matching:[.leftMouseDragged,.leftMouseUp],until:.distantFuture,inMode:.eventTracking,dequeue:true) {
+            if next.type == .leftMouseUp { mouseUp(with:next); return }
+            mouseDragged(with:next)
+            if press == nil { return }
+        }
+        press = nil
+    }
     override func mouseUp(with event: NSEvent) {
         guard press != nil else { return }; press = nil
-        NSCursor.openHand.set()
+        NSCursor.arrow.set()
         if bounds.contains(convert(event.locationInWindow,from:nil)) { activate() }
     }
     override func mouseDragged(with event: NSEvent) {
-        guard let press, let drag, let session else { return }
+        guard let press, let drag, let session, !session.sidebarOrderLocked else { return }
         let point = convert(event.locationInWindow,from:nil)
         guard hypot(point.x-press.x,point.y-press.y) >= 4 else { return }
         self.press = nil; session.editor?.finishComposition()
@@ -148,6 +159,7 @@ final class ContentsRowView: NSButton, NSDraggingSource {
         let image = NSImage(size:bounds.size)
         image.lockFocus(); label.attributedStringValue.draw(at:NSPoint(x:0,y:(bounds.height-16)/2)); image.unlockFocus()
         native.setDraggingFrame(bounds,contents:image)
+        NSCursor.closedHand.set()
         beginDraggingSession(with:[native],event:event,source:self).animatesToStartingPositionsOnCancelOrFail = true
     }
     func draggingSession(_ session: NSDraggingSession,sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { context == .withinApplication ? .move : [] }
@@ -157,6 +169,7 @@ final class ContentsRowView: NSButton, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession,endedAt screenPoint: NSPoint,operation: NSDragOperation) { drag?.finish() }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if let event = NSApp.currentEvent { autoscroll(with:event) }
         guard let drag else { return [] }
         guard sender.draggingSource as? ContentsRowView === drag.source else { drag.highlight(nil); return [] }
         var placement: SectionPlacement = convert(sender.draggingLocation,from:nil).y >= bounds.midY ? .after : .before
@@ -198,28 +211,8 @@ final class ContentsRowView: NSButton, NSDraggingSource {
     }
 }
 
-struct ContentsPin: NSViewRepresentable {
-    var pinned: Bool
-    var toggle: ()->Void
-    func makeNSView(context: Context) -> ContentsPinButton {
-        let button = ContentsPinButton(); button.isBordered = false; button.title = ""; button.imagePosition = .imageOnly
-        button.target = button; button.action = #selector(ContentsPinButton.activate(_:)); return button
-    }
-    func updateNSView(_ button: ContentsPinButton,context: Context) {
-        button.image = NSImage(systemSymbolName:pinned ? "pin.fill" : "pin",accessibilityDescription:nil)
-        button.setAccessibilityLabel(pinned ? "Unpin Contents" : "Pin Contents")
-        button.toolTip = (pinned ? "Unpin" : "Pin")+" Contents · ⌘⇧L"; button.perform = toggle
-    }
-}
-final class ContentsPinButton: NSButton {
-    var perform: ()->Void = {}
-    override func resetCursorRects() { super.resetCursorRects(); addCursorRect(bounds,cursor:.pointingHand) }
-    override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    @objc func activate(_ sender: Any?) { perform() }
-}
 // One panel cursor owner routes overlapping tracking events to the visible
-// control. No full-panel arrow cursor rectangle competes with the pin's rect.
+// row. The native arrow remains the navigation cursor until a drag starts.
 struct ContentsCursorArea: NSViewRepresentable {
     var session: DocumentSession
     func makeNSView(context: Context) -> ContentsCursorView { ContentsCursorView() }
@@ -237,6 +230,7 @@ struct ContentsCursorArea: NSViewRepresentable {
 final class ContentsCursorView: NSView {
     weak var session: DocumentSession?
     private var tracking: NSTrackingArea?
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func layout() {
         super.layout()
         if let editor = session?.editor { editor.window?.invalidateCursorRects(for:editor) }
@@ -253,14 +247,14 @@ final class ContentsCursorView: NSView {
         func control(in view: NSView) -> NSView? {
             guard !view.isHiddenOrHasHiddenAncestor else { return nil }
             for child in view.subviews.reversed() { if let hit = control(in:child) { return hit } }
-            if (view is ContentsPinButton || view is ContentsRowView),
+            if view is ContentsRowView,
                view.visibleRect.contains(view.convert(event.locationInWindow,from:nil)) { return view }
             return nil
         }
         if let root = window.contentView, let button = control(in:root) {
             if let row = button as? ContentsRowView {
-                (row.drag?.source != nil || row.press != nil ? NSCursor.closedHand : NSCursor.openHand).set()
-            } else { NSCursor.pointingHand.set() }
+                (row.drag?.source != nil ? NSCursor.closedHand : NSCursor.arrow).set()
+            } else { NSCursor.arrow.set() }
         } else { NSCursor.arrow.set() }
         return true
     }

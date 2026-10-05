@@ -28,7 +28,7 @@ First idea: write the thought before polishing it.
 
 Second idea: a draft can change its order.
 
-Hover over “Second idea”, then drag the dots on its left above “First idea”. The line shows where it will land. Press ⌘Z to undo. You can also move a block with ⌥↑ or ⌥↓.
+Move into the left margin beside “Second idea”, then drag the dots on its left above “First idea”. The line shows where it will land. Press ⌘Z to undo. You can also move a block with ⌥↑ or ⌥↓.
 
 === Move a section
 
@@ -38,7 +38,7 @@ Drag a heading above or below another heading at the same level to reorder its w
 
 Try dragging “Move a section” onto “4. Add your research” in Contents. It becomes a subsection there, keeping its heading level and bringing this text with it. The parent highlights and the insertion line marks the end of its section. Press ⌘Z to undo.
 
-Click the pin or press ⌘⇧L to unpin Contents. Move into the left margin to reveal it again; pin it to keep it open.
+Click the sidebar button at the top left or press ⌘⇧L to hide Contents. Move into the left margin to reveal it temporarily; use the toolbar button to keep it open. “Lock section order” in the bottom bar prevents sidebar moves while keeping heading navigation and text editing available.
 
 == 4. Add your research
 

@@ -42,6 +42,7 @@ extension DocumentWindow: NSToolbarDelegate {
         let item = NSToolbarItem(itemIdentifier:identifier); item.target = self
         switch identifier {
         case .blankSidebar:
+            item.isNavigational = true; item.visibilityPriority = .high
             item.label = "Contents"; item.paletteLabel = "Table of Contents"; item.image = NSImage(systemSymbolName:"sidebar.left",accessibilityDescription:"Toggle Contents"); item.action = #selector(toggleContents(_:)); item.toolTip = "Show Contents · ⌘⇧L"; sidebarItem = item
         case .blankExport:
             item.label = "Export PDF"; item.image = NSImage(systemSymbolName:"square.and.arrow.up",accessibilityDescription:"Export PDF"); item.action = #selector(exportDocument(_:)); item.toolTip = "Export PDF · ⌘⇧E"

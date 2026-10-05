@@ -123,6 +123,7 @@ struct SlashMenuCursorArea: NSViewRepresentable {
 }
 final class SlashMenuCursorView: NSView {
     private var cursorTracking: NSTrackingArea?
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let cursorTracking { removeTrackingArea(cursorTracking) }
@@ -148,7 +149,7 @@ struct EditorRoot: View {
             if session.searchVisible { searchBar }
             if session.mode == .preview { previewControls }
             HStack(spacing:0) {
-                if session.sidebar { contents.frame(width:235); Divider() }
+                if session.sidebar { contents.frame(width:235) }
                 GeometryReader { geometry in
                     ZStack(alignment:.leading) {
                         if session.mode == .preview { PreviewView(session:session) }
@@ -175,7 +176,10 @@ struct EditorRoot: View {
             }
             Divider().opacity(0.5)
             HStack {
-                Text(session.root == nil ? "Unsaved document" : session.dirty ? "Saving…" : "Saved").font(.system(size:10)).foregroundStyle(.tertiary)
+                Toggle(isOn:$session.sidebarOrderLocked) {
+                    Label("Lock section order",systemImage:session.sidebarOrderLocked ? "lock.fill" : "lock.open")
+                        .font(.system(size:10)).foregroundStyle(.secondary)
+                }.toggleStyle(.button).buttonStyle(.plain).help("Prevent dragging headings and chapters in the sidebar. Text editing and block movement stay available.")
                 Spacer()
                 Button { session.sheet = .statistics } label: { Text("\(wordCount) \(wordCount == 1 ? "word" : "words")").font(.system(size:10)).foregroundStyle(.secondary) }.buttonStyle(.plain)
                 Text("⌘K").font(.system(size:10)).foregroundStyle(.tertiary).padding(.leading,18)
@@ -249,9 +253,9 @@ struct EditorRoot: View {
     var contents: some View {
         VStack(alignment:.leading,spacing:0) {
             HStack {
-                Text("CONTENTS").font(.system(size:9,weight:.semibold)).tracking(1.2).foregroundStyle(.secondary)
-                Spacer()
-                ContentsPin(pinned:session.sidebar,toggle:{ session.toggleSidebar() }).frame(width:28,height:28)
+                Text(session.headings.first { $0.1.level == 1 }?.1.text ?? session.title)
+                    .font(.system(size:13,weight:.semibold)).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength:0)
             }.padding(.horizontal,16).padding(.top,18).padding(.bottom,10)
             ScrollView {
                 VStack(alignment:.leading,spacing:3) {

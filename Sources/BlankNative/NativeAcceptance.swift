@@ -1,5 +1,6 @@
 import AppKit
 import PDFKit
+import SwiftUI
 import BlankCore
 
 @MainActor enum NativeAcceptance {
@@ -58,6 +59,7 @@ import BlankCore
         check(controller.window?.firstResponder === view && view.shouldDrawInsertionPoint,"Return keeps focus and a native insertion point")
         view.insertText("Second paragraph",replacementRange:view.selectedRange())
         check(session.buffer.projection.blocks.count == 2,"Return splits paragraph")
+        check(controller.window?.isDocumentEdited == true && controller.window?.title == session.title+" — Edited","Unsaved writing appears as Edited in the native window title")
         view.ensureNativeLayout()
         let paragraphEnd = view.rectFor(view.selectedRange().location)
         view.insertLineBreak(nil)
@@ -274,6 +276,11 @@ import BlankCore
         let handle = NSPoint(x:editor.textContainerInset.width-23,y:editor.blockRect(0).minY+12)
         editor.mouseEntered(with:pointer(.mouseMoved,handle))
         check(editor.hoverBlock == 0 && NSCursor.current == NSCursor.openHand,"Entering a handle shows an open hand")
+        editor.mouseMoved(with:pointer(.mouseMoved,NSPoint(x:editor.textContainerInset.width+100,y:handle.y)))
+        check(editor.hoverBlock == nil,"Hovering prose away from its left edge hides block handles")
+        editor.mouseMoved(with:pointer(.mouseMoved,NSPoint(x:editor.textContainerInset.width+8,y:handle.y)))
+        check(editor.hoverBlock == 0,"Approaching the text's left edge reveals its block handle")
+        editor.mouseMoved(with:pointer(.mouseMoved,handle))
         let gutter = NSRect(x:editor.textContainerInset.width-30,y:editor.rectFor(0).midY-9,width:20,height:20)
         guard let handlePixels = editor.bitmapImageRepForCachingDisplay(in:gutter) else { fatalError("Missing native gutter bitmap") }
         editor.cacheDisplay(in:gutter,to:handlePixels)
@@ -304,26 +311,35 @@ import BlankCore
         check(NSCursor.current == NSCursor.iBeam,"Dropping over text restores the text cursor")
         check(session.buffer.projection.blocks.map(\.text) == ["Second block","First block","Third block"],"Dropping a block moves its source")
         session.undo(); check(session.buffer.projection.blocks.first?.text == "First block","Block drag undo restores order")
+        let menuSource = session.buffer.source
+        editor.showBlockMenu(0,event:pointer(.leftMouseUp,handle))
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        let handleMenu = (editor.blockPopover?.contentViewController as? NSHostingController<BlockActionMenu>)?.rootView
+        check(editor.blockPopover?.isShown == true && handleMenu?.items.map { $0.item.title } == ["Turn into","Duplicate","Delete"],"Block handle uses the compact app popover without injected text-context actions")
+        check(handleMenu?.items.first?.children.allSatisfy { ($0.item as? BlockMenuItem)?.command?.kind != "paragraph" } == true,"Turn into omits the current block type")
+        if let duplicate = handleMenu?.items.first(where:{ $0.item.title == "Duplicate" }) { handleMenu?.choose(duplicate.item) }
+        check(session.buffer.projection.blocks.count == 4 && controller.window?.firstResponder === editor,"Popover Duplicate uses the document transaction and restores editing focus")
+        session.undo(); check(session.buffer.source == menuSource,"Popover block actions share exact-source undo")
         session.sidebarHover = true; controller.toggleContents(nil)
         check(session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Pinning contents clears transient hover and updates toolbar")
         session.sidebarHover = true; session.toggleSidebar()
         check(!session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Unpinning contents restores transient behavior")
-        // Exercise the pin against BOTH overlapping panel/editor tracking owners.
+        // Navigation rows use the native arrow; closed-hand feedback belongs
+        // to an active move, independently of pinned/hover presentation.
         let cursorArea = ContentsCursorView(frame:NSRect(x:0,y:0,width:235,height:220))
-        let pin = ContentsPinButton(frame:NSRect(x:100,y:100,width:28,height:28))
-        editor.addSubview(cursorArea); editor.addSubview(pin); session.contentsCursorView = cursorArea
-        let pinEvent = pointer(.mouseMoved,pin.convert(NSPoint(x:14,y:14),to:editor))
+        let cursorRow = ContentsRowView(frame:NSRect(x:100,y:100,width:100,height:28))
+        let cursorDrag = ContentsDrag(); cursorRow.drag = cursorDrag; cursorRow.session = session
+        editor.addSubview(cursorArea); editor.addSubview(cursorRow); session.contentsCursorView = cursorArea
+        let rowEvent = pointer(.mouseMoved,cursorRow.convert(NSPoint(x:14,y:14),to:editor))
         session.sidebarHover = true; editor.hoverBlock = 0
         for _ in 0..<4 {
-            pin.cursorUpdate(with:pinEvent); cursorArea.cursorUpdate(with:pinEvent)
-            editor.mouseMoved(with:pinEvent); editor.cursorUpdate(with:pinEvent); editor.mouseExited(with:pinEvent)
-            check(NSCursor.current == .pointingHand && editor.hoverBlock == nil,"Pin cursor is stable through overlapping editor/panel enter, move, update and exit")
+            cursorArea.cursorUpdate(with:rowEvent); editor.mouseMoved(with:rowEvent); editor.cursorUpdate(with:rowEvent)
+            check(NSCursor.current == .arrow && editor.hoverBlock == nil,"Contents navigation keeps the normal pointer through overlapping tracking")
         }
-        session.switchMode(.source); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
-        editor.cursorUpdate(with:pinEvent)
-        check(NSCursor.current == .pointingHand,"Source cursor updates respect the visible Contents pin")
-        session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
-        cursorArea.removeFromSuperview(); pin.removeFromSuperview(); session.contentsCursorView = nil; session.sidebarHover = false
+        cursorDrag.source = cursorRow; cursorArea.cursorUpdate(with:rowEvent)
+        check(NSCursor.current == .closedHand,"An active Contents move shows a closed hand")
+        cursorDrag.finish()
+        cursorArea.removeFromSuperview(); cursorRow.removeFromSuperview(); session.contentsCursorView = nil; session.sidebarHover = false
         let sectionSource = "= One\n\n日本\n\n== Child\n\n#let custom = 42\n\n= Two\n\nBody\n\n= Three\n\nTail"
         session.buffer.loadExternal(sectionSource); session.revision += 1; editor.refresh()
         let contentsDrag = ContentsDrag(), firstRow = ContentsRowView(frame:NSRect(x:40,y:100,width:180,height:28)), lastRow = ContentsRowView(frame:NSRect(x:40,y:160,width:180,height:28))
@@ -331,6 +347,11 @@ import BlankCore
         firstRow.item = .heading(0); firstRow.label.stringValue = "One"
         lastRow.item = .heading(session.headings.last!.0); lastRow.label.stringValue = "Three"
         contentsDrag.source = firstRow; contentsDrag.path = session.active; contentsDrag.revision = session.buffer.revision
+        session.sidebarOrderLocked = true
+        check(!contentsDrag.canMove(to:lastRow,after:true),"Lock section order rejects sidebar reordering")
+        session.sidebarOrderLocked = false; session.sidebar = true
+        check(contentsDrag.canMove(to:lastRow,after:true),"Pinned Contents permits section moves when unlocked")
+        session.sidebar = false
         session.sidebarDragging = true
         let drop = ContentsTestDrag(source:firstRow,window:controller.window!)
         drop.draggingLocation = lastRow.convert(NSPoint(x:50,y:25),to:nil)
@@ -620,6 +641,13 @@ import BlankCore
         let tutorialWindow = application.controllers.last!
         check(tutorialWindow.session.sidebar && tutorialWindow.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Tutorial opens with Contents pinned for discovery")
         check(tutorialWindow.session.buffer.source == tutorial && tutorialWindow.session.headings.contains { $0.1.level == 3 },"Tutorial is a fresh editable copy with nested headings")
+        if let root = tutorialWindow.window?.contentView {
+            func rows(_ view: NSView) -> [ContentsRowView] { (view as? ContentsRowView).map { [$0] } ?? view.subviews.flatMap(rows) }
+            let visibleRows = rows(root).filter { !$0.visibleRect.isEmpty }
+            check(!visibleRows.isEmpty && visibleRows.allSatisfy { row in
+                root.hitTest(row.convert(NSPoint(x:row.bounds.midX,y:row.bounds.midY),to:root.superview)) === row
+            },"Pinned sidebar mouse hits reach navigation/drag rows through native tracking overlays")
+        }
         tutorialWindow.window?.close()
         print("Native acceptance completed")
         FileAcceptance.run()

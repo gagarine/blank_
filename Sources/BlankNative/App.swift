@@ -147,7 +147,7 @@ import Combine
         add(edit,"Cut",#selector(NSText.cut(_:)),"x"); add(edit,"Copy",#selector(NSText.copy(_:)),"c"); add(edit,"Paste",#selector(NSText.paste(_:)),"v"); add(edit,"Select All",#selector(NSText.selectAll(_:)),"a"); edit.addItem(.separator()); add(edit,"Find…",#selector(find(_:)),"f",target:self)
         let format = menu("Format"); add(format,"Bold",#selector(bold(_:)),"b",target:self); add(format,"Italic",#selector(italic(_:)),"i",target:self)
         let view = menu("View"); add(view,"Write",#selector(writeMode(_:)),"1",target:self); add(view,"Source",#selector(sourceMode(_:)),"2",target:self); add(view,"Preview",#selector(previewMode(_:)),"3",target:self)
-        view.addItem(.separator()); add(view,"Pin Table of Contents",#selector(outline(_:)),"l",[.command,.shift],target:self); add(view,"Commands…",#selector(commands(_:)),"k",target:self); add(view,"Refresh Preview",#selector(refresh(_:)),target:self); add(view,"Enter Full Screen",#selector(fullscreen(_:)),"f",[.command,.control],target:self)
+        view.addItem(.separator()); add(view,"Toggle Sidebar",#selector(outline(_:)),"l",[.command,.shift],target:self); add(view,"Commands…",#selector(commands(_:)),"k",target:self); add(view,"Refresh Preview",#selector(refresh(_:)),target:self); add(view,"Enter Full Screen",#selector(fullscreen(_:)),"f",[.command,.control],target:self)
         let window = menu("Window"); NSApp.windowsMenu = window
         add(window,"Minimize",#selector(NSWindow.performMiniaturize(_:)),"m"); add(window,"Zoom",#selector(NSWindow.performZoom(_:))); window.addItem(.separator()); add(window,"Bring All to Front",#selector(NSApplication.arrangeInFront(_:)),target:NSApp)
         let help = menu("Help"); NSApp.helpMenu = help
@@ -164,14 +164,14 @@ import Combine
         self.session = session
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1060,height:780),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         super.init(window:window)
-        window.title = session.title; window.representedURL = session.root?.appendingPathComponent(session.entry); window.titlebarAppearsTransparent = true
+        window.title = session.windowTitle; window.isDocumentEdited = session.dirty; window.representedURL = session.root?.appendingPathComponent(session.entry); window.titlebarAppearsTransparent = true
         if session.dark { window.appearance = NSAppearance(named:.darkAqua) }
         window.center(); window.delegate = self
         window.acceptsMouseMovedEvents = true
         window.contentView = NSHostingView(rootView:EditorRoot(session:session)); window.minSize = NSSize(width:660,height:480)
         installToolbar()
         window.isReleasedWhenClosed = false; session.window = window
-        session.onTitle = { [weak window,weak session] in guard let session else { return }; window?.title = session.title; window?.representedURL = session.root?.appendingPathComponent(session.entry); window?.isDocumentEdited = session.dirty }
+        session.onTitle = { [weak window,weak session] in guard let session else { return }; window?.title = session.windowTitle; window?.representedURL = session.root?.appendingPathComponent(session.entry); window?.isDocumentEdited = session.dirty }
     }
     required init?(coder: NSCoder) { fatalError() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
