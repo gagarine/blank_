@@ -54,7 +54,7 @@ jobs:
           app=build/blank_.app
           codesign --verify --deep --strict "$app"
           for binary in blank_ libblank_syntax.dylib writer-helper; do
-            lipo -verify_arch arm64 "$app/Contents/MacOS/$binary"
+            lipo "$app/Contents/MacOS/$binary" -verify_arch arm64
           done
           # The editor must resolve its parser from the bundle, not this checkout.
           otool -L "$app/Contents/MacOS/blank_"
