@@ -53,6 +53,7 @@ struct Recovery: Codable {
     var buffer: DocumentBuffer { buffers[active]! }
     var title: String { entry.replacingOccurrences(of:".typ",with:"") }
     var onTitle: (() -> Void)?
+    weak var contentsCursorView: ContentsCursorView?
     weak var editor: NativeTextView?
     weak var pdfView: PDFView?
     weak var window: NSWindow?

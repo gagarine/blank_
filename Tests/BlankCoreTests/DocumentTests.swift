@@ -182,6 +182,41 @@ final class DocumentTests {
         XCTAssertFalse(end.parsed.erroneous)
         XCTAssertFalse(end.moveSection(0,after:0))
     }
+    func testMoveSectionAcrossParents() {
+        let original = "= Alpha\n\n// intro\n\n== Shared\n\n日本 👋 *bold*\n\n=== Nested\n\n#let custom = 42\n\n== Remaining\n\nKeep\n\n= Beta\n\nIntro\n\n== Existing\n\nBody\n\n= Empty\n"
+        let b = DocumentBuffer(original)
+        func heading(_ title: String,_ level: Int) -> Int { b.projection.blocks.firstIndex { $0.kind == "heading" && $0.text == title && $0.level == level }! }
+        let raw = "== Shared\n\n日本 👋 *bold*\n\n=== Nested\n\n#let custom = 42\n\n"
+        XCTAssertTrue(b.moveSection(heading("Shared",2),into:heading("Beta",1)))
+        XCTAssertTrue(b.source.contains("== Existing\n\nBody\n\n"+raw+"= Empty"))
+        XCTAssertTrue(b.source.hasPrefix("= Alpha\n\n// intro\n\n== Remaining"))
+        XCTAssertFalse(b.parsed.erroneous)
+        let moved = b.source, selection = b.selection
+        b.undo(); XCTAssertEqual(b.source,original)
+        b.redo(); XCTAssertEqual(b.source,moved); XCTAssertEqual(b.selection,selection)
+        b.undo()
+        XCTAssertTrue(b.moveSection(heading("Shared",2),into:heading("Empty",1)))
+        XCTAssertTrue(b.source.hasSuffix("= Empty\n\n"+raw))
+        b.undo(); XCTAssertEqual(b.source,original)
+        // Same-level insertion changes parents naturally without changing heading levels.
+        XCTAssertTrue(b.moveSection(heading("Shared",2),before:heading("Existing",2)))
+        XCTAssertTrue(b.source.contains("= Beta\n\nIntro\n\n"+raw+"== Existing"))
+        b.undo()
+        XCTAssertTrue(b.moveSection(heading("Nested",3),into:heading("Existing",2)))
+        XCTAssertTrue(b.source.contains("== Existing\n\nBody\n\n=== Nested\n\n#let custom = 42"))
+        b.undo()
+        XCTAssertFalse(b.moveSection(heading("Alpha",1),into:heading("Nested",3)))
+        XCTAssertFalse(b.moveSection(heading("Shared",2),into:heading("Nested",3)))
+        XCTAssertFalse(b.moveSection(heading("Shared",2),into:heading("Shared",2)))
+        XCTAssertFalse(b.moveSection(heading("Remaining",2),into:heading("Alpha",1)))
+        XCTAssertFalse(b.moveSection(heading("Shared",2),after:heading("Nested",3)))
+        XCTAssertEqual(b.source,original)
+        let crlf = DocumentBuffer("= A\r\n\r\n== Child\r\n\r\n日本\r\n\r\n= B\r\n")
+        let child = crlf.projection.blocks.firstIndex { $0.text == "Child" }!
+        let parent = crlf.projection.blocks.firstIndex { $0.text == "B" }!
+        XCTAssertTrue(crlf.moveSection(child,into:parent))
+        XCTAssertEqual(crlf.source,"= A\r\n\r\n= B\r\n\r\n== Child\r\n\r\n日本\r\n\r\n")
+    }
     func testFormatTogglePreservesOtherMarks() {
         let b = DocumentBuffer("plain *bold and _italic_* tail")
         let range = NSRange(location:6,length:15)
@@ -438,6 +473,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Cross-mark deletion",t.testCrossMarkupDeletionRemainsValid),
             ("Consecutive code",t.testConsecutiveCodeBlocksStayTogether),
             ("Section movement",t.testMoveSectionPreservesNestedSource),
+            ("Section parent movement",t.testMoveSectionAcrossParents),
             ("Formatting toggles",t.testFormatTogglePreservesOtherMarks),
             ("Incremental spaces and Unicode",t.testIncrementalSpacesAndUnicode),
             ("Local projection equals full parsing",t.testLocalProjectionMatchesFullParse),

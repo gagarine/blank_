@@ -273,16 +273,26 @@ import BlankCore
         check(session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Pinning contents clears transient hover and updates toolbar")
         session.sidebarHover = true; session.toggleSidebar()
         check(!session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Unpinning contents restores transient behavior")
-        let pin = ContentsPinButton(frame:NSRect(x:0,y:0,width:28,height:28))
-        pin.cursorUpdate(with:pointer(.mouseMoved,.zero))
+        // Exercise the pin against BOTH overlapping panel/editor tracking owners.
+        let cursorArea = ContentsCursorView(frame:NSRect(x:0,y:0,width:235,height:220))
+        let pin = ContentsPinButton(frame:NSRect(x:100,y:100,width:28,height:28))
+        editor.addSubview(cursorArea); editor.addSubview(pin); session.contentsCursorView = cursorArea
+        let pinEvent = pointer(.mouseMoved,pin.convert(NSPoint(x:14,y:14),to:editor))
         session.sidebarHover = true; editor.hoverBlock = 0
-        editor.mouseMoved(with:pointer(.mouseMoved,NSPoint(x:100,y:100)))
-        check(NSCursor.current == .pointingHand && editor.hoverBlock == nil,"Floating Contents preserves the pin button cursor instead of editor cursors")
-        session.sidebarHover = false
+        for _ in 0..<4 {
+            pin.cursorUpdate(with:pinEvent); cursorArea.cursorUpdate(with:pinEvent)
+            editor.mouseMoved(with:pinEvent); editor.cursorUpdate(with:pinEvent); editor.mouseExited(with:pinEvent)
+            check(NSCursor.current == .pointingHand && editor.hoverBlock == nil,"Pin cursor is stable through overlapping editor/panel enter, move, update and exit")
+        }
+        session.switchMode(.source); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        editor.cursorUpdate(with:pinEvent)
+        check(NSCursor.current == .pointingHand,"Source cursor updates respect the visible Contents pin")
+        session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        cursorArea.removeFromSuperview(); pin.removeFromSuperview(); session.contentsCursorView = nil; session.sidebarHover = false
         let sectionSource = "= One\n\n日本\n\n== Child\n\n#let custom = 42\n\n= Two\n\nBody\n\n= Three\n\nTail"
         session.buffer.loadExternal(sectionSource); session.revision += 1; editor.refresh()
         let contentsDrag = ContentsDrag(), firstRow = ContentsRowView(frame:NSRect(x:40,y:100,width:180,height:28)), lastRow = ContentsRowView(frame:NSRect(x:40,y:160,width:180,height:28))
-        for row in [firstRow,lastRow] { row.session = session; row.drag = contentsDrag; editor.addSubview(row) }
+        for row in [firstRow,lastRow] { row.session = session; row.drag = contentsDrag; contentsDrag.register(row); editor.addSubview(row) }
         firstRow.item = .heading(0); firstRow.label.stringValue = "One"
         lastRow.item = .heading(session.headings.last!.0); lastRow.label.stringValue = "Three"
         contentsDrag.source = firstRow; contentsDrag.path = session.active; contentsDrag.revision = session.buffer.revision
@@ -310,6 +320,34 @@ import BlankCore
         contentsDrag.source = firstRow; contentsDrag.path = session.active; contentsDrag.revision = session.buffer.revision-1
         check(!contentsDrag.canMove(to:lastRow,after:true),"Contents rejects stale document drag snapshots")
         contentsDrag.finish(); firstRow.removeFromSuperview(); lastRow.removeFromSuperview()
+        let hierarchySource = "= Alpha\n\n== Child\n\n日本\n\n=== Nested\n\n#let custom = 42\n\n= Beta\n\n== Existing\n\nBody\n\n= Empty"
+        session.buffer.loadExternal(hierarchySource); session.revision += 1; editor.refresh()
+        let childRow = ContentsRowView(frame:NSRect(x:55,y:100,width:165,height:28))
+        let parentRow = ContentsRowView(frame:NSRect(x:40,y:160,width:180,height:28))
+        let descendantRow = ContentsRowView(frame:NSRect(x:55,y:191,width:165,height:28))
+        for row in [childRow,parentRow,descendantRow] { row.session = session; row.drag = contentsDrag; contentsDrag.register(row); editor.addSubview(row) }
+        childRow.item = .heading(session.headings.first { $0.1.text == "Child" }!.0)
+        parentRow.item = .heading(session.headings.first { $0.1.text == "Beta" }!.0)
+        descendantRow.item = .heading(session.headings.first { $0.1.text == "Existing" }!.0)
+        contentsDrag.source = childRow; contentsDrag.path = session.active; contentsDrag.revision = session.buffer.revision
+        if case let .heading(child) = childRow.item, case let .heading(parent) = parentRow.item { contentsDrag.collapsed = [child,parent] }
+        let parentDrop = ContentsTestDrag(source:childRow,window:controller.window!)
+        parentDrop.draggingLocation = parentRow.convert(NSPoint(x:50,y:14),to:nil)
+        check(parentRow.draggingUpdated(parentDrop) == .move && contentsDrag.placement == .inside,"A child heading can target another parent without changing levels")
+        check(contentsDrag.destination === parentRow && contentsDrag.markerRow === descendantRow && contentsDrag.markerAfter,"Parent insertion line follows its visible descendants")
+        descendantRow.isHidden = true
+        check(parentRow.draggingUpdated(parentDrop) == .move && contentsDrag.markerRow === parentRow && contentsDrag.markerIndent == 12,"A collapsed parent accepts an indented child drop")
+        descendantRow.isHidden = false
+        check(parentRow.performDragOperation(parentDrop),"Native child-to-parent drop executes")
+        check(session.buffer.source.contains("Body\n\n== Child\n\n日本\n\n=== Nested\n\n#let custom = 42\n\n= Empty"),"Child drop retains its complete nested Typst source")
+        check(contentsDrag.collapsed == Set(session.headings.filter { $0.1.text == "Child" }.map(\.0)),"Moving a collapsed section preserves its disclosure state and opens the destination parent")
+        contentsDrag.finish(); session.undo(); check(session.buffer.source == hierarchySource,"Parent drop shares native document undo")
+        for row in [childRow,parentRow,descendantRow] { row.removeFromSuperview() }
+        // SwiftUI may release the old source row before AppKit ends its drag.
+        var disappearingRow: ContentsRowView? = ContentsRowView()
+        disappearingRow!.session = session; contentsDrag.source = disappearingRow
+        session.sidebarDragging = true; disappearingRow = nil; contentsDrag.finish()
+        check(!session.sidebarDragging,"A released source row cannot leave transient Contents pinned open")
         // Table cells are real paragraphs in the document's native NSTextTable.
         check(EditorPreferences.installedEditorFamily(nil) == "System","Default editor font is the native macOS system face")
         check(EditorPreferences.installedEditorFamilies.contains(session.fontFamily),"Editor font selection is an installed family")

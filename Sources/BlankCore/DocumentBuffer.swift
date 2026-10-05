@@ -1,5 +1,7 @@
 import Foundation
 
+public enum SectionPlacement: Equatable { case before, after, inside }
+
 public struct EditSelection: Codable, Equatable {
     public var anchor: Int
     public var focus: Int
@@ -398,25 +400,48 @@ public final class DocumentBuffer {
         text = text.replacingBytes(ByteSpan(at,at),with:insert)
         commit(text,selection:EditSelection(at,at))
     }
-    @discardableResult public func moveSection(_ index: Int, before target: Int) -> Bool {
-        moveSection(index,target:target,after:false)
-    }
-    @discardableResult public func moveSection(_ index: Int, after target: Int) -> Bool {
-        moveSection(index,target:target,after:true)
-    }
-    private func moveSection(_ index: Int,target: Int,after: Bool) -> Bool {
+    // Resolve a drop once in source coordinates, shared by the outline and edit.
+    // An inside drop appends to a parent; sibling drops include the whole subtree.
+    public func sectionMove(_ index: Int,target: Int,placement: SectionPlacement) -> (span: ByteSpan,at: Int)? {
         let blocks = projection.blocks
-        guard blocks.indices.contains(index), blocks.indices.contains(target), index != target, blocks[index].kind == "heading", blocks[target].kind == "heading", blocks[index].level == blocks[target].level else { return false }
-        let level = blocks[index].level
+        guard blocks.indices.contains(index), blocks.indices.contains(target), index != target,
+              blocks[index].kind == "heading", blocks[target].kind == "heading" else { return nil }
+        let level = blocks[index].level, targetLevel = blocks[target].level
+        switch placement {
+        case .inside: guard targetLevel < level else { return nil }
+        case .before, .after: guard targetLevel == level else { return nil }
+        }
         let end = blocks.dropFirst(index+1).first { $0.kind == "heading" && $0.level <= level }?.source.start ?? source.utf8.count
         let span = ByteSpan(blocks[index].source.start,end)
-        var at = after ? blocks.dropFirst(target+1).first { $0.kind == "heading" && $0.level <= level }?.source.start ?? source.utf8.count : blocks[target].source.start
-        guard at < span.start || at > span.end else { return false }
+        // A parent cannot be dropped into, or relative to, its own descendants.
+        guard blocks[target].source.start < span.start || blocks[target].source.start >= span.end else { return nil }
+        let at = placement == .before ? blocks[target].source.start :
+            blocks.dropFirst(target+1).first { $0.kind == "heading" && $0.level <= targetLevel }?.source.start ?? source.utf8.count
+        guard at < span.start || at > span.end else { return nil }
+        return (span,at)
+    }
+    @discardableResult public func moveSection(_ index: Int,before target: Int) -> Bool {
+        moveSection(index,target:target,placement:.before)
+    }
+    @discardableResult public func moveSection(_ index: Int,after target: Int) -> Bool {
+        moveSection(index,target:target,placement:.after)
+    }
+    @discardableResult public func moveSection(_ index: Int,into target: Int) -> Bool {
+        moveSection(index,target:target,placement:.inside)
+    }
+    @discardableResult public func moveSection(_ index: Int,target: Int,placement: SectionPlacement) -> Bool {
+        guard let move = sectionMove(index,target:target,placement:placement) else { return false }
+        let span = move.span
+        var at = move.at
         let raw = source.bytes(span)
         var text = source.replacingBytes(span,with:"")
         if at >= span.end { at -= span.count }
-        let prefix = at > 0 && !text.bytes(ByteSpan(0,at)).hasSuffix("\n\n") ? "\n\n" : ""
-        text = text.replacingBytes(ByteSpan(at,at),with:prefix+(raw.hasSuffix("\n\n") ? raw : raw+"\n\n"))
+        let newline = source.contains("\r\n") ? "\r\n" : "\n"
+        func separator(after value: String) -> String {
+            value.hasSuffix(newline+newline) ? "" : value.hasSuffix(newline) ? newline : newline+newline
+        }
+        let prefix = at > 0 ? separator(after:text.bytes(ByteSpan(0,at))) : ""
+        text = text.replacingBytes(ByteSpan(at,at),with:prefix+raw+separator(after:raw))
         return commit(text,selection:EditSelection(at+prefix.utf8.count,at+prefix.utf8.count))
     }
     public func copy(_ range: NSRange) -> RichFragment {

@@ -10,38 +10,77 @@ enum ContentsItem: Equatable {
 // One local drag owner keeps the insertion line unique and rejects foreign
 // payloads or a document that changed while a drag was in progress.
 @MainActor final class ContentsDrag: ObservableObject {
-    weak var source: ContentsRowView?
+    weak var source: ContentsRowView? { didSet { if let source { owner = source.session } } }
+    private weak var owner: DocumentSession?
     weak var destination: ContentsRowView?
-    var after = false
+    var placement: SectionPlacement = .before
+    var after: Bool { placement != .before }
+    private let rows = NSHashTable<ContentsRowView>.weakObjects()
+    weak var markerRow: ContentsRowView?
+    var markerAfter = false
+    var markerIndent: CGFloat = 0
+    @Published var collapsed = Set<Int>()
+    func register(_ row: ContentsRowView) { rows.add(row) }
     var revision = -1
     var path = ""
-    func highlight(_ row: ContentsRowView?,after: Bool = false) {
-        let old = destination; destination = row; self.after = after
-        old?.needsDisplay = true; row?.needsDisplay = true
+    func highlight(_ row: ContentsRowView?,placement: SectionPlacement = .before) {
+        let old = destination, oldMarker = markerRow
+        destination = row; self.placement = placement
+        markerRow = row; markerAfter = placement != .before; markerIndent = 0
+        if let row, case let .heading(target) = row.item, placement != .before,
+           let session = row.session {
+            let blocks = session.buffer.projection.blocks, level = blocks[target].level
+            let end = blocks.dropFirst(target+1).first { $0.kind == "heading" && $0.level <= level }?.source.start ?? session.buffer.source.utf8.count
+            // Put the marker below the last expanded descendant, even offscreen.
+            markerRow = rows.allObjects.filter { candidate in
+                guard candidate.window === row.window, !candidate.isHiddenOrHasHiddenAncestor,
+                      !candidate.bounds.isEmpty, case let .heading(index) = candidate.item,
+                      blocks.indices.contains(index) else { return false }
+                return index >= target && blocks[index].source.start < end
+            }.max { left,right in
+                guard case let .heading(a) = left.item, case let .heading(b) = right.item else { return false }; return a < b
+            } ?? row
+            if placement == .inside, let source, case let .heading(from) = source.item,
+               let markerRow, case let .heading(marker) = markerRow.item {
+                markerIndent = CGFloat(max(0,blocks[from].level-blocks[marker].level))*12
+            }
+        }
+        for view in [old,oldMarker,row,markerRow] { view?.needsDisplay = true }
     }
     func canMove(to row: ContentsRowView,after: Bool) -> Bool {
+        canMove(to:row,placement:after ? .after : .before)
+    }
+    func canMove(to row: ContentsRowView,placement: SectionPlacement) -> Bool {
         guard let source, let session = row.session, source.session === session,
               path == session.active, revision == session.buffer.revision, source.item != row.item else { return false }
         switch (source.item,row.item) {
         case let (.heading(from),.heading(to)):
-            let blocks = session.buffer.projection.blocks
-            guard blocks.indices.contains(from), blocks.indices.contains(to), blocks[from].level == blocks[to].level else { return false }
-            let end = blocks.dropFirst(from+1).first { $0.kind == "heading" && $0.level <= blocks[from].level }?.source.start ?? session.buffer.source.utf8.count
-            let at = after ? blocks.dropFirst(to+1).first { $0.kind == "heading" && $0.level <= blocks[to].level }?.source.start ?? session.buffer.source.utf8.count : blocks[to].source.start
-            return at < blocks[from].source.start || at > end
+            return session.buffer.sectionMove(from,target:to,placement:placement) != nil
         case let (.chapter(from),.chapter(to)):
             guard from != session.entry, to != session.entry else { return false }
             return session.includes.contains { parent in
                 let paths = session.buffers[parent]?.includes.compactMap { session.projectAssetPath($0.path,file:parent) } ?? []
                 guard let a = paths.firstIndex(of:from), let b = paths.firstIndex(of:to), paths.filter({ $0 == from }).count == 1, paths.filter({ $0 == to }).count == 1 else { return false }
-                return (after ? b+1 : b) != a && (after ? b+1 : b) != a+1
+                return (placement != .before ? b+1 : b) != a && (placement != .before ? b+1 : b) != a+1
             }
         default: return false
         }
     }
+    func remapCollapsed(blocks: [ProjectedBlock],span: ByteSpan,oldAt: Int,newStart: Int,delta: Int,openedParent: Int?,session: DocumentSession) {
+        // Collapse follows source positions rather than titles (which may repeat).
+        let insertion = oldAt >= span.end ? oldAt-span.count : oldAt
+        let offsets = collapsed.subtracting(openedParent.map { [$0] } ?? []).compactMap { index -> Int? in
+            guard blocks.indices.contains(index) else { return nil }
+            let start = blocks[index].source.start
+            if start >= span.start && start < span.end { return newStart+start-span.start }
+            let removed = start >= span.end ? start-span.count : start
+            return removed >= insertion ? removed+span.count+delta : removed
+        }
+        collapsed = Set(session.headings.filter { offsets.contains($0.1.source.start) }.map(\.0))
+    }
     func finish() {
-        source?.session?.sidebarDragging = false
-        source = nil; highlight(nil); NSCursor.arrow.set()
+        owner?.sidebarDragging = false
+        owner = nil; source = nil; highlight(nil); NSCursor.arrow.set()
     }
 }
 
@@ -57,7 +96,7 @@ struct ContentsRow: NSViewRepresentable {
         CGSize(width:proposal.width ?? 180,height:28)
     }
     func updateNSView(_ view: ContentsRowView,context: Context) {
-        view.session = session; view.drag = drag; view.item = item; view.activate = activate
+        view.session = session; view.drag = drag; drag.register(view); view.item = item; view.activate = activate
         view.label.stringValue = title; view.label.textColor = selected ? .labelColor : .secondaryLabelColor
         view.label.lineBreakMode = if case .chapter = item { .byTruncatingMiddle } else { .byTruncatingTail }
         view.setAccessibilityLabel(title)
@@ -118,10 +157,14 @@ final class ContentsRowView: NSButton, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession,endedAt screenPoint: NSPoint,operation: NSDragOperation) { drag?.finish() }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard let drag, sender.draggingSource as? ContentsRowView === drag.source else { return [] }
-        let after = convert(sender.draggingLocation,from:nil).y >= bounds.midY
-        guard drag.canMove(to:self,after:after) else { drag.highlight(nil); return [] }
-        drag.highlight(self,after:after); NSCursor.closedHand.set(); return .move
+        guard let drag else { return [] }
+        guard sender.draggingSource as? ContentsRowView === drag.source else { drag.highlight(nil); return [] }
+        var placement: SectionPlacement = convert(sender.draggingLocation,from:nil).y >= bounds.midY ? .after : .before
+        if let source = drag.source, let session, case let .heading(from) = source.item, case let .heading(to) = item,
+           session.buffer.projection.blocks.indices.contains(from), session.buffer.projection.blocks.indices.contains(to),
+           session.buffer.projection.blocks[from].level > session.buffer.projection.blocks[to].level { placement = .inside }
+        guard drag.canMove(to:self,placement:placement) else { drag.highlight(nil); return [] }
+        drag.highlight(self,placement:placement); NSCursor.closedHand.set(); return .move
     }
     override func draggingExited(_ sender: NSDraggingInfo?) { if drag?.destination === self { drag?.highlight(nil) } }
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { draggingUpdated(sender) == .move }
@@ -130,8 +173,14 @@ final class ContentsRowView: NSButton, NSDraggingSource {
         let changed: Bool
         switch (source.item,item) {
         case let (.heading(from),.heading(to)):
-            changed = drag.after ? session.buffer.moveSection(from,after:to) : session.buffer.moveSection(from,before:to)
-            if changed { session.changed() }
+            let blocks = session.buffer.projection.blocks
+            let move = session.buffer.sectionMove(from,target:to,placement:drag.placement)
+            let oldCount = session.buffer.source.utf8.count
+            changed = session.buffer.moveSection(from,target:to,placement:drag.placement)
+            if changed, let move {
+                drag.remapCollapsed(blocks:blocks,span:move.span,oldAt:move.at,newStart:session.buffer.selection.anchor,delta:session.buffer.source.utf8.count-oldCount,openedParent:drag.placement == .inside ? to : nil,session:session)
+                session.changed()
+            }
         case let (.chapter(from),.chapter(to)): changed = session.moveChapter(from,before:to,after:drag.after)
         default: changed = false
         }
@@ -139,9 +188,13 @@ final class ContentsRowView: NSButton, NSDraggingSource {
     }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard drag?.destination === self else { return }
+        if drag?.destination === self && drag?.placement == .inside {
+            NSColor.controlAccentColor.withAlphaComponent(0.12).setFill()
+            NSBezierPath(roundedRect:bounds,xRadius:4,yRadius:4).fill()
+        }
+        guard let drag, drag.markerRow === self else { return }
         NSColor.controlAccentColor.setFill()
-        NSRect(x:0,y:drag?.after == true ? bounds.maxY-2 : bounds.minY,width:bounds.width,height:2).fill()
+        NSRect(x:drag.markerIndent,y:drag.markerAfter ? bounds.maxY-2 : bounds.minY,width:max(0,bounds.width-drag.markerIndent),height:2).fill()
     }
 }
 
@@ -165,10 +218,53 @@ final class ContentsPinButton: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     @objc func activate(_ sender: Any?) { perform() }
 }
+// One panel cursor owner routes overlapping tracking events to the visible
+// control. No full-panel arrow cursor rectangle competes with the pin's rect.
 struct ContentsCursorArea: NSViewRepresentable {
+    var session: DocumentSession
     func makeNSView(context: Context) -> ContentsCursorView { ContentsCursorView() }
-    func updateNSView(_ view: ContentsCursorView,context: Context) {}
+    func updateNSView(_ view: ContentsCursorView,context: Context) {
+        view.session = session; session.contentsCursorView = view
+        if let editor = session.editor { editor.window?.invalidateCursorRects(for:editor) }
+    }
+    static func dismantleNSView(_ view: ContentsCursorView,coordinator: ()) {
+        if let session = view.session, session.contentsCursorView === view {
+            session.contentsCursorView = nil
+            if let editor = session.editor { editor.window?.invalidateCursorRects(for:editor) }
+        }
+    }
 }
 final class ContentsCursorView: NSView {
-    override func resetCursorRects() { super.resetCursorRects(); addCursorRect(bounds,cursor:.arrow) }
+    weak var session: DocumentSession?
+    private var tracking: NSTrackingArea?
+    override func layout() {
+        super.layout()
+        if let editor = session?.editor { editor.window?.invalidateCursorRects(for:editor) }
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        tracking = NSTrackingArea(rect:.zero,options:[.cursorUpdate,.mouseMoved,.mouseEnteredAndExited,.activeInKeyWindow,.inVisibleRect],owner:self,userInfo:nil)
+        addTrackingArea(tracking!)
+    }
+    @discardableResult func updateCursor(for event: NSEvent) -> Bool {
+        guard let window, !isHiddenOrHasHiddenAncestor,
+              visibleRect.contains(convert(event.locationInWindow,from:nil)) else { return false }
+        func control(in view: NSView) -> NSView? {
+            guard !view.isHiddenOrHasHiddenAncestor else { return nil }
+            for child in view.subviews.reversed() { if let hit = control(in:child) { return hit } }
+            if (view is ContentsPinButton || view is ContentsRowView),
+               view.visibleRect.contains(view.convert(event.locationInWindow,from:nil)) { return view }
+            return nil
+        }
+        if let root = window.contentView, let button = control(in:root) {
+            if let row = button as? ContentsRowView {
+                (row.drag?.source != nil || row.press != nil ? NSCursor.closedHand : NSCursor.openHand).set()
+            } else { NSCursor.pointingHand.set() }
+        } else { NSCursor.arrow.set() }
+        return true
+    }
+    override func cursorUpdate(with event: NSEvent) { updateCursor(for:event) }
+    override func mouseEntered(with event: NSEvent) { updateCursor(for:event) }
+    override func mouseMoved(with event: NSEvent) { updateCursor(for:event) }
 }

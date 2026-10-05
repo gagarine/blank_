@@ -139,7 +139,6 @@ final class SlashMenuCursorView: NSView {
 }
 struct EditorRoot: View {
     @ObservedObject var session: DocumentSession
-    @NativeState private var collapsed = Set<Int>()
     @StateObject private var contentsDrag = ContentsDrag()
     var chrome: Color { Color(nsColor:.windowBackgroundColor) }
     var body: some View {
@@ -191,6 +190,7 @@ struct EditorRoot: View {
             case .rename: RenameSheet(session:session)
             }
         }
+        .onChange(of:session.active) { _,_ in contentsDrag.collapsed.removeAll() }
         .onChange(of:session.dark) { _,dark in session.window?.appearance = dark ? NSAppearance(named:.darkAqua) : nil }
     }
     var wordCount: Int { session.buffer.counts.words }
@@ -228,7 +228,7 @@ struct EditorRoot: View {
         return headings.filter { index,b in
             if omitTitle && b.level == 1 { return false }
             if let level = hiddenLevel { if b.level > level { return false }; hiddenLevel = nil }
-            if collapsed.contains(index) { hiddenLevel = b.level }
+            if contentsDrag.collapsed.contains(index) { hiddenLevel = b.level }
             return true
         }
     }
@@ -253,14 +253,14 @@ struct EditorRoot: View {
                     ForEach(visibleHeadings,id:\.0) { index,b in
                         HStack(spacing:5) {
                             let hasChildren = session.headings.contains { $0.0 > index && $0.1.level > b.level && $0.0 < (session.headings.first { $0.0 > index && $0.1.level <= b.level }?.0 ?? Int.max) }
-                            Button { if collapsed.contains(index) { collapsed.remove(index) } else { collapsed.insert(index) } } label: { Image(systemName:collapsed.contains(index) ? "chevron.right" : "chevron.down").font(.system(size:8)).opacity(hasChildren ? 0.6 : 0) }.buttonStyle(.plain).frame(width:10).disabled(!hasChildren)
+                            Button { if contentsDrag.collapsed.contains(index) { contentsDrag.collapsed.remove(index) } else { contentsDrag.collapsed.insert(index) } } label: { Image(systemName:contentsDrag.collapsed.contains(index) ? "chevron.right" : "chevron.down").font(.system(size:8)).opacity(hasChildren ? 0.6 : 0) }.buttonStyle(.plain).frame(width:10).disabled(!hasChildren)
                             ContentsRow(session:session,drag:contentsDrag,item:.heading(index),title:b.text,activate:{ session.editor?.finishComposition(); session.buffer.selection = EditSelection(b.body.start,b.body.start); if session.mode == .preview { session.switchMode(.write) }; session.editor?.refresh(reveal:true) })
                         }.padding(.leading,CGFloat(max(0,b.level-(session.headings.filter { $0.1.level == 1 }.count == 1 ? 2 : 1)))*12).frame(height:28)
                     }
                 }.padding(.horizontal,16)
             }
             Spacer(minLength:0)
-        }.background(chrome).background(ContentsCursorArea().allowsHitTesting(false))
+        }.background(chrome).background(ContentsCursorArea(session:session).allowsHitTesting(false))
     }
 }
 struct PreviewView: NSViewRepresentable {
