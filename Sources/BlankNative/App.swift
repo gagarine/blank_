@@ -76,7 +76,7 @@ import Combine
         let bundled = Bundle.main.resourceURL?.appendingPathComponent("Tutorial.typ")
         let file = bundled.flatMap { try? String(contentsOf:$0,encoding:.utf8) } ?? (try? String(contentsOfFile:FileManager.default.currentDirectoryPath+"/examples/Tutorial.typ",encoding:.utf8))
         guard let file else { return }
-        let session = DocumentSession(); session.buffers = ["Tutorial.typ":DocumentBuffer(file)]; session.entry = "Tutorial.typ"; session.active = "Tutorial.typ"; show(session)
+        let session = DocumentSession(); session.buffers = ["Tutorial.typ":DocumentBuffer(file)]; session.entry = "Tutorial.typ"; session.active = "Tutorial.typ"; session.sidebar = true; show(session)
     }
     @objc func recover(_ sender: Any?) {
         let directory = Self.dataDirectory.appendingPathComponent("recovery")

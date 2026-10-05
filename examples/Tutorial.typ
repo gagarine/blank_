@@ -14,11 +14,15 @@ Try ⌘2, then ⌘3, then ⌘1 to come back here. These are three views of the s
 
 Click at the end of this paragraph, press Return, and write a sentence.
 
+=== Formatting shortcuts
+
 On a new line, type = followed by a space to make a heading; == and a space makes a subsection. Type `*bold*` for *bold* and `_italic_` for _italic_. These are Typst’s own shortcuts.
 
 Type / to open the insert panel. Try /heading, choose with the arrow keys, and press Return. Escape closes it.
 
 == 3. Move an idea
+
+=== Move a paragraph
 
 First idea: write the thought before polishing it.
 
@@ -26,7 +30,15 @@ Second idea: a draft can change its order.
 
 Hover over “Second idea”, then drag the dots on its left above “First idea”. The line shows where it will land. Press ⌘Z to undo. You can also move a block with ⌥↑ or ⌥↓.
 
-Move farther into the left margin to reveal the table of contents. Click a heading to jump there, or drag a heading to move its section. Press ⌘⇧L to pin or unpin it, or find “Pin table of contents” in ⌘K.
+=== Move a section
+
+Contents is pinned on the left so you can explore the guide. Click a heading to jump to it; use its chevron to hide or show subsections.
+
+Drag a heading above or below another heading at the same level to reorder its whole section. Its text and nested subsections move together. The insertion line shows where it will land.
+
+Try dragging “Move a section” onto “4. Add your research” in Contents. It becomes a subsection there, keeping its heading level and bringing this text with it. The parent highlights and the insertion line marks the end of its section. Press ⌘Z to undo.
+
+Click the pin or press ⌘⇧L to unpin Contents. Move into the left margin to reveal it again; pin it to keep it open.
 
 == 4. Add your research
 
@@ -35,6 +47,8 @@ Move farther into the left margin to reveal the table of contents. Click a headi
 - *Footnote or equation:* find either in the / panel. Preview shows the typeset result.
 
 Use *Refresh Zotero references* in ⌘K to sync saved citation metadata. Zotero must be open with the local HTTP API enabled for insertion and refresh. If Zotero is unavailable, you’ll see setup instructions when you try either action. You can keep writing and previewing with saved citations while Zotero is closed.
+
+=== Try a table
 
 Click a cell below and replace its text. Tab moves to the next cell; Tab in the final cell adds a row. The table controls let you add or remove rows and columns.
 

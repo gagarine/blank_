@@ -578,6 +578,14 @@ import BlankCore
         while session.compiling && Date() < exportDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
         check((try? Data(contentsOf:exported).starts(with:Data("%PDF-".utf8))) == true,"PDF export queued during compilation includes imported figure and caption")
         try? FileManager.default.removeItem(at:exported)
+        // Exercise the same Tutorial action used by Help, Cmd-K and --tutorial.
+        let application = AppController.shared!
+        application.tutorial(nil)
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        let tutorialWindow = application.controllers.last!
+        check(tutorialWindow.session.sidebar && tutorialWindow.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Tutorial opens with Contents pinned for discovery")
+        check(tutorialWindow.session.buffer.source == tutorial && tutorialWindow.session.headings.contains { $0.1.level == 3 },"Tutorial is a fresh editable copy with nested headings")
+        tutorialWindow.window?.close()
         print("Native acceptance completed")
         FileAcceptance.run()
         session.saveWork?.cancel(); controller.window?.close()

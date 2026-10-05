@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
         data = base64.b64decode(result['pdf']); assert data.startswith(b'%PDF-')
         assert result['pages'] >= 2 and result['sourceMap']
         (root/'tutorial.pdf').write_bytes(data)
-        print(f"PASS: exact Go tutorial → {result['pages']} PDF pages, {len(data)} bytes, {time.monotonic()-start:.3f}s cold compile")
+        print(f"PASS: bundled tutorial → {result['pages']} PDF pages, {len(data)} bytes, {time.monotonic()-start:.3f}s cold compile")
         files = {'main.typ':'#set text(size: 11pt)\n#include "chapters/one.typ"\n\n#link("https://typst.app")[Typst]\n#footnote[An explanation]\n\n$ x^2 + y^2 $\n',
                  'chapters/one.typ':'= Café 日本語 👋\n\nA *bold* and _italic_ sentence.\n\n#table(columns: 2, [Idea], [Step], [Write], [Review])\n'}
         start = time.monotonic()
