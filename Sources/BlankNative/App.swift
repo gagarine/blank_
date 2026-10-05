@@ -50,8 +50,6 @@ import Combine
         controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
     }
     @objc func newDocument(_ sender: Any?) { show(DocumentSession()) }
-    @objc func newPaper(_ sender: Any?) { show(DocumentSession.template("article")) }
-    @objc func newThesis(_ sender: Any?) { show(DocumentSession.template("thesis")) }
     @objc func renameDocument(_ sender: Any?) { current?.sheet = .rename }
     @objc func openRecent(_ sender: NSMenuItem) { if let url = sender.representedObject as? URL { openURL(url) } }
     @objc func clearRecent(_ sender: Any?) { NSDocumentController.shared.clearRecentDocuments(sender) }
@@ -139,7 +137,6 @@ import Combine
         app.addItem(.separator()); add(app,"Quit blank_",#selector(quit(_:)),"q",target:self)
         let file = menu("File")
         add(file,"New Document",#selector(newDocument(_:)),"n",target:self); add(file,"Open…",#selector(openDocument(_:)),"o",target:self)
-        add(file,"New Paper",#selector(newPaper(_:)),target:self); add(file,"New Thesis",#selector(newThesis(_:)),target:self)
         let recent = NSMenuItem(title:"Open Recent",action:nil,keyEquivalent:""); recent.submenu = NSMenu(title:"Open Recent"); recent.submenu?.delegate = self; file.addItem(recent)
         add(file,"Open Recovery Copy…",#selector(recover(_:)),target:self); file.addItem(.separator())
         add(file,"Close Window",#selector(NSWindow.performClose(_:)),"w"); add(file,"Save",#selector(save(_:)),"s",target:self); add(file,"Save As…",#selector(saveAs(_:)),"s",[.command,.shift],target:self)

@@ -353,7 +353,7 @@ import BlankCore
         check(EditorPreferences.installedEditorFamilies.contains(session.fontFamily),"Editor font selection is an installed family")
         check(EditorPreferences.installedEditorFamilies.contains(EditorPreferences.installedEditorFamily("Missing-font-XYZ")),"Missing saved font falls back to an installed family")
         let commands = CommandsSheet(session:session)
-        check(!commands.actions.contains { ["New paper","New thesis"].contains($0.0) },"Cmd-K excludes paper and thesis templates")
+        check(commands.actions.filter { $0.0.hasPrefix("New ") }.map { $0.0 } == ["New document"],"Cmd-K offers only an empty New document")
         check(commands.actions.allSatisfy { NSImage(systemSymbolName:commands.symbol($0.0),accessibilityDescription:nil) != nil },"Cmd-K commands have available native symbols")
         let foldingSource = (0..<20).map { "#let value\($0) = \($0)" }.joined(separator:"\n")+"\n\nAfter 日本😀"
         session.buffer.loadExternal(foldingSource); session.revision += 1; editor.refresh()

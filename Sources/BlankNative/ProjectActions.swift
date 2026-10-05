@@ -117,18 +117,4 @@ import BlankCore
         if active == old { active = next }; entry = next; revision += 1; installWatchers(); persistRecovery(); onTitle?()
     }
 
-    // Exact article/thesis starting content from cmd/blank_/app.go on the Go reference.
-    static func template(_ kind: String) -> DocumentSession {
-        let preamble = "#set page(paper: \"a4\", margin: 2.5cm)\n#set text(font: \"Libertinus Serif\", size: 11pt)\n#set heading(numbering: \"1.1\")\n\n"
-        var files = ["writer-zotero.bib":"", "writer-references.json":"{}\n"]
-        if kind == "thesis" {
-            files["main.typ"] = preamble+"#align(center)[\n  #text(size: 26pt, weight: \"bold\")[A thesis in progress]\n\n  Your name\n]\n#pagebreak()\n#outline()\n#pagebreak()\n\n#include \"chapters/01-introduction.typ\"\n#include \"chapters/02-methods.typ\"\n\n#bibliography(\"writer-zotero.bib\", style: \"apa\")\n"
-            files["chapters/01-introduction.typ"] = "= Introduction <introduction>\n\nEvery worthwhile investigation begins with a question. What is yours?\n\n== The question\n\nStart writing here.\n"
-            files["chapters/02-methods.typ"] = "= Methods <methods>\n\nDescribe how you will approach your question.\n"
-        } else {
-            files["main.typ"] = preamble+"#align(center)[#text(size: 24pt, weight: \"bold\")[Untitled paper]]\n\n= Introduction <introduction>\n\nStart with the idea you want to explore.\n\n= Discussion\n\nYour next thought belongs here.\n\n#bibliography(\"writer-zotero.bib\", style: \"apa\")\n"
-        }
-        let session = DocumentSession(); session.buffers = files.mapValues { DocumentBuffer($0) }; session.active = "main.typ"; session.entry = "main.typ"; session.dirty = true
-        return session
-    }
 }
