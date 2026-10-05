@@ -11,10 +11,6 @@ enum EditorLayout {
     static func textPadding(width: CGFloat,mode: EditorMode) -> CGFloat {
         mode == .source ? 30 : max(48,(width-720)/2)
     }
-    static func sidebarRevealWidth(width: CGFloat,mode: EditorMode) -> CGFloat {
-        // Leave the 32-point block handle and a 12-point gap before revealing.
-        max(8,textPadding(width:width,mode:mode)-(mode == .source ? 12 : 50))
-    }
 }
 
 struct SlashCommand: Identifiable {
@@ -140,28 +136,16 @@ final class SlashMenuCursorView: NSView {
 }
 struct EditorRoot: View {
     @ObservedObject var session: DocumentSession
-    @ObservedObject var contentsDrag: ContentsDrag
     @NativeState private var searchAfterSheet = false
-    var chrome: Color { Color(nsColor:.windowBackgroundColor) }
     var body: some View {
         VStack(spacing:0) {
-            if session.searchVisible { searchBar }
-            if session.mode == .preview { previewControls }
-            GeometryReader { geometry in
-                ZStack(alignment:.leading) {
+            ZStack {
+                Group {
                     if session.mode == .preview { PreviewView(session:session) }
-                    else { NativeEditor(session:session).ignoresSafeArea(.container,edges:.top) }
-                    if !session.sidebar && (!session.headings.isEmpty || session.includes.count > 1) {
-                        let revealWidth = EditorLayout.sidebarRevealWidth(width:geometry.size.width,mode:session.mode)
-                        ZStack(alignment:.leading) {
-                            Color.clear
-                            if session.sidebarHover || session.sidebarDragging {
-                                ContentsView(session:session,contentsDrag:contentsDrag).frame(width:235).background(.regularMaterial).shadow(color:.black.opacity(0.07),radius:12,x:4).transition(.opacity)
-                            }
-                        }.frame(width:session.sidebarHover || session.sidebarDragging ? max(235,revealWidth) : revealWidth).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
-                    }
-                }
-            }
+                    else { NativeEditor(session:session) }
+                }.opacity(session.contactSheet ? 0 : 1).allowsHitTesting(!session.contactSheet).accessibilityHidden(session.contactSheet)
+                if session.contactSheet { ContactSheetView(session:session,thumbnails:session.thumbnails) }
+            }.frame(maxWidth:.infinity,maxHeight:.infinity).ignoresSafeArea(.container,edges:.top)
             if let error = session.error {
                 HStack(alignment:.top) {
                     Image(systemName:"exclamationmark.circle").foregroundStyle(.secondary)
@@ -170,17 +154,7 @@ struct EditorRoot: View {
                     Button { session.error = nil } label: { Image(systemName:"xmark").font(.system(size:10)) }.buttonStyle(.plain)
                 }.padding(12).background(Color.orange.opacity(0.04))
             }
-            Divider().opacity(0.5)
-            HStack {
-                Toggle(isOn:$session.sidebarOrderLocked) {
-                    Label("Lock section order",systemImage:session.sidebarOrderLocked ? "lock.fill" : "lock.open")
-                        .font(.system(size:10)).foregroundStyle(.secondary)
-                }.toggleStyle(.button).buttonStyle(.plain).help("Prevent dragging headings and chapters in the sidebar. Text editing and block movement stay available.")
-                Spacer()
-                Button { session.sheet = .statistics } label: { Text("\(wordCount) \(wordCount == 1 ? "word" : "words")").font(.system(size:10)).foregroundStyle(.secondary) }.buttonStyle(.plain)
-                Text("⌘K").font(.system(size:10)).foregroundStyle(.tertiary).padding(.leading,18)
-            }.padding(.horizontal,26).frame(height:30).background(chrome)
-        }.frame(minWidth:420,minHeight:420).background(chrome).preferredColorScheme(session.dark ? .dark : nil)
+        }.frame(minWidth:420,minHeight:420).ignoresSafeArea(.container,edges:.top).preferredColorScheme(session.dark ? .dark : nil)
         .sheet(item:$session.sheet,onDismiss:{
             if searchAfterSheet { searchAfterSheet = false; focusSearch() }
             let action = session.pendingDocumentAction; session.pendingDocumentAction = nil; action?()
@@ -205,7 +179,6 @@ struct EditorRoot: View {
     private func focusSearch() {
         DispatchQueue.main.async { (session.window?.windowController as? DocumentWindow)?.focusNativeSearch() }
     }
-    var wordCount: Int { session.buffer.counts.words }
     var previewControls: some View {
         HStack(spacing:12) {
             if session.compiling { ProgressView().controlSize(.mini); Text("Typesetting…").font(.system(size:10)).foregroundStyle(.secondary) }
@@ -229,8 +202,9 @@ struct EditorRoot: View {
                 Button("Replace") { session.replace() }; Button("All") { session.replace(all:true) }
             }
             Spacer()
+            SearchStatus(search:session.searchController)
             Button { session.hideSearch() } label: { Image(systemName:"xmark").frame(width:24,height:24).contentShape(Rectangle()) }.buttonStyle(.plain).help("Close search · Esc").accessibilityLabel("Close search")
-        }.font(.system(size:11)).controlSize(.small).padding(.horizontal,24).padding(.vertical,9).background(chrome)
+        }.font(.system(size:11)).controlSize(.small).padding(.horizontal,24).padding(.vertical,9)
     }
 }
 struct ContentsView: View {
@@ -277,7 +251,7 @@ struct ContentsView: View {
                 }.padding(.horizontal,16)
             }
             Spacer(minLength:0)
-        }.background(ContentsCursorArea(session:session).allowsHitTesting(false))
+        }
     }
 }
 struct PreviewView: NSViewRepresentable {
@@ -287,9 +261,14 @@ struct PreviewView: NSViewRepresentable {
         view.autoScales = true; view.displayMode = .singlePageContinuous; view.displayDirection = .vertical
         view.backgroundColor = .windowBackgroundColor; view.displaysPageBreaks = true; view.pageBreakMargins = NSEdgeInsets(top:16,left:16,bottom:16,right:16)
         view.document = session.pdf
+        view.isHidden = session.contactSheet
+        view.displayMode = session.previewDisplayMode.pdfMode
+        DispatchQueue.main.async { session.previewViewReady += 1; session.searchController.applyHighlights() }
         return view
     }
     func updateNSView(_ view: PDFView,context: Context) {
+        view.isHidden = session.contactSheet
+        view.displayMode = session.previewDisplayMode.pdfMode
         if view.document !== session.pdf {
             view.document = session.pdf
             if let anchor = session.sourceMap.first(where: { ($0["path"] as? String) == session.active && ($0["end"] as? Int ?? 0) >= session.buffer.selection.focus }), let page = anchor["page"] as? Int, let pdfPage = session.pdf?.page(at:max(0,page-1)) { view.go(to:pdfPage) }

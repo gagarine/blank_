@@ -14,14 +14,41 @@ struct Recovery: Codable {
 }
 @MainActor final class DocumentSession: ObservableObject {
     let id = UUID().uuidString
-    @Published var mode: EditorMode = .write
+    @Published var mode: EditorMode = .write { didSet { searchController.update() } }
     @Published var active = "Untitled.typ"
     @Published var sidebar = false
     @Published var sidebarOrderLocked = false
-    @Published var sidebarHover = false
-    @Published var sidebarDragging = false
-    func toggleSidebar() { sidebarHover = false; sidebar.toggle() }
-    @Published var revision = 0
+    @Published var sidebarMode: SidebarMode = .contents
+    @Published var contactSheet = false
+    @Published var contactSheetSize: CGFloat = 190
+    @Published var contactSheetSelection = 0
+    var sidebarBeforeContactSheet: Bool?
+    @Published var previewDisplayMode: PreviewDisplayMode = .continuous
+    lazy var searchController = DocumentSearch(session:self)
+    lazy var thumbnails = DocumentThumbnails(session:self)
+    func toggleSidebar() { if contactSheet { closeContactSheet(); sidebar = true } else { sidebar.toggle() } }
+    func showContactSheet() {
+        editor?.finishComposition(); hideSearch()
+        if !contactSheet { sidebarBeforeContactSheet = sidebar }
+        if mode != .preview { thumbnails.update() }
+        contactSheetSelection = mode == .preview ? max(0,previewPage-1) : thumbnails.currentPage
+        contactSheet = true; sidebar = false; window?.makeFirstResponder(nil)
+        editor?.enclosingScrollView?.isHidden = true; pdfView?.isHidden = true
+    }
+    func closeContactSheet() {
+        guard contactSheet else { return }; contactSheet = false
+        if let prior = sidebarBeforeContactSheet { sidebar = prior }; sidebarBeforeContactSheet = nil
+        // Re-enable the native responder immediately; the SwiftUI bridge will
+        // reconcile visibility on its next update, after this input command.
+        editor?.enclosingScrollView?.isHidden = false; pdfView?.isHidden = false
+        window?.makeFirstResponder(mode == .preview ? pdfView : editor)
+    }
+    func openContactPage(_ page: Int) {
+        closeContactSheet()
+        if mode == .preview, let target = pdf?.page(at:page) { pdfView?.go(to:target); window?.makeFirstResponder(pdfView) }
+        else { thumbnails.navigate(page) }
+    }
+    @Published var revision = 0 { didSet { searchController.update(revealFirst:false) } }
     @Published var dirty = false
     @Published var error: String?
     @Published var sheet: SheetKind?
@@ -38,14 +65,17 @@ struct Recovery: Codable {
     var pendingCommandKeys: [NSEvent] = []
     @Published var searchVisible = false
     @Published var searchFocusRequest = 0
-    func showSearch() { editor?.finishComposition(); searchVisible = true; searchFocusRequest += 1 }
-    func hideSearch() { searchVisible = false; let target: NSResponder? = mode == .preview ? pdfView : editor; window?.makeFirstResponder(target) }
-    @Published var searchQuery = ""
+    var sidebarBeforeSearch: Bool?
+    func beginSearch() { closeContactSheet(); if !searchVisible { sidebarBeforeSearch = sidebar }; searchVisible = true; searchController.update() }
+    func showSearch() { editor?.finishComposition(); beginSearch(); searchFocusRequest += 1 }
+    func hideSearch() { searchVisible = false; searchController.update(); searchController.clearHighlights(); if let prior = sidebarBeforeSearch { sidebar = prior }; sidebarBeforeSearch = nil; let target: NSResponder? = mode == .preview ? pdfView : editor; window?.makeFirstResponder(target) }
+    @Published var searchQuery = "" { didSet { if searchQuery != oldValue { searchController.update() } } }
     @Published var replaceText = ""
-    @Published var caseSensitive = false
-    @Published var projectSearch = false
+    @Published var caseSensitive = false { didSet { searchController.update() } }
+    @Published var projectSearch = false { didSet { searchController.update() } }
     @Published var compiling = false
-    @Published var pdf: PDFDocument?
+    @Published var pdf: PDFDocument? { didSet { searchController.update() } }
+    @Published var previewViewReady = 0
     @Published var previewPage = 1
     @Published var paragraphFocus = false
     @Published var typewriter = false
@@ -75,7 +105,6 @@ struct Recovery: Codable {
     var buffer: DocumentBuffer { buffers[active]! }
     var title: String { ((entry as NSString).lastPathComponent as NSString).deletingPathExtension }
     var onTitle: (() -> Void)?
-    weak var contentsCursorView: ContentsCursorView?
     weak var editor: NativeTextView?
     weak var pdfView: PDFView?
     weak var window: NSWindow?
@@ -132,7 +161,7 @@ struct Recovery: Codable {
         if mode == .preview { capturePreviewPosition() } else { editor?.captureReadingPosition() }
         buffer.breakUndoGroup(); mode = next
         if next == .preview { compile() }
-        else { DispatchQueue.main.async { [weak self] in self?.editor?.refresh(reveal:true); self?.window?.makeFirstResponder(self?.editor) } }
+        else { DispatchQueue.main.async { [weak self] in self?.editor?.refresh(reveal:true); if self?.contactSheet == false { self?.window?.makeFirstResponder(self?.editor) } } }
     }
     func switchFile(_ path: String) {
         guard buffers[path] != nil, path != active else { return }
@@ -360,7 +389,7 @@ struct Recovery: Codable {
             case let .success(result):
                 if result.revision != self.revision { self.finishPDFRequests(.failure(NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"Document changed while preparing the PDF. Try again."])),revision:current); if export != nil { self.error = "Document changed during export. Try again." }; if self.mode == .preview { self.compile() }; return }
                 if let data = result.data, let document = PDFDocument(data:data) {
-                    self.pdf = document; self.pdfData = data; self.compileRevision = current; self.sourceMap = result.map; self.error = nil
+                    self.pdfData = data; self.pdf = document; self.compileRevision = current; self.sourceMap = result.map; self.error = nil
                     self.finishPDFRequests(.success(data),revision:current)
                     if let export { do { try data.write(to:export,options:.atomic) } catch { self.error = error.localizedDescription } }
                 } else { self.error = result.diagnostics.joined(separator:"\n"); self.finishPDFRequests(.failure(NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:self.error ?? "PDF compilation failed."])),revision:current) }
@@ -388,6 +417,7 @@ struct Recovery: Codable {
         panel.beginSheetModal(for:window) { [weak self] result in if result == .OK, let url = panel.url { self?.compile(export:url) } }
     }
     func find(next: Bool = true) {
+        if searchVisible { searchController.navigate(next:next); return }
         guard !searchQuery.isEmpty else { return }
         if mode == .preview {
             guard let pdf, let view = pdfView else { return }
@@ -400,7 +430,7 @@ struct Recovery: Codable {
                 return match.bounds(for:page) == current.bounds(for:page)
             }
             let target = index.map { ($0+(next ? 1 : matches.count-1)) % matches.count } ?? (next ? 0 : matches.count-1)
-            view.setCurrentSelection(matches[target],animate:true); view.go(to:matches[target]); return
+            matches[target].color = .systemYellow; view.setCurrentSelection(matches[target],animate:true); view.go(to:matches[target]); return
         }
         guard let editor else { return }
         if projectSearch { findInProject(next:next); return }

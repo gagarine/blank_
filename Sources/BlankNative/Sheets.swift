@@ -35,7 +35,6 @@ struct CommandsSheet: View {
             ("Move document","",{ session.performDocumentAction { $0.move(nil) } }),
             ("Tutorial","",{ session.sheet = nil; AppController.shared.tutorial(nil) }),
             ("Export PDF","⌘⇧E",{ session.sheet = nil; session.exportPDF() }),
-            ("Fullscreen","⌃⌘F",{ session.sheet = nil; session.window?.toggleFullScreen(nil) }),
             ("Refresh preview","",{ session.sheet = nil; session.compileRevision = -1; session.compile() }),
             ("Bibliography style","",{ session.insertionKind = "bibliography"; session.sheet = .insertion }),
             ("Refresh Zotero references","",{ session.sheet = nil; ZoteroIntegration.refresh(session) }),
@@ -62,7 +61,6 @@ struct CommandsSheet: View {
         case "Move document": return "folder"
         case "Tutorial": return "book"
         case "Export PDF": return "square.and.arrow.up"
-        case "Fullscreen": return "arrow.up.left.and.arrow.down.right"
         case "Refresh preview": return "arrow.clockwise"
         case "Bibliography style": return "books.vertical"
         case "Refresh Zotero references": return "arrow.triangle.2.circlepath"

@@ -27,6 +27,7 @@ import BlankCore
         check(controller.window?.contentViewController === controller.splitController && controller.splitController.contentsItem.behavior == .sidebar,"Native split-view controller supplies sidebar behavior")
         check(controller.searchItem != nil && controller.shareButton != nil,"Search and Share use native toolbar controls")
         check(controller.sidebarItem?.isBordered == true && controller.modeItem?.isBordered == true,"Interactive toolbar controls opt into the system glass backing")
+        NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
         AppController.shared.commands(nil)
         for character in "fast café" {
@@ -52,7 +53,7 @@ import BlankCore
         session.hideSearch(); session.searchQuery = ""
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(controller.window?.firstResponder === view && view.string.isEmpty,"Closing search restores the untouched editor and caret")
-        check(controller.window?.styleMask.contains(.fullSizeContentView) == true && controller.window?.titlebarAppearsTransparent == true,"Document extends beneath native transparent toolbar")
+        check(controller.window?.styleMask.contains(.fullSizeContentView) == true && controller.window?.titlebarAppearsTransparent == false,"Document extends beneath the native material toolbar")
         for scalar in "Hello café 👩🏽‍💻".unicodeScalars { view.insertText(String(scalar),replacementRange:view.selectedRange()) }
         check(session.buffer.projection.text == "Hello café 👩🏽‍💻","Native typing and Unicode")
         view.ensureNativeLayout()
@@ -326,30 +327,14 @@ import BlankCore
         check(session.buffer.projection.blocks.count == 4 && controller.window?.firstResponder === editor,"Popover Duplicate uses the document transaction and restores editing focus")
         session.undo(); check(session.buffer.source == menuSource,"Popover block actions share exact-source undo")
         let selectionBeforeSidebar = editor.selectedRange(), editorBeforeSidebar = session.editor
-        session.sidebarHover = true; controller.toggleContents(nil)
+        controller.toggleContents(nil)
         RunLoop.main.run(until:Date().addingTimeInterval(0.3))
         check(!controller.splitController.contentsItem.isCollapsed && session.editor === editorBeforeSidebar && editor.selectedRange() == selectionBeforeSidebar,"Native sidebar reveal preserves the editor instance and selection")
-        check(session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Pinning contents clears transient hover and updates toolbar")
-        session.sidebarHover = true; session.toggleSidebar()
+        check(session.sidebar && controller.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Opening Sidebar updates its toolbar control")
+        session.toggleSidebar()
         RunLoop.main.run(until:Date().addingTimeInterval(0.3))
         check(controller.splitController.contentsItem.isCollapsed && session.editor === editorBeforeSidebar && editor.selectedRange() == selectionBeforeSidebar,"Native sidebar collapse preserves the editor instance and selection")
-        check(!session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Unpinning contents restores transient behavior")
-        // Navigation rows use the native arrow; closed-hand feedback belongs
-        // to an active move, independently of pinned/hover presentation.
-        let cursorArea = ContentsCursorView(frame:NSRect(x:0,y:0,width:235,height:220))
-        let cursorRow = ContentsRowView(frame:NSRect(x:100,y:100,width:100,height:28))
-        let cursorDrag = ContentsDrag(); cursorRow.drag = cursorDrag; cursorRow.session = session
-        editor.addSubview(cursorArea); editor.addSubview(cursorRow); session.contentsCursorView = cursorArea
-        let rowEvent = pointer(.mouseMoved,cursorRow.convert(NSPoint(x:14,y:14),to:editor))
-        session.sidebarHover = true; editor.hoverBlock = 0
-        for _ in 0..<4 {
-            cursorArea.cursorUpdate(with:rowEvent); editor.mouseMoved(with:rowEvent); editor.cursorUpdate(with:rowEvent)
-            check(NSCursor.current == .arrow && editor.hoverBlock == nil,"Contents navigation keeps the normal pointer through overlapping tracking")
-        }
-        cursorDrag.source = cursorRow; cursorArea.cursorUpdate(with:rowEvent)
-        check(NSCursor.current == .closedHand,"An active Contents move shows a closed hand")
-        cursorDrag.finish()
-        cursorArea.removeFromSuperview(); cursorRow.removeFromSuperview(); session.contentsCursorView = nil; session.sidebarHover = false
+        check(!session.sidebar && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Closing Sidebar updates its toolbar control")
         let sectionSource = "= One\n\n日本\n\n== Child\n\n#let custom = 42\n\n= Two\n\nBody\n\n= Three\n\nTail"
         session.buffer.loadExternal(sectionSource); session.revision += 1; editor.refresh()
         let contentsDrag = ContentsDrag(), firstRow = ContentsRowView(frame:NSRect(x:40,y:100,width:180,height:28)), lastRow = ContentsRowView(frame:NSRect(x:40,y:160,width:180,height:28))
@@ -362,7 +347,6 @@ import BlankCore
         session.sidebarOrderLocked = false; session.sidebar = true
         check(contentsDrag.canMove(to:lastRow,after:true),"Pinned Contents permits section moves when unlocked")
         session.sidebar = false
-        session.sidebarDragging = true
         let drop = ContentsTestDrag(source:firstRow,window:controller.window!)
         drop.draggingLocation = lastRow.convert(NSPoint(x:50,y:25),to:nil)
         check(lastRow.draggingEntered(drop) == .move && NSCursor.current == .closedHand,"Contents drag uses a closed hand and a move operation without a copy badge")
@@ -381,7 +365,7 @@ import BlankCore
         check(session.buffer.source.hasPrefix("= Two") && session.buffer.source.contains("Tail\n\n= One\n\n日本\n\n== Child\n\n#let custom = 42"),"Sidebar movement preserves nested sections, Unicode and custom code")
         check(contentsDrag.destination == nil,"Finishing a drop removes its insertion line")
         contentsDrag.finish()
-        check(!session.sidebarDragging,"Ending a drag releases transient sidebar visibility")
+        check(contentsDrag.source == nil,"Ending a drag releases its source row")
         session.undo(); check(session.buffer.source == sectionSource,"Sidebar section movement shares document undo")
         contentsDrag.source = firstRow; contentsDrag.path = session.active; contentsDrag.revision = session.buffer.revision-1
         check(!contentsDrag.canMove(to:lastRow,after:true),"Contents rejects stale document drag snapshots")
@@ -412,8 +396,8 @@ import BlankCore
         // SwiftUI may release the old source row before AppKit ends its drag.
         var disappearingRow: ContentsRowView? = ContentsRowView()
         disappearingRow!.session = session; contentsDrag.source = disappearingRow
-        session.sidebarDragging = true; disappearingRow = nil; contentsDrag.finish()
-        check(!session.sidebarDragging,"A released source row cannot leave transient Contents pinned open")
+        disappearingRow = nil; contentsDrag.finish()
+        check(contentsDrag.source == nil,"A released source row cannot leave a stale move active")
         // Table cells are real paragraphs in the document's native NSTextTable.
         check(EditorPreferences.installedEditorFamily(nil) == "System","Default editor font is the native macOS system face")
         check(EditorPreferences.installedEditorFamilies.contains(session.fontFamily),"Editor font selection is an installed family")
@@ -646,6 +630,7 @@ import BlankCore
         check(pdfView.scaleFactor > 1,"Zoom In increases native PDF scale")
         zoom.selectedIndex = 0; controller.zoomPreview(zoom)
         check(pdfView.scaleFactor <= 1.001,"Zoom Out reverses native PDF zoom")
+        NativeSidebarAcceptance.preview(controller:controller)
         session.searchQuery = "Second page"; session.find()
         check(pdfView.currentSelection?.string?.contains("Second page") == true,"Toolbar Find selects text in PDF Preview")
         session.searchQuery = ""
@@ -698,7 +683,7 @@ import BlankCore
             let visibleRows = rows(root).filter { !$0.visibleRect.isEmpty }
             check(!visibleRows.isEmpty && visibleRows.allSatisfy { row in
                 root.hitTest(row.convert(NSPoint(x:row.bounds.midX,y:row.bounds.midY),to:root.superview)) === row
-            },"Pinned sidebar mouse hits reach navigation/drag rows through native tracking overlays")
+            },"Sidebar mouse hits reach native navigation and drag rows")
         }
         tutorialWindow.window?.close()
         print("Native acceptance completed")

@@ -18,9 +18,9 @@ extension NSToolbarItem.Identifier {
         toolbar.allowsUserCustomization = true; toolbar.autosavesConfiguration = true
         window?.toolbarStyle = .unified
         window?.toolbar = toolbar
-        session.$mode.sink { [weak self] mode in
+        session.$mode.combineLatest(session.$contactSheet).sink { [weak self] mode,contact in
             self?.modeItem?.selectedIndex = EditorMode.allCases.firstIndex(of:mode) ?? 0
-            self?.zoomItem?.isHidden = mode != .preview
+            self?.zoomItem?.isHidden = mode != .preview && !contact
         }.store(in:&toolbarSubscriptions)
         session.$searchQuery.removeDuplicates().sink { [weak self] query in
             if self?.searchItem?.searchField.stringValue != query { self?.searchItem?.searchField.stringValue = query }
@@ -28,7 +28,7 @@ extension NSToolbarItem.Identifier {
         session.$searchVisible.sink { [weak self] visible in
             if !visible { self?.searchItem?.endSearchInteraction(); self?.searchWidth?.constant = 36 }
         }.store(in:&toolbarSubscriptions)
-        session.$sidebar.sink { [weak self] shown in self?.sidebarItem?.toolTip = shown ? "Hide Contents · ⌘⇧L" : "Show Contents · ⌘⇧L" }.store(in:&toolbarSubscriptions)
+        session.$sidebar.sink { [weak self] shown in self?.sidebarItem?.toolTip = shown ? "Hide Sidebar · ⌘⇧L" : "Show Sidebar · ⌘⇧L" }.store(in:&toolbarSubscriptions)
     }
     @objc func chooseMode(_ sender: NSToolbarItemGroup) {
         guard EditorMode.allCases.indices.contains(sender.selectedIndex) else { return }
@@ -44,8 +44,16 @@ extension NSToolbarItem.Identifier {
         searchItem?.beginSearchInteraction()
         searchItem?.searchField.selectText(nil)
     }
-    @objc func searchDocument(_ sender: NSSearchField) { session.searchQuery = sender.stringValue; session.find() }
+    @objc func searchDocument(_ sender: NSSearchField) { session.searchQuery = sender.stringValue }
     @objc func zoomPreview(_ sender: NSToolbarItemGroup) {
+        if session.contactSheet {
+            switch sender.selectedIndex {
+            case 0: session.contactSheetSize = max(80,session.contactSheetSize/1.2)
+            case 1: session.contactSheetSize = 190
+            case 2: session.contactSheetSize = min(400,session.contactSheetSize*1.2)
+            default: break
+            }; return
+        }
         guard session.mode == .preview, let view = session.pdfView, view.document != nil else { return }
         switch sender.selectedIndex {
         case 0: view.autoScales = false; view.zoomOut(nil)
@@ -76,7 +84,8 @@ extension DocumentWindow: NSToolbarDelegate {
             item.label = "Find"; item.toolTip = "Find · ⌘F"; item.isBordered = true
             item.searchField.placeholderString = "Find in Document"
             item.searchField.delegate = self; item.searchField.target = self; item.searchField.action = #selector(searchDocument(_:))
-            item.searchField.sendsWholeSearchString = true
+            item.searchField.sendsWholeSearchString = false
+            item.searchField.sendsSearchStringImmediately = true
             item.searchField.stringValue = session.searchQuery
             item.preferredWidthForSearchField = 220
             let width = item.searchField.widthAnchor.constraint(equalToConstant:session.searchVisible ? 220 : 36)
@@ -87,8 +96,8 @@ extension DocumentWindow: NSToolbarDelegate {
         if identifier == .blankZoom {
             let images = ["minus.magnifyingglass","1.magnifyingglass","plus.magnifyingglass"].map { NSImage(systemSymbolName:$0,accessibilityDescription:nil)! }
             let item = NSToolbarItemGroup(itemIdentifier:identifier,images:images,selectionMode:.momentary,labels:["Zoom Out","Actual Size","Zoom In"],target:self,action:#selector(zoomPreview(_:)))
-            item.label = "PDF Zoom"; item.paletteLabel = "Zoom Out, Actual Size and Zoom In"; item.isBordered = true
-            item.controlRepresentation = .expanded; item.isHidden = session.mode != .preview
+            item.label = "Zoom"; item.paletteLabel = "Zoom Out, Actual Size and Zoom In"; item.isBordered = true
+            item.controlRepresentation = .expanded; item.isHidden = session.mode != .preview && !session.contactSheet
             if flag { zoomItem = item }; return item
         }
         if identifier == .blankModes {
@@ -100,13 +109,16 @@ extension DocumentWindow: NSToolbarDelegate {
             #endif
             item.visibilityPriority = .high; if flag { modeItem = item }; return item
         }
-        let item = NSToolbarItem(itemIdentifier:identifier); item.target = self; item.isBordered = true
-        switch identifier {
-        case .blankSidebar:
-            item.isNavigational = true; item.visibilityPriority = .high
-            item.label = "Contents"; item.paletteLabel = "Table of Contents"; item.image = NSImage(systemSymbolName:"sidebar.left",accessibilityDescription:"Toggle Contents"); item.action = #selector(toggleContents(_:)); item.toolTip = "Show Contents · ⌘⇧L"; if flag { sidebarItem = item }
-        default: return nil
-        }
+        guard identifier == .blankSidebar else { return nil }
+        let item = NSMenuToolbarItem(itemIdentifier:identifier)
+        item.target = self; item.action = #selector(toggleContents(_:)); item.isBordered = true
+        item.isNavigational = true; item.visibilityPriority = .high; item.showsIndicator = true
+        item.label = "Sidebar"; item.paletteLabel = "Sidebar Views"
+        item.image = NSImage(systemSymbolName:"sidebar.left",accessibilityDescription:"Sidebar")
+        item.menu = NSMenu(); item.menu.delegate = self
+        item.toolTip = session.sidebar ? "Hide Sidebar · ⌘⇧L" : "Show Sidebar · ⌘⇧L"
+        if flag { sidebarItem = item }
+
         // NSToolbar supplies Liquid Glass, adaptive grouping and hit geometry.
         // No custom backgrounds or additional glass layers are applied.
         return item
@@ -114,13 +126,14 @@ extension DocumentWindow: NSToolbarDelegate {
 }
 
 extension DocumentWindow: NSSearchFieldDelegate {
-    func searchFieldDidStartSearching(_ sender: NSSearchField) { session.editor?.finishComposition(); searchWidth?.constant = 220; session.searchVisible = true }
+    func searchFieldDidStartSearching(_ sender: NSSearchField) { session.editor?.finishComposition(); searchWidth?.constant = 220; session.beginSearch() }
     func searchFieldDidEndSearching(_ sender: NSSearchField) { session.searchQuery = sender.stringValue; session.hideSearch() }
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSSearchField else { return }
         session.searchQuery = field.stringValue
     }
     func control(_ control: NSControl,textView: NSTextView,doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) { session.find(); return true }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) { session.hideSearch(); return true }
         return false
     }
@@ -156,5 +169,34 @@ extension DocumentWindow: @preconcurrency NSSharingServicePickerDelegate, NSShar
     func sharingService(_ sharingService: NSSharingService,didShareItems items: [Any]) { activePDFShares.removeValue(forKey:ObjectIdentifier(sharingService)) }
     func sharingService(_ sharingService: NSSharingService,didFailToShareItems items: [Any],error: any Error) {
         session.error = error.localizedDescription; activePDFShares.removeValue(forKey:ObjectIdentifier(sharingService))
+    }
+}
+
+extension DocumentWindow: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        func add(_ title: String,_ action: Selector,_ value: String? = nil,_ checked: Bool = false) {
+            let item = NSMenuItem(title:title,action:action,keyEquivalent:"")
+            item.target = self; item.representedObject = value; item.state = checked ? .on : .off; menu.addItem(item)
+        }
+        add(session.sidebar ? "Hide Sidebar" : "Show Sidebar",#selector(toggleContents(_:)))
+        menu.addItem(.separator())
+        let searching = session.searchVisible && !session.searchQuery.isEmpty
+        for mode in SidebarMode.allCases { add(mode.rawValue,#selector(chooseSidebar(_:)),mode.rawValue,mode == .contactSheet ? session.contactSheet : session.sidebar && !searching && !session.contactSheet && session.sidebarMode == mode) }
+        if !session.searchQuery.isEmpty { add("Search Results",#selector(showSearchResults(_:)),nil,session.sidebar && searching) }
+        if session.mode == .preview {
+            menu.addItem(.separator())
+            for mode in PreviewDisplayMode.allCases { add(mode.rawValue,#selector(choosePreviewDisplay(_:)),mode.rawValue,session.previewDisplayMode == mode) }
+        }
+    }
+    @objc func chooseSidebar(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String, let mode = SidebarMode(rawValue:value) else { return }
+        if mode == .contactSheet { session.showContactSheet() }
+        else { session.closeContactSheet(); session.hideSearch(); session.sidebarMode = mode; session.sidebar = true }
+    }
+    @objc func showSearchResults(_ sender: Any?) { session.showSearch(); session.sidebar = true }
+    @objc func choosePreviewDisplay(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String, let mode = PreviewDisplayMode(rawValue:value) else { return }
+        session.previewDisplayMode = mode
     }
 }

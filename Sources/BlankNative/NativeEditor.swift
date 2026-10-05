@@ -7,6 +7,7 @@ struct NativeEditor: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = false
+        scroll.automaticallyAdjustsContentInsets = true
         scroll.autohidesScrollers = true; scroll.borderType = .noBorder; scroll.drawsBackground = true
         // Choose TextKit 1 at creation: NSTextTable requires its layout engine.
         let view = NativeTextView(usingTextLayoutManager:false)
@@ -23,11 +24,13 @@ struct NativeEditor: NSViewRepresentable {
         view.setAccessibilityLabel("\(session.mode.rawValue) editor")
         view.registerForDraggedTypes([.fileURL,.png,.tiff])
         scroll.documentView = view
+        scroll.isHidden = session.contactSheet
         view.refresh()
-        DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+        DispatchQueue.main.async { if !session.contactSheet { view.window?.makeFirstResponder(view) } }
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
+        scroll.isHidden = session.contactSheet
         if let view = scroll.documentView as? NativeTextView { view.refresh() }
     }
     static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) { if let editor = scroll.documentView as? NativeTextView { editor.slashPopover?.close(); editor.blockPopover?.close() } }
@@ -105,22 +108,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         lastAppearance = ""
-        DispatchQueue.main.async { [weak self] in self?.refresh() }
-    }
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        guard let panel = session?.contentsCursorView, panel.window === window,
-              !panel.isHiddenOrHasHiddenAncestor else { return }
-        let covered = convert(panel.visibleRect,from:panel).intersection(visibleRect)
-        guard !covered.isEmpty else { return }
-        // NSTextView's full I-beam rect must not overlap floating native controls.
-        discardCursorRects()
-        let r = visibleRect
-        for rect in [NSRect(x:r.minX,y:r.minY,width:r.width,height:covered.minY-r.minY),
-                     NSRect(x:r.minX,y:covered.maxY,width:r.width,height:r.maxY-covered.maxY),
-                     NSRect(x:r.minX,y:covered.minY,width:covered.minX-r.minX,height:covered.height),
-                     NSRect(x:covered.maxX,y:covered.minY,width:r.maxX-covered.maxX,height:covered.height)] where !rect.isEmpty {
-            addCursorRect(rect,cursor:.iBeam)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }; self.refresh()
+            if let session = self.session, session.contactSheet || session.sidebar && session.sidebarMode != .contents, session.mode != .preview { session.thumbnails.update() }
         }
     }
     override func updateTrackingAreas() {
@@ -337,6 +327,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         lastPresentationRevision = session.buffer.presentationRevision
         lastRevision = session.buffer.revision; lastMode = session.mode; lastPath = session.active; lastAppearance = appearance
         setAccessibilityLabel("\(session.mode.rawValue) editor")
+        session.searchController.applyHighlights()
         needsDisplay = true
         if reveal { scrollRangeToVisible(selectedRange()) }
         if session.typewriter { centerSelectionInVisibleArea(self) }
@@ -692,18 +683,13 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         NSCursor.arrow.set(); return true
     }
     override func cursorUpdate(with event: NSEvent) {
-        if updateSlashMenuCursor(for:event) || updateContentsCursor(for:event) { return }
+        if updateSlashMenuCursor(for:event) { return }
         if session?.mode != .write { super.cursorUpdate(with:event) }
         else if grabbed != nil { NSCursor.closedHand.set() }
         else { mouseMoved(with:event) }
     }
-    private func updateContentsCursor(for event: NSEvent) -> Bool {
-        guard session?.contentsCursorView?.updateCursor(for:event) == true else { return false }
-        if hoverBlock != nil { hoverBlock = nil; needsDisplay = true }
-        return true
-    }
     override func mouseMoved(with event: NSEvent) {
-        if updateSlashMenuCursor(for:event) || updateContentsCursor(for:event) { return }
+        if updateSlashMenuCursor(for:event) { return }
         guard session?.mode == .write, grabbed == nil else { return }
         let point = convert(event.locationInWindow,from:nil)
         if codeButtons.values.contains(where:{ $0.frame.contains(point) }) || tableButtons.contains(where:{ $0.trackingMenu || !$0.isHidden && $0.frame.insetBy(dx:-6,dy:-6).contains(point) }) { NSCursor.arrow.set(); return }
@@ -717,7 +703,6 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         else { (bounds.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set() }
     }
     override func mouseExited(with event: NSEvent) {
-        if updateContentsCursor(for:event) { return }
         if grabbed == nil { hoverBlock = nil; needsDisplay = true; NSCursor.arrow.set() }
     }
     override func mouseDown(with event: NSEvent) {

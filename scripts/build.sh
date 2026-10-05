@@ -64,3 +64,5 @@ PLIST
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $app_version" "$app/Contents/Info.plist"
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"
+# Refresh the bundle's Finder date only after packaging succeeds.
+touch "$app"

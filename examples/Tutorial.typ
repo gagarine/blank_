@@ -8,7 +8,7 @@ Learn by trying. This is your own editable copy of the guide. Press ⌘S to keep
 - *⌘2 — Source:* edit the underlying Typst file.
 - *⌘3 — Preview:* see the typeset pages.
 
-Try ⌘2, then ⌘3, then ⌘1 to come back here. These are three views of the same document. In Preview, enter a page number to jump to it.
+Try ⌘2, then ⌘3, then ⌘1 to come back here. These are three views of the same document. In Preview, enter a page number to jump to it. Press ⌘F and type to see search results in the sidebar; Return moves to the next match.
 
 == 2. Write and format
 
@@ -38,7 +38,7 @@ Drag a heading above or below another heading at the same level to reorder its w
 
 Try dragging “Move a section” onto “4. Add your research” in Contents. It becomes a subsection there, keeping its heading level and bringing this text with it. The parent highlights and the insertion line marks the end of its section. Press ⌘Z to undo.
 
-Click the sidebar button at the top left or press ⌘⇧L to hide Contents. Move into the left margin to reveal it temporarily; use the toolbar button to keep it open. “Lock section order” in the bottom bar prevents sidebar moves while keeping heading navigation and text editing available.
+Click the sidebar button at the top left or press ⌘⇧L to show or hide it. Its menu offers Table of Contents, Thumbnails, and Contact Sheet in each editor view. Contact Sheet fills the window; zoom changes page size, and double-click or Return opens the selected page. “Lock section order” at the bottom of Contents prevents moves while keeping heading navigation and text editing available.
 
 == 4. Add your research
 

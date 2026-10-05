@@ -186,7 +186,7 @@ import Combine
         self.nativeDocument = nativeDocument ?? NativeDocument(session:session)
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1060,height:780),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         super.init(window:window)
-        window.titlebarAppearsTransparent = true
+        window.titlebarAppearsTransparent = false
         if session.dark { window.appearance = NSAppearance(named:.darkAqua) }
         window.center(); window.delegate = self
         window.acceptsMouseMovedEvents = true

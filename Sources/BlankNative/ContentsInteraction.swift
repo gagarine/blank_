@@ -10,8 +10,7 @@ enum ContentsItem: Equatable {
 // One local drag owner keeps the insertion line unique and rejects foreign
 // payloads or a document that changed while a drag was in progress.
 @MainActor final class ContentsDrag: ObservableObject {
-    weak var source: ContentsRowView? { didSet { if let source { owner = source.session } } }
-    private weak var owner: DocumentSession?
+    weak var source: ContentsRowView?
     weak var destination: ContentsRowView?
     var placement: SectionPlacement = .before
     var after: Bool { placement != .before }
@@ -79,8 +78,7 @@ enum ContentsItem: Equatable {
         collapsed = Set(session.headings.filter { offsets.contains($0.1.source.start) }.map(\.0))
     }
     func finish() {
-        owner?.sidebarDragging = false
-        owner = nil; source = nil; highlight(nil); NSCursor.arrow.set()
+        source = nil; highlight(nil); NSCursor.arrow.set()
     }
 }
 
@@ -153,7 +151,6 @@ final class ContentsRowView: NSButton, NSDraggingSource {
         guard hypot(point.x-press.x,point.y-press.y) >= 4 else { return }
         self.press = nil; session.editor?.finishComposition()
         drag.source = self; drag.path = session.active; drag.revision = session.buffer.revision
-        session.sidebarDragging = true
         let writer = NSPasteboardItem(); writer.setString("move",forType:Self.pasteboardType)
         let native = NSDraggingItem(pasteboardWriter:writer)
         let image = NSImage(size:bounds.size)
@@ -210,56 +207,4 @@ final class ContentsRowView: NSButton, NSDraggingSource {
         NSColor.controlAccentColor.setFill()
         NSRect(x:drag.markerIndent,y:drag.markerAfter ? bounds.maxY-2 : bounds.minY,width:max(0,bounds.width-drag.markerIndent),height:2).fill()
     }
-}
-
-// One panel cursor owner routes overlapping tracking events to the visible
-// row. The native arrow remains the navigation cursor until a drag starts.
-struct ContentsCursorArea: NSViewRepresentable {
-    var session: DocumentSession
-    func makeNSView(context: Context) -> ContentsCursorView { ContentsCursorView() }
-    func updateNSView(_ view: ContentsCursorView,context: Context) {
-        view.session = session; session.contentsCursorView = view
-        if let editor = session.editor { editor.window?.invalidateCursorRects(for:editor) }
-    }
-    static func dismantleNSView(_ view: ContentsCursorView,coordinator: ()) {
-        if let session = view.session, session.contentsCursorView === view {
-            session.contentsCursorView = nil
-            if let editor = session.editor { editor.window?.invalidateCursorRects(for:editor) }
-        }
-    }
-}
-final class ContentsCursorView: NSView {
-    weak var session: DocumentSession?
-    private var tracking: NSTrackingArea?
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func layout() {
-        super.layout()
-        if let editor = session?.editor { editor.window?.invalidateCursorRects(for:editor) }
-    }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        tracking = NSTrackingArea(rect:.zero,options:[.cursorUpdate,.mouseMoved,.mouseEnteredAndExited,.activeInKeyWindow,.inVisibleRect],owner:self,userInfo:nil)
-        addTrackingArea(tracking!)
-    }
-    @discardableResult func updateCursor(for event: NSEvent) -> Bool {
-        guard let window, !isHiddenOrHasHiddenAncestor,
-              visibleRect.contains(convert(event.locationInWindow,from:nil)) else { return false }
-        func control(in view: NSView) -> NSView? {
-            guard !view.isHiddenOrHasHiddenAncestor else { return nil }
-            for child in view.subviews.reversed() { if let hit = control(in:child) { return hit } }
-            if view is ContentsRowView,
-               view.visibleRect.contains(view.convert(event.locationInWindow,from:nil)) { return view }
-            return nil
-        }
-        if let root = window.contentView, let button = control(in:root) {
-            if let row = button as? ContentsRowView {
-                (row.drag?.source != nil ? NSCursor.closedHand : NSCursor.arrow).set()
-            } else { NSCursor.arrow.set() }
-        } else { NSCursor.arrow.set() }
-        return true
-    }
-    override func cursorUpdate(with event: NSEvent) { updateCursor(for:event) }
-    override func mouseEntered(with event: NSEvent) { updateCursor(for:event) }
-    override func mouseMoved(with event: NSEvent) { updateCursor(for:event) }
 }
