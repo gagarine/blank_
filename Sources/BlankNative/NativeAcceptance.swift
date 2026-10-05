@@ -3,8 +3,8 @@ import PDFKit
 import BlankCore
 
 @MainActor enum NativeAcceptance {
-    static func run() {
-        let app = NSApplication.shared; app.setActivationPolicy(.regular)
+    static func run(controller: DocumentWindow) {
+        let app = NSApplication.shared
         setbuf(stdout,nil)
         let originalClipboard = NSPasteboard.general.pasteboardItems?.map { item in Dictionary(uniqueKeysWithValues:item.types.compactMap { type in item.data(forType:type).map { (type,$0) } }) } ?? []
         defer {
@@ -12,13 +12,14 @@ import BlankCore
             let items = originalClipboard.map { contents -> NSPasteboardItem in let item = NSPasteboardItem(); for (type,data) in contents { item.setData(data,forType:type) }; return item }
             NSPasteboard.general.writeObjects(items)
         }
-        let session = DocumentSession()
-        let controller = DocumentWindow(session:session); controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
-        app.activate(ignoringOtherApps:true)
+        // The normal AppKit event loop and delegate create this initial window.
+        // Menu/focus checks therefore exercise real startup before any input.
+        let session = controller.session
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         guard let view = session.editor else { fatalError("No native editor") }
         func check(_ condition: @autoclosure () -> Bool,_ label: String) { if !condition() { fatalError("FAIL: \(label) | source=\(session.buffer.source) | native=\(view.string)") }; print("PASS: \(label)") }
+        check(app.activationPolicy() == .regular && app.mainMenu?.items.map(\.title) == ["blank_","File","Edit","Format","View","Window","Help"],"Complete application menus are installed during launch preparation")
+        check(app.mainMenu?.items.allSatisfy { $0.submenu?.items.isEmpty == false } == true && app.servicesMenu != nil && app.windowsMenu != nil && app.helpMenu != nil,"Launch menus include populated submenus and native Services, Window and Help integration")
         check(view.textLayoutManager == nil && view.layoutManager != nil,"TextKit 1 selected explicitly at creation")
         check(controller.window?.firstResponder === view,"Empty editor is focused")
         check(view.string.isEmpty,"Launch has no welcome screen")

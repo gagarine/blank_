@@ -6,10 +6,9 @@ import Combine
 @main enum BlankMain {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--measure") { ResourceMetrics.run(); return }
-        if CommandLine.arguments.contains("--self-test") { NativeAcceptance.run(); return }
         let app = NSApplication.shared
         let delegate = AppController(); app.delegate = delegate
-        app.setActivationPolicy(.regular); app.run()
+        app.run()
         withExtendedLifetime(delegate) {}
     }
 }
@@ -21,13 +20,30 @@ import Combine
     }
     var controllers: [DocumentWindow] = []
     var current: DocumentSession? { controllers.first { $0.window === NSApp.keyWindow }?.session ?? controllers.last?.session }
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        Self.shared = self
+        NSApp.setActivationPolicy(.regular)
+        installMenus()
+    }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Self.shared = self; installMenus()
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         if CommandLine.arguments.contains("--tutorial") { tutorial(nil) }
         else if let file = args.first { openURL(URL(fileURLWithPath:file)) }
         else { newDocument(nil) }
-        NSApp.activate(ignoringOtherApps:true)
+        // Finish AppKit's launch/activation-policy transition before requesting
+        // activation. The complete menu is already attached at this point.
+        DispatchQueue.main.async { NSApp.activate() }
+        if CommandLine.arguments.contains("--self-test") {
+            // Run outside a main-queue block: the acceptance suite pumps the
+            // run loop while waiting for background compiler/file callbacks.
+            RunLoop.main.perform {
+                MainActor.assumeIsolated {
+                    guard let controller = self.controllers.first else { fatalError("Launch did not open an editor") }
+                    NativeAcceptance.run(controller:controller)
+                    exit(0)
+                }
+            }
+        }
     }
     func show(_ session: DocumentSession) {
         let controller = DocumentWindow(session:session); controllers.append(controller)
@@ -107,7 +123,7 @@ import Combine
         controllers.forEach { $0.session.editor?.finishComposition(); $0.session.autosave() }
     }
     func installMenus() {
-        let bar = NSMenu(); NSApp.mainMenu = bar
+        let bar = NSMenu()
         func menu(_ title: String) -> NSMenu {
             let root = NSMenuItem(title:title,action:nil,keyEquivalent:""); let submenu = NSMenu(title:title); root.submenu = submenu; bar.addItem(root); return submenu
         }
@@ -139,6 +155,7 @@ import Combine
         add(window,"Minimize",#selector(NSWindow.performMiniaturize(_:)),"m"); add(window,"Zoom",#selector(NSWindow.performZoom(_:))); window.addItem(.separator()); add(window,"Bring All to Front",#selector(NSApplication.arrangeInFront(_:)),target:NSApp)
         let help = menu("Help"); NSApp.helpMenu = help
         add(help,"Tutorial",#selector(tutorial(_:)),target:self); add(help,"Statistics & Info",#selector(statistics(_:)),target:self); add(help,"Refresh Zotero References",#selector(refreshReferences(_:)),target:self)
+        NSApp.mainMenu = bar
     }
 }
 @MainActor final class DocumentWindow: NSWindowController, NSWindowDelegate {
