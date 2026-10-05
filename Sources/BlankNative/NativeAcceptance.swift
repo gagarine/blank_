@@ -144,6 +144,29 @@ import BlankCore
         editor.setSelectedRange(NSRange(location:5,length:8)); editor.captureSelection(); editor.insertNewline(nil)
         check(session.buffer.projection.blocks.map(\.text) == ["Left","right"],"Return replaces selection and splits its paragraph")
         session.undo(); check(session.buffer.source == "Left selected right","Selected Return is one undo transaction")
+        for (source,kind) in [("= _Heading 👋_","heading"),("== *_Heading_*","heading"),("- _Item_","bullet"),("#quote(block: true)[_Quote_]","quote")] {
+            resetParagraphs(source); editor.insertionBold = nil; editor.insertionItalic = nil
+            let block = session.buffer.projection.blocks[0]
+            editor.setSelectedRange(block.display); editor.captureSelection(); session.buffer.breakUndoGroup()
+            editor.insertText("",replacementRange:editor.selectedRange())
+            let emptySource = session.buffer.source
+            check(session.buffer.projection.blocks[0].text.isEmpty && session.buffer.projection.blocks[0].kind == kind,"Deleting styled content clears inline marks and retains its block kind")
+            for character in "/paragraph" {
+                editor.insertText(String(character),replacementRange:editor.selectedRange())
+                let font = editor.textStorage!.attribute(.font,at:editor.selectedRange().location-1,effectiveRange:nil) as! NSFont
+                check(font.pointSize == CGFloat(session.fontSize) && NSFontManager.shared.traits(of:font).intersection([.boldFontMask,.italicFontMask]).isEmpty,"Empty-block slash filtering uses regular body typography for every character")
+            }
+            check(session.buffer.projection.blocks[0].kind == kind,"Opening slash does not change canonical block type")
+            editor.chooseSlash(); editor.insertText("New text",replacementRange:editor.selectedRange())
+            check(session.buffer.projection.blocks[0].kind == "paragraph" && session.buffer.projection.blocks[0].text == "New text" && !session.buffer.projection.blocks[0].inlines.flatMap(\.runs).contains { $0.style.bold || $0.style.italic },"Slash paragraph choice replaces the old kind without inheriting deleted marks")
+            session.undo(); session.undo(); session.undo()
+            check(session.buffer.source == emptySource,"Undo through slash choice restores the empty original block")
+            editor.dismissSlash()
+        }
+        resetParagraphs("= Heading"); editor.selectAll(nil); editor.insertText("",replacementRange:editor.selectedRange())
+        editor.insertText("/",replacementRange:editor.selectedRange()); editor.dismissSlash()
+        let literalSlashFont = editor.textStorage!.attribute(.font,at:0,effectiveRange:nil) as! NSFont
+        check(session.buffer.source == "= /" && literalSlashFont.pointSize > CGFloat(session.fontSize),"Escape restores heading typography for a literal slash without changing source")
         session.buffer.loadExternal("Slash target"); session.revision += 1; editor.refresh()
         editor.setSelectedRange(NSRange(location:0,length:0)); editor.captureSelection()
         for scalar in "/heading".unicodeScalars { editor.insertText(String(scalar),replacementRange:editor.selectedRange()) }

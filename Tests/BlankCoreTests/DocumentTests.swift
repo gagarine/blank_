@@ -31,6 +31,29 @@ final class DocumentTests {
         b.split(NSRange(location:b.projection.text.utf16.count,length:0))
         XCTAssertFalse(b.source.hasSuffix("- "))
     }
+    func testDeletingCompleteMarks() {
+        for marked in ["*café 👋*","_café 👋_","*_café 👋_*","#strong[#emph[café 👋]]","`café 👋`"] {
+            let original = "// Keep\n= "+marked+"\n\n#let untouched = 42\n\nAfter"
+            let model = DocumentBuffer(original), heading = model.projection.blocks.first { $0.kind == "heading" }!
+            model.selection = EditSelection(model.projection.sourceOffset(at:heading.display.location),model.projection.sourceOffset(at:NSMaxRange(heading.display)))
+            model.editWrite(heading.display,text:"",group:"")
+            let cleared = "// Keep\n= \n\n#let untouched = 42\n\nAfter"
+            XCTAssertEqual(model.source,cleared)
+            XCTAssertEqual(model.projection.blocks.first { $0.kind == "heading" }!.text,"")
+            let caret = model.projection.displayOffset(at:model.selection.focus)
+            model.editWrite(NSRange(location:caret,length:0),text:"/",group:"")
+            XCTAssertFalse(model.projection.blocks.first { $0.kind == "heading" }!.inlines.flatMap(\.runs).contains { $0.style.bold || $0.style.italic || $0.style.code })
+            model.undo(); XCTAssertEqual(model.source,cleared)
+            model.undo(); XCTAssertEqual(model.source,original)
+            model.redo(); XCTAssertEqual(model.source,cleared)
+        }
+        let partial = DocumentBuffer("Before *bold* after")
+        partial.editWrite(NSRange(location:8,length:2),text:"",group:"")
+        XCTAssertEqual(partial.source,"Before *bd* after")
+        let custom = DocumentBuffer("#strong(delta: 2)[abc]")
+        custom.editWrite(custom.projection.blocks[0].display,text:"",group:"")
+        XCTAssertEqual(custom.source,"#strong(delta: 2)[]")
+    }
     func testParagraphJoinKeepsFormatting() {
         let b = DocumentBuffer("one *bold*\n\ntwo _italic_")
         let first = b.projection.blocks[0], second = b.projection.blocks[1]
@@ -389,6 +412,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Source folding preserves bytes and offsets",t.testSourceFoldingPreservesBytesAndOffsets),
             ("Table dimension transactions preserve source",t.testTableDimensionsPreserveSource),
             ("Lossless styled edit",t.testProjectionAndLosslessEdit),
+            ("Clearing inline marks without stale formatting",t.testDeletingCompleteMarks),
             ("List continuation and exit",t.testListContinueAndExit),
             ("Paragraph joining",t.testParagraphJoinKeepsFormatting),
             ("Paragraph and soft line breaks",t.testParagraphAndLineBreaks),

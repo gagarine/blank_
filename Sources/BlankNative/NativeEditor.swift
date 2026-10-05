@@ -56,6 +56,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var slashStart: Int?
     var slashIndex = 0
     var slashQuery = ""
+    var plainSlashQuery = false
     var hoverBlock: Int?
     var grabbed: Int?
     var pressPoint = NSPoint.zero
@@ -197,6 +198,14 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                         at += r.length
                     }
                 }
+            }
+        }
+        if !source, plainSlashQuery, let start = slashStart, start < result.length {
+            let end = max(start,min(b.projection.displayOffset(at:b.selection.focus),result.length))
+            let range = NSRange(location:start,length:end-start)
+            if range.length > 0 {
+                result.addAttributes([.font:readingFont(size:size),.foregroundColor:session.inkColor],range:range)
+                result.removeAttribute(.link,range:range)
             }
         }
         return result
@@ -378,6 +387,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if composing || hasMarkedText() { return true }
         captureSelection()
         var editRange = affectedCharRange
+        let block = session.buffer.projection.blocks[session.buffer.projection.blockIndex(at:editRange.location)]
+        let emptyingBlock = session.mode == .write && block.editable && text.isEmpty && editRange.length > 0 && editRange == block.display
+        let startsPlainSlash = session.mode == .write && text == "/" && block.editable && (block.text.isEmpty || editRange == block.display)
+        if startsPlainSlash { insertionBold = nil; insertionItalic = nil; session.buffer.breakUndoGroup() }
         if session.mode == .write {
             let folded = session.buffer.projection.blocks.indices.filter { session.buffer.projection.blocks[$0].collapsed && NSIntersectionRange(session.buffer.projection.blocks[$0].display,NSRange(location:affectedCharRange.location,length:max(1,affectedCharRange.length))).length > 0 }
             // A folded summary is one atomic block, including boundary deletes.
@@ -392,10 +405,15 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         else {
             var style = caretStyle()
             if let insertionBold { style.bold = insertionBold }; if let insertionItalic { style.italic = insertionItalic }
-            session.buffer.editWrite(editRange,text:text,styleOverride:insertionBold != nil || insertionItalic != nil ? style : nil)
+            session.buffer.editWrite(editRange,text:text,styleOverride:startsPlainSlash ? TextStyle() : insertionBold != nil || insertionItalic != nil ? style : nil)
         }
+        if emptyingBlock { insertionBold = nil; insertionItalic = nil }
         session.changed(); scrollRangeToVisible(selectedRange())
-        if text == "/", session.mode == .write { slashStart = selectedRange().location-1; slashIndex = 0; updateSlash() }
+        if text == "/", session.mode == .write {
+            slashStart = selectedRange().location-1; slashIndex = 0; plainSlashQuery = startsPlainSlash
+            if plainSlashQuery { lastRevision = -1; refresh() }
+            updateSlash()
+        }
         applyTypingShortcut(text)
         return false
     }
@@ -781,7 +799,15 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         slashPopover?.show(relativeTo:rectFor(slashStart ?? selectedRange().location),of:self,preferredEdge:.maxY)
         window?.makeFirstResponder(self)
     }
-    func dismissSlash() { slashPopover?.close(); slashPopover = nil; slashStart = nil; slashQuery = "" }
+    func dismissSlash() {
+        let restoreTypography = plainSlashQuery
+        slashPopover?.close(); slashPopover = nil; slashStart = nil; slashQuery = ""; plainSlashQuery = false
+        if restoreTypography {
+            lastRevision = -1
+            if refreshing { DispatchQueue.main.async { [weak self] in self?.refresh() } }
+            else { refresh() }
+        }
+    }
     func chooseSlash() {
         guard let start = slashStart, slashMatches.indices.contains(slashIndex), let session else { return }
         let command = slashMatches[slashIndex]

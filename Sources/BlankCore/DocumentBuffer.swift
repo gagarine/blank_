@@ -207,6 +207,13 @@ public final class DocumentBuffer {
             commit(source.replacingBytes(ByteSpan(start,end), with: insert), selection: EditSelection(start+insert.utf8.count,start+insert.utf8.count), group: group)
             return
         }
+        // Removing the complete contents of a mark removes its empty wrapper
+        // as well. Keep partial edits, neighboring syntax and custom expressions.
+        if first == last, !raw, text.isEmpty, from < to,
+           let span = emptiedMarkSpan(a.inlines,from:from,to:to) {
+            commit(source.replacingBytes(span,with:""),selection:EditSelection(span.start,span.start),group:group)
+            return
+        }
         // A replacement inside one literal run keeps its existing wrappers in
         // place. Splitting a bold run into adjacent *...* chunks is not valid
         // Typst markup at every word boundary.
@@ -246,6 +253,19 @@ public final class DocumentBuffer {
         let prefixLength = replacement == prefix+inserted+suffix ? prefix.utf8.count : sliceInlines(a.inlines,0,min(from,a.display.length),source:source,explicitMarks:true).utf8.count
         let caret = span.start + prefixLength + inserted.utf8.count
         commit(source.replacingBytes(span, with: replacement), selection: EditSelection(caret,caret), group: text.contains("\n") || raw ? "" : group)
+    }
+    private func emptiedMarkSpan(_ nodes: [Inline],from: Int,to: Int) -> ByteSpan? {
+        var offset = 0
+        for node in nodes {
+            if case let .group(span,prefix,_,children) = node,
+               from >= offset, to <= offset+node.length {
+                if from == offset, to == offset+node.length,
+                   ["*","_","`","#strong[","#emph["].contains(prefix) { return span }
+                if let span = emptiedMarkSpan(children,from:from-offset,to:to-offset) { return span }
+            }
+            offset += node.length
+        }
+        return nil
     }
     private func editCell(_ range: NSRange, group: String = "", operation: (DocumentBuffer,NSRange) -> Void) -> Bool {
         guard let cell = projection.tableCell(at:range) else { return false }
