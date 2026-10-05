@@ -142,7 +142,7 @@ struct InsertionSheet: View {
             if session.insertionKind == "citation" { citation }
             else if session.insertionKind == "table" {
                 HStack { Stepper("Columns: \(columns)",value:$columns,in:1...12); Spacer(); Stepper("Rows: \(rows)",value:$rows,in:1...50) }
-                Text("Cells can be edited through the block menu. The Typst table keeps its literal source.").font(.system(size:11)).foregroundStyle(.secondary)
+                Text("Edit cells directly in Write. Change rows and columns through the table's block menu.").font(.system(size:11)).foregroundStyle(.secondary)
             } else {
                 if session.insertionKind == "image" {
                     TextField("Project-relative image path",text:$text).textFieldStyle(.roundedBorder)

@@ -19,25 +19,25 @@ import BlankCore
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         guard let view = session.editor else { fatalError("No native editor") }
         func check(_ condition: @autoclosure () -> Bool,_ label: String) { if !condition() { fatalError("FAIL: \(label) | source=\(session.buffer.source) | native=\(view.string)") }; print("PASS: \(label)") }
-        check(view.textLayoutManager != nil,"TextKit 2 active at creation")
+        check(view.textLayoutManager == nil && view.layoutManager != nil,"TextKit 1 selected explicitly at creation")
         check(controller.window?.firstResponder === view,"Empty editor is focused")
         check(view.string.isEmpty,"Launch has no welcome screen")
         check(controller.window?.styleMask.contains(.fullSizeContentView) == true && controller.window?.titlebarAppearsTransparent == true,"Document extends beneath native transparent toolbar")
         for scalar in "Hello café 👩🏽‍💻".unicodeScalars { view.insertText(String(scalar),replacementRange:view.selectedRange()) }
         check(session.buffer.projection.text == "Hello café 👩🏽‍💻","Native typing and Unicode")
-        view.textLayoutManager?.ensureLayout(for:view.visibleRect)
+        view.ensureNativeLayout()
         let firstLineEnd = view.rectFor(view.selectedRange().location)
         view.insertNewline(nil)
-        view.textLayoutManager?.ensureLayout(for:view.visibleRect)
+        view.ensureNativeLayout()
         let emptyParagraph = view.rectFor(view.selectedRange().location)
         check(emptyParagraph.minY-firstLineEnd.minY >= firstLineEnd.height+12,"Return shows paragraph spacing before typing")
         check(controller.window?.firstResponder === view && view.shouldDrawInsertionPoint,"Return keeps focus and a native insertion point")
         view.insertText("Second paragraph",replacementRange:view.selectedRange())
         check(session.buffer.projection.blocks.count == 2,"Return splits paragraph")
-        view.textLayoutManager?.ensureLayout(for:view.visibleRect)
+        view.ensureNativeLayout()
         let paragraphEnd = view.rectFor(view.selectedRange().location)
         view.insertLineBreak(nil)
-        view.textLayoutManager?.ensureLayout(for:view.visibleRect)
+        view.ensureNativeLayout()
         let softLine = view.rectFor(view.selectedRange().location)
         check(session.buffer.projection.blocks.count == 2 && session.buffer.projection.text.hasSuffix("\u{2028}"),"Shift-Return stays inside the paragraph")
         check(softLine.minY-paragraphEnd.minY < paragraphEnd.height+12,"Soft line break omits paragraph spacing")
@@ -58,7 +58,7 @@ import BlankCore
         sourceView.selectAll(nil); sourceView.copy(nil)
         check(NSPasteboard.general.string(forType:.string) == session.buffer.source,"Source clipboard exact source")
         session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
-        check(session.editor?.textLayoutManager != nil,"TextKit 2 retained after switching")
+        check(session.editor?.textLayoutManager == nil,"TextKit 1 retained after switching")
         check(session.editor?.isAutomaticQuoteSubstitutionEnabled == session.editor?.inputDefaults?.quotes,"Write restores native input preferences after Source")
         session.undo(); check(!session.buffer.source.contains("*Hello*"),"Undo shared across views")
         session.undo(true); check(session.buffer.source.contains("*Hello*"),"Redo shared across views")
@@ -68,13 +68,27 @@ import BlankCore
         editor.setMarkedText("日本",selectedRange:NSRange(location:2,length:0),replacementRange:NSRange(location:NSNotFound,length:0))
         editor.insertText("日本",replacementRange:NSRange(location:NSNotFound,length:0))
         check(session.buffer.projection.text.hasSuffix("日本"),"Native marked-text composition commits once")
-        check(editor.textLayoutManager != nil,"TextKit 2 retained through composition")
+        check(editor.textLayoutManager == nil,"TextKit 1 retained through composition")
         editor.formatNative(false)
         editor.insertText("A",replacementRange:editor.selectedRange()); editor.insertText("B",replacementRange:editor.selectedRange())
         check(session.buffer.projection.text.hasSuffix("日本AB") && !session.buffer.parsed.erroneous,"Bold typing remains valid across keystrokes")
         editor.formatNative(false); editor.insertText("C",replacementRange:editor.selectedRange())
         check(!session.buffer.projection.blocks.last!.inlines.flatMap(\.runs).last!.style.bold && !session.buffer.parsed.erroneous,"Bold typing can be turned off inside a word")
         editor.insertionBold = nil
+        for (marker,kind,level) in [("===","heading",3),("-","bullet",0),("+","number",0)] {
+            session.buffer.loadExternal(""); session.revision += 1; editor.lastRevision = -1; editor.refresh()
+            var visible = ""
+            for character in marker {
+                visible.append(character)
+                editor.insertText(String(character),replacementRange:editor.selectedRange())
+                check(editor.string == visible,"Incomplete block marker remains visible while typing")
+            }
+            check(session.buffer.projection.blocks[0].kind == "paragraph","Incomplete shortcut stays ordinary visible text")
+            editor.insertText(" ",replacementRange:editor.selectedRange())
+            check(session.buffer.projection.blocks[0].kind == kind && session.buffer.projection.blocks[0].level == level,"Space completes the visible block shortcut")
+            editor.insertText("Visible text",replacementRange:editor.selectedRange())
+            check(editor.string == "Visible text","Completed block shortcut accepts native typing")
+        }
         for input in ["*bold* ordinary ","*_both_* ","snake_case_name ","=== "] {
             session.buffer.loadExternal("Target\n"); session.revision += 1; editor.refresh(); editor.setSelectedRange(NSRange(location:0,length:0)); editor.captureSelection(); editor.insertionBold = nil; editor.insertionItalic = nil
             for scalar in input.unicodeScalars { editor.insertText(String(scalar),replacementRange:editor.selectedRange()) }
@@ -137,13 +151,21 @@ import BlankCore
         if ProcessInfo.processInfo.environment["BLANK_GEOMETRY"] != nil {
             var actual = NSRange()
             print("Geometry",editor.frame,editor.visibleRect,editor.textContainerOrigin,editor.rectFor(0),editor.firstRect(forCharacterRange:NSRange(location:0,length:1),actualRange:&actual),editor.slashPopover?.contentViewController?.view.window?.frame as Any,controller.window?.frame as Any)
-            if let manager = editor.textLayoutManager, let start = manager.textContentManager?.documentRange.location, let fragment = manager.textLayoutFragment(for:start) { print("Fragment",fragment.layoutFragmentFrame,fragment.textLineFragments.map(\.typographicBounds)) }
+
         }
         editor.slashIndex = 1; editor.chooseSlash()
         check(session.buffer.source == "== Slash target" && editor.slashPopover == nil,"Slash choice preserves content and dismisses menu")
         session.undo(); check(session.buffer.source == "/headingSlash target","Slash conversion is one undo transaction")
+        session.buffer.loadExternal(""); session.revision += 1; editor.lastRevision = -1; editor.refresh()
+        for character in "/table" { editor.insertText(String(character),replacementRange:editor.selectedRange()) }
+        editor.chooseSlash()
+        let insertedTable = session.buffer.projection.blocks.firstIndex { $0.kind == "table" }!
+        check(session.sheet == nil && session.buffer.projection.blocks[insertedTable].tableCells.count == 4,"Slash Table immediately creates an empty two-by-two table without a dialog")
+        check(session.buffer.projection.tableCell(at:editor.selectedRange())?.cell == 0 && controller.window?.firstResponder === editor,"Slash Table focuses its first cell ready to type")
+        editor.insertText("First cell",replacementRange:editor.selectedRange())
+        check(session.buffer.source.contains("[First cell]"),"New slash table accepts typing immediately")
         session.buffer.loadExternal("First block\n\nSecond block\n\nThird block")
-        session.revision += 1; editor.refresh(); editor.textLayoutManager?.ensureLayout(for:editor.visibleRect)
+        session.revision += 1; editor.refresh(); editor.ensureNativeLayout()
         check(controller.window?.acceptsMouseMovedEvents == true,"Document window delivers handle hover events")
         func pointer(_ type: NSEvent.EventType,_ point: NSPoint) -> NSEvent {
             NSEvent.mouseEvent(with:type,location:editor.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:1,pressure:type == .leftMouseUp ? 0 : 1)!
@@ -185,78 +207,98 @@ import BlankCore
         check(session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Pinning contents clears transient hover and updates toolbar")
         session.sidebarHover = true; session.toggleSidebar()
         check(!session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Unpinning contents restores transient behavior")
-        // NSTableView supplies the grid; TextKit 2 supplies document and cell editing.
-        session.buffer.loadExternal("#table(columns: 2, [Idea], [Step], [One], [Two])\n\nAfter")
+        // Table cells are real paragraphs in the document's native NSTextTable.
+        let tableSource = "#table(columns: 2, [Idea], [Step], [One], [Two])\n\nAfter"
+        session.buffer.loadExternal(tableSource)
         session.revision += 1; editor.lastRevision = -1; editor.refresh()
-        RunLoop.main.run(until:Date().addingTimeInterval(0.15))
-        check(editor.textLayoutManager != nil,"TextKit 2 retained with table attachments")
-        editor.scrollRangeToVisible(NSRange(location:0,length:1))
-        editor.needsDisplay = true; editor.displayIfNeeded()
-        RunLoop.main.run(until:Date().addingTimeInterval(0.15))
-        guard let table = editor.tableViews[0]?.value else {
-            print("Native object debug:",editor.string.debugDescription,editor.textStorage?.attributes(at:0,effectiveRange:nil) ?? [:],editor.frame,editor.visibleRect)
-            fatalError("No native table view")
+        RunLoop.main.run(until:Date().addingTimeInterval(0.15)); editor.ensureNativeLayout()
+        func cellRange(_ index: Int) -> NSRange {
+            let block = session.buffer.projection.blocks[0], local = block.cellRanges[index]
+            return NSRange(location:block.display.location+local.location,length:local.length)
         }
-        check(table.fields.count == 4,"Native table cells created")
-        check(table.tableView.numberOfRows == 2 && table.tableView.tableColumns.count == 2 && table.fields[0].superview is NSTableCellView,"Native NSTableView owns rows, columns and cells")
-        check(table.window === controller.window,"Native table controls mounted in document")
-        let originalAppearance = controller.window?.appearance
-        let originalSystemColors = session.systemColors
+        func textBlock(_ index: Int) -> NSTextTableBlock {
+            let style = editor.textStorage!.attribute(.paragraphStyle,at:cellRange(index).location,effectiveRange:nil) as! NSParagraphStyle
+            return style.textBlocks.first as! NSTextTableBlock
+        }
+        check(editor.textLayoutManager == nil && editor.layoutManager != nil,"Native text tables use explicit TextKit 1")
+        check(textBlock(0).table === textBlock(3).table && textBlock(0).table.numberOfColumns == 2 && textBlock(3).startingRow == 1 && textBlock(3).startingColumn == 1,"NSTextTable owns cell rows and columns")
+        let firstCell = editor.rectFor(cellRange(0).location), secondCell = editor.rectFor(cellRange(1).location)
+        check(abs(firstCell.minY-secondCell.minY) < 1 && secondCell.minX > firstCell.maxX+50,"Native text table places adjacent cells in one row")
+        check(editor.objectViews.isEmpty && editor.string.contains("Idea\nStep\nOne\nTwo"),"Table content is in the document text storage without overlay controls")
+        let originalAppearance = controller.window?.appearance, originalSystemColors = session.systemColors
         session.systemColors = true
         for name in [NSAppearance.Name.aqua,.darkAqua] {
             controller.window?.appearance = NSAppearance(named:name)
             RunLoop.main.run(until:Date().addingTimeInterval(0.1)); editor.lastAppearance = ""; editor.refresh()
-            let themedTable = editor.tableViews[0]!.value!
             var background: CGFloat = 0, foreground: CGFloat = 0
             editor.effectiveAppearance.performAsCurrentDrawingAppearance {
                 background = editor.backgroundColor.usingColorSpace(.deviceRGB)!.brightnessComponent
-                foreground = themedTable.fields[0].textColor!.usingColorSpace(.deviceRGB)!.brightnessComponent
+                foreground = (editor.textStorage!.attribute(.foregroundColor,at:cellRange(0).location,effectiveRange:nil) as! NSColor).usingColorSpace(.deviceRGB)!.brightnessComponent
             }
             check(name == .darkAqua ? background < 0.25 && foreground > 0.7 : background > 0.9 && foreground < 0.3,"Native page and table text adapt to \(name.rawValue)")
-            themedTable.focusCell(0)
-            if let cellEditor = themedTable.fields[0].currentEditor() as? NSTextView {
-                check(cellEditor.textLayoutManager != nil,"Native table field editor retains TextKit 2")
-                var editingColor: CGFloat = 0
-                editor.effectiveAppearance.performAsCurrentDrawingAppearance { editingColor = cellEditor.textColor!.usingColorSpace(.deviceRGB)!.brightnessComponent }
-                check(abs(editingColor-foreground) < 0.01,"Active table cell retains readable \(name.rawValue) text")
-            } else { fatalError("Missing themed table field editor") }
-            editor.objectEditing = false; controller.window?.makeFirstResponder(editor)
+            editor.focusTableCell(0,2)
+            check(controller.window?.firstResponder === editor && editor.shouldDrawInsertionPoint,"Native table editing shares document focus and caret")
         }
         let originalPaper = session.paper, originalInk = session.ink
         session.systemColors = false; session.paper = .white; session.ink = .black
-        controller.window?.appearance = NSAppearance(named:.darkAqua)
-        editor.lastAppearance = ""; editor.refresh()
+        controller.window?.appearance = NSAppearance(named:.darkAqua); editor.lastAppearance = ""; editor.refresh()
         editor.effectiveAppearance.performAsCurrentDrawingAppearance {
-            check(editor.backgroundColor.usingColorSpace(.deviceRGB)!.brightnessComponent > 0.9 && editor.tableViews[0]!.value!.fields[0].textColor!.usingColorSpace(.deviceRGB)!.brightnessComponent < 0.1,"Custom white page keeps black table text in a dark window")
+            check(editor.backgroundColor.usingColorSpace(.deviceRGB)!.brightnessComponent > 0.9 && (editor.textStorage!.attribute(.foregroundColor,at:cellRange(0).location,effectiveRange:nil) as! NSColor).usingColorSpace(.deviceRGB)!.brightnessComponent < 0.1,"Custom white page keeps black table text in a dark window")
         }
         session.paper = originalPaper; session.ink = originalInk
         controller.window?.appearance = originalAppearance; session.systemColors = originalSystemColors
-        editor.lastAppearance = ""; editor.refresh(); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
-        let activeTable = editor.tableViews[0]!.value!
-        activeTable.focusCell(2)
-        RunLoop.main.run(until:Date().addingTimeInterval(0.05))
-        if let cellEditor = activeTable.fields[2].currentEditor() as? NSTextView {
-            cellEditor.selectAll(nil); cellEditor.insertText("Café 👋",replacementRange:cellEditor.selectedRange())
-        } else { fatalError("No native cell editor") }
+        editor.lastAppearance = ""; editor.refresh()
+        editor.focusTableCell(0,2); editor.insertText("Café 👋",replacementRange:editor.selectedRange())
         check(session.buffer.source.contains("[Café 👋]"),"Native table typing preserves source spans")
-        if let cellEditor = activeTable.fields[2].currentEditor() as? NSTextView {
-            cellEditor.doCommand(by:#selector(NSResponder.insertTab(_:)))
-            check(activeTable.fields[3].currentEditor() != nil,"Native table Tab advances cell focus")
-            (activeTable.fields[3].currentEditor() as? NSTextView)?.doCommand(by:#selector(NSResponder.insertBacktab(_:)))
-            check(activeTable.fields[2].currentEditor() != nil,"Native table Shift-Tab restores preceding cell focus")
-        }
-        session.undo(); RunLoop.main.run(until:Date().addingTimeInterval(0.05))
-        check(session.buffer.source.contains("[One]") && editor.tableViews[0]?.value?.fields[2].currentEditor() != nil,"Table Undo restores source and native cell focus")
-        session.undo(true); RunLoop.main.run(until:Date().addingTimeInterval(0.05))
-        check(session.buffer.source.contains("[Café 👋]") && editor.tableViews[0]?.value?.fields[2].stringValue == "Café 👋","Table Redo restores native text and source")
-        let finalTable = editor.tableViews[0]!.value!
-        finalTable.focusCell(3)
-        (finalTable.fields[3].currentEditor() as? NSTextView)?.doCommand(by:#selector(NSResponder.insertTab(_:)))
-        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        editor.insertTab(nil)
+        check(editor.selectedRange() == cellRange(3),"Native table Tab advances cell selection")
+        editor.insertBacktab(nil)
+        check(editor.selectedRange() == cellRange(2),"Native table Shift-Tab selects preceding cell")
+        session.undo(); check(session.buffer.source == tableSource,"Table Undo restores exact source")
+        check(editor.selectedRange() == cellRange(2),"Table Undo restores cell selection in the document")
+        session.undo(true); check(editor.string.contains("Café 👋"),"Table Redo restores native text and source")
+        editor.focusTableCell(0,2); editor.formatNative(false)
+        check(session.buffer.source.contains("[*Café 👋*]"),"Native table formatting updates Typst markup")
+        let font = editor.textStorage!.attribute(.font,at:cellRange(2).location,effectiveRange:nil) as! NSFont
+        check(NSFontManager.shared.traits(of:font).contains(.boldFontMask),"Native table formatting uses a real bold face")
+        editor.insertText("Replacement",replacementRange:editor.selectedRange())
+        check(session.buffer.projection.blocks[0].cellProjections[2].text == "Replacement" && session.buffer.projection.blocks[0].cellProjections[2].blocks.flatMap(\.inlines).flatMap(\.runs).allSatisfy { $0.style.bold } && !session.buffer.parsed.erroneous,"Replacing a formatted cell selection retains its typing style")
+        session.undo()
+        editor.focusTableCell(0,2)
+        editor.copy(nil)
+        check(NSPasteboard.general.string(forType:.string) == "Café 👋","Native table copy retains visible Unicode text")
+        editor.focusTableCell(0,3); editor.paste(nil)
+        check(session.buffer.source.contains("[*Café 👋*], [*Café 👋*]"),"Native table paste preserves inline formatting")
+        editor.focusTableCell(0,3); editor.setSelectedRange(NSRange(location:NSMaxRange(editor.selectedRange()),length:0)); editor.captureSelection()
+        editor.insertNewline(nil); editor.insertText("Second paragraph",replacementRange:editor.selectedRange())
+        check(session.buffer.source.contains("Café 👋*\n\nSecond paragraph]"),"Table Return creates a paragraph within the cell")
+        check(textBlock(3).table === textBlock(2).table,"Table Return retains the native table structure")
+        let start = cellRange(3).location
+        editor.setSelectedRange(NSRange(location:NSMaxRange(cellRange(3)),length:0)); editor.captureSelection()
+        editor.setMarkedText("に",selectedRange:NSRange(location:1,length:0),replacementRange:editor.selectedRange())
+        editor.insertText("日本",replacementRange:NSRange(location:NSNotFound,length:0))
+        check(session.buffer.source.contains("Second paragraph日本]"),"Native table composition commits to the correct cell")
+        editor.ensureNativeLayout()
+        check(editor.rectFor(NSMaxRange(cellRange(3))).minY > editor.rectFor(start).minY+10,"Native table grows with multiline cell contents")
+        editor.focusTableCell(0,3); editor.insertTab(nil)
         check(session.buffer.projection.blocks[0].tableCells.count == 6,"Final table Tab adds row")
-        check(editor.tableViews[0]?.value?.fields[4].currentEditor() != nil,"New table row receives native cell focus")
+        check(editor.selectedRange() == cellRange(4) && controller.window?.firstResponder === editor,"New table row receives native document focus")
         check(!session.buffer.parsed.erroneous,"Added table row is valid Typst syntax")
-        editor.objectEditing = false; controller.window?.makeFirstResponder(editor)
+        editor.focusTableCell(0,4); editor.insertText("/",replacementRange:editor.selectedRange())
+        check(Set(editor.slashMatches.map(\.kind)) == Set(["paragraph","link","footnote","citation","label","reference"]),"Cell slash menu offers only supported paragraph and inline actions")
+        editor.slashQuery = "table"
+        check(editor.slashMatches.isEmpty,"Cell slash filtering cannot reveal unsupported table insertion")
+        editor.slashQuery = ""; editor.slashIndex = editor.slashMatches.firstIndex { $0.kind == "paragraph" }!; editor.chooseSlash()
+        check(session.buffer.source.bytes(session.buffer.projection.blocks[0].tableCells[4]).isEmpty,"Cell Paragraph action removes its slash without changing table structure")
+        for character in "/link" { editor.insertText(String(character),replacementRange:editor.selectedRange()) }
+        editor.chooseSlash()
+        check(session.sheet == .insertion && session.insertionKind == "link" && session.insertionAnchor.span.start == session.buffer.projection.blocks[0].tableCells[4].start,"Cell Link action opens insertion at the correct UTF-8 cell span")
+        session.insertSource("#link(\"https://typst.app\")[Typst]")
+        check(session.buffer.source.contains("[#link(\"https://typst.app\")[Typst]]") && !session.buffer.parsed.erroneous,"Supported cell slash insertion preserves valid table syntax")
+        session.switchMode(.source); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        editor.selectAll(nil); editor.copy(nil)
+        check(NSPasteboard.general.string(forType:.string) == session.buffer.source,"Source copies exact source after native table editing")
+        session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let bitmap = NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:64,pixelsHigh:32,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0)!
         let pixels = bitmap.bitmapData!
         for x in 0..<64 { for y in 0..<32 { let at = y*bitmap.bytesPerRow+x*4; pixels[at] = x < 32 ? 40 : 240; pixels[at+1] = x < 32 ? 100 : 140; pixels[at+2] = x < 32 ? 200 : 30; pixels[at+3] = 255 } }
@@ -264,7 +306,7 @@ import BlankCore
         session.buffer.loadExternal("#figure(image(\"assets/test.png\", width: 85%), caption: [A native caption])\n\nAfter")
         session.revision += 1; editor.refresh(); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(editor.objectViews[0] is FigureBlockView && loadImage("assets/test.png",session:session) != nil,"Figure renders through native AppKit image view")
-        check(editor.textLayoutManager != nil,"TextKit 2 retained with native figure")
+        check(editor.textLayoutManager == nil,"TextKit 1 retained with native figure")
         session.switchMode(.source); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let source = session.editor!
         source.setSelectedRange(NSRange(location:source.string.utf16.count,length:0)); source.insertText("(",replacementRange:source.selectedRange())

@@ -66,7 +66,9 @@ public extension String {
 public func escapeTypst(_ text: String) -> String {
     var result = ""
     for character in text {
-        if "\\#@*_$[]<>`".contains(character) { result += "\\" }
+        // Write keeps markers visible until a shortcut or block conversion
+        // explicitly turns them into structural source syntax.
+        if "\\#@*_$[]<>`=-+".contains(character) { result += "\\" }
         result.append(character)
     }
     return result

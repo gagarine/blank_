@@ -158,6 +158,35 @@ public final class DocumentBuffer {
         commit(source.replacingBytes(span, with: text), selection: EditSelection(end,end), group: text.contains("\n") ? "" : group)
     }
     public func editWrite(_ range: NSRange, text: String, raw: Bool = false, group: String = "write", styleOverride: TextStyle? = nil) {
+        if editCell(range,group:group,operation:{ model,range in model.editWrite(range,text:text,raw:raw,group:group,styleOverride:styleOverride) }) { return }
+        if range.length > 0, projection.blocks.contains(where:{ !$0.cellRanges.isEmpty && range.location <= NSMaxRange($0.display) && NSMaxRange(range) >= $0.display.location }) {
+            // Cell separators cannot be deleted as ordinary source characters.
+            // A selection across cells edits their contents as one transaction;
+            // a whole-table selection replaces the complete source block.
+            let draft = DocumentBuffer(source)
+            var regions: [(NSRange,Int?)] = []
+            for (index,block) in projection.blocks.enumerated() {
+                let overlap = NSIntersectionRange(block.display,range)
+                guard overlap.length > 0 else { continue }
+                if !block.cellRanges.isEmpty && overlap == block.display { regions.append((overlap,index)) }
+                else if !block.cellRanges.isEmpty {
+                    for cell in block.cellRanges {
+                        let intersection = NSIntersectionRange(NSRange(location:block.display.location+cell.location,length:cell.length),range)
+                        if intersection.length > 0 { regions.append((intersection,nil)) }
+                    }
+                } else { regions.append((overlap,nil)) }
+            }
+            var caret = selection.focus
+            for (offset,region) in regions.enumerated().reversed() {
+                let inserted = offset == 0 ? text : ""
+                if let index = region.1 {
+                    let span = draft.projection.blocks[index].source, replacement = raw ? inserted : escapeTypst(inserted)
+                    draft.commit(draft.source.replacingBytes(span,with:replacement),selection:EditSelection(span.start+replacement.utf8.count,span.start+replacement.utf8.count))
+                } else { draft.editWrite(region.0,text:inserted,raw:raw,group:"",styleOverride:styleOverride) }
+                caret = draft.selection.focus
+            }
+            commit(draft.source,selection:EditSelection(caret,caret)); return
+        }
         let first = projection.blockIndex(at: range.location), last = projection.blockIndex(at: NSMaxRange(range))
         let a = projection.blocks[first], b = projection.blocks[last]
         let from = max(0, range.location-a.display.location), to = min(b.display.length, max(0, NSMaxRange(range)-b.display.location))
@@ -207,6 +236,14 @@ public final class DocumentBuffer {
         let caret = span.start + prefixLength + inserted.utf8.count
         commit(source.replacingBytes(span, with: replacement), selection: EditSelection(caret,caret), group: text.contains("\n") || raw ? "" : group)
     }
+    private func editCell(_ range: NSRange, group: String = "", operation: (DocumentBuffer,NSRange) -> Void) -> Bool {
+        guard let cell = projection.tableCell(at:range) else { return false }
+        let model = DocumentBuffer(source.bytes(cell.source)), local = NSRange(location:range.location-cell.display.location,length:range.length)
+        model.selection = EditSelection(model.projection.sourceOffset(at:local.location),model.projection.sourceOffset(at:NSMaxRange(local)))
+        operation(model,local)
+        commit(source.replacingBytes(cell.source,with:model.source),selection:EditSelection(cell.source.start+model.selection.anchor,cell.source.start+model.selection.focus),group:group.isEmpty ? "" : "table:\(cell.block):\(cell.cell):\(group)")
+        return true
+    }
     private func styleAt(_ b: ProjectedBlock, offset: Int) -> TextStyle? {
         var at = 0
         for r in b.inlines.flatMap(\.runs) {
@@ -216,6 +253,7 @@ public final class DocumentBuffer {
         return nil
     }
     public func split(_ range: NSRange) {
+        if editCell(range,operation:{ $0.split($1) }) { return }
         if range.length > 0 {
             let draft = DocumentBuffer(source); draft.selection = selection
             draft.editWrite(range,text:"",group:"")
@@ -238,6 +276,21 @@ public final class DocumentBuffer {
     }
     public func format(_ range: NSRange, italic: Bool) {
         guard range.length > 0 else { return }
+        if editCell(range,operation:{ $0.format($1,italic:italic) }) { return }
+        if projection.blocks.contains(where:{ !$0.cellRanges.isEmpty && NSIntersectionRange($0.display,range).length > 0 }) {
+            let draft = DocumentBuffer(source)
+            for block in projection.blocks.reversed() {
+                let regions = block.cellRanges.isEmpty ? [block.display] : block.cellRanges.map { NSRange(location:block.display.location+$0.location,length:$0.length) }
+                for region in regions.reversed() {
+                    let intersection = NSIntersectionRange(region,range)
+                    if intersection.length > 0 { draft.format(intersection,italic:italic) }
+                }
+            }
+            commit(draft.source,selection:selection)
+            selection = EditSelection(projection.sourceOffset(at:range.location),projection.sourceOffset(at:NSMaxRange(range)))
+            if !undoSteps.isEmpty { undoSteps[undoSteps.count-1].after = selection }
+            return
+        }
         let start = projection.blockIndex(at: range.location), end = projection.blockIndex(at: NSMaxRange(range))
         var text = source
         for index in (start...end).reversed() {
@@ -276,6 +329,10 @@ public final class DocumentBuffer {
         let text = source.replacingBytes(b.source,with:prefix+body+suffix)
         let at = b.source.start+prefix.utf8.count+min(max(0,selection.focus-b.body.start),body.utf8.count)
         commit(text,selection:EditSelection(at,at))
+    }
+    public func setKind(at range: NSRange, kind: String, level: Int = 0) {
+        if editCell(range,operation:{ model,local in model.setKind(at:local,kind:kind,level:level) }) { return }
+        setKind(projection.blockIndex(at:range.location),kind:kind,level:level)
     }
     public func blockAction(_ index: Int, action: String) {
         guard projection.blocks.indices.contains(index) else { return }
@@ -318,19 +375,28 @@ public final class DocumentBuffer {
         commit(text,selection:EditSelection(at,at))
     }
     public func copy(_ range: NSRange) -> RichFragment {
+        if let cell = projection.tableCell(at:range) {
+            return DocumentBuffer(source.bytes(cell.source)).copy(NSRange(location:range.location-cell.display.location,length:range.length))
+        }
         let first = projection.blockIndex(at:range.location), last = projection.blockIndex(at:NSMaxRange(range))
         var pieces: [String] = []
         for index in first...last {
             let b = projection.blocks[index]
             let a = max(0,range.location-b.display.location), z = min(b.display.length,NSMaxRange(range)-b.display.location)
             if a == 0 && z == b.display.length { pieces.append(source.bytes(b.source)) }
-            else { pieces.append(sliceInlines(b.inlines,a,z,source:source)) }
+            else if !b.cellRanges.isEmpty {
+                for (cell,display) in b.cellRanges.enumerated() {
+                    let selected = NSIntersectionRange(NSRange(location:b.display.location+display.location,length:display.length),range)
+                    if selected.length > 0 { pieces.append(DocumentBuffer(source.bytes(b.tableCells[cell])).copy(NSRange(location:selected.location-b.display.location-display.location,length:selected.length)).source) }
+                }
+            } else { pieces.append(sliceInlines(b.inlines,a,z,source:source)) }
         }
         let plain = (projection.text as NSString).substring(with:range)
         let entire = range.location == projection.blocks[first].display.location && NSMaxRange(range) == NSMaxRange(projection.blocks[last].display)
         return RichFragment(source:pieces.joined(separator:"\n\n"),plain:plain,block:entire)
     }
     public func paste(_ fragment: RichFragment, range: NSRange) {
+        if editCell(range,operation:{ model,range in model.editWrite(range,text:fragment.source,raw:true,group:"") }) { return }
         let index = projection.blockIndex(at:range.location), b = projection.blocks[index]
         if fragment.block && range.location == b.display.location && range.length >= b.display.length {
             let at = b.source.start

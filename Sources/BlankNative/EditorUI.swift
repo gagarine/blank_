@@ -15,6 +15,9 @@ struct SlashCommand: Identifiable {
     var symbol: String
     var keywords: String
     var insertion = false
+    // Cell commands must round-trip through the cell projection and native
+    // rendering. Structural document objects have no supported cell editor.
+    var supportedInTableCell: Bool { ["paragraph","link","footnote","citation","label","reference"].contains(kind) }
     var systemSymbol: String {
         ["paragraph":"paragraphsign","heading":"textformat.size","bullet":"list.bullet","number":"list.number","quote":"quote.bubble","image":"photo","table":"tablecells","citation":"books.vertical","footnote":"text.badge.plus","equation":"function","link":"link","label":"tag","reference":"arrow.turn.up.right"][kind] ?? "textformat"
     }

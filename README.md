@@ -1,6 +1,6 @@
 # blank_
 
-A quiet native macOS app for academic writing in [Typst](https://typst.app). SwiftUI supplies the interface, AppKit/TextKit 2 supplies editing and typography, and PDFKit displays the official Typst compiler's PDF. Documents remain ordinary local `.typ` files. There is no web renderer.
+A quiet native macOS app for academic writing in [Typst](https://typst.app). SwiftUI supplies the interface, AppKit/TextKit 1 supplies editing and typography, and PDFKit displays the official Typst compiler's PDF. Documents remain ordinary local `.typ` files. There is no web renderer.
 
 **Made using AI (OpenAI Codex). Open source under the [MIT license](LICENSE).**
 
@@ -21,7 +21,7 @@ Both build configurations update the same `build/blank_.app`. The obsolete QA/la
 
 Write follows native text-substitution and spelling preferences; Source disables prose substitutions to preserve Typst code. Native Services and saved-document title proxies are available.
 
-Use ⌘1/⌘2/⌘3 for Write/Source/Preview, ⌘K for application commands and `/` for formatting and insertion beside the caret. Help → Tutorial opens an independent editable copy of the original Go tutorial. The toolbar uses system controls, including macOS 27's native tab role for the view switcher.
+Use ⌘1/⌘2/⌘3 for Write/Source/Preview, ⌘K for application commands and `/` for formatting and insertion beside the caret. Choosing Table inserts an empty 2×2 table immediately and focuses its first cell. Tab moves between cells and adds a row at the end; the block menu provides row/column editing. Inside cells, `/` offers supported paragraph and inline actions only. Heading/list markers remain visible while typing; Space completes the shortcut outside tables. Help → Tutorial opens an independent editable copy of the original Go tutorial. The toolbar uses system controls, including macOS 27's native tab role for the view switcher.
 
 In Write, Return starts a new paragraph with a visible gap, including empty paragraphs, and retains the focused native caret. Shift-Return inserts a line break within the current paragraph. Return continues lists; Return on an empty item exits the list. Hover a block to reveal its handle, then drag it to the single horizontal insertion line.
 
@@ -33,9 +33,9 @@ The native menus provide document windows, New Paper/New Thesis, Open Recent, sa
 
 Swift owns the canonical Typst source, conservative syntax-backed projections, UTF-16/native-to-UTF-8/source mapping and localized transactions. Ordinary edits reparse the affected block and update its native attributes when safe; structural or uncertain edits use a full parse. Comments, custom expressions and unaffected source remain unchanged. Source displays and copies every source character.
 
-Write and Source share range-based undo/redo with source selections, adjacent typing groups, a 200-operation/8 MiB payload budget, and retention of the latest operation. Included files keep independent histories. Native TextKit 2 supplies font fallback, shaping, layout, input and selections; the reading font initially uses the original Iowan Old Style with real bold/italic faces. Attributed SwiftUI TextEditor was evaluated; NSTextView supplies the pre-edit, composition, clipboard and caret geometry hooks needed here.
+Write and Source share range-based undo/redo with source selections, adjacent typing groups, a 200-operation/8 MiB payload budget, and retention of the latest operation. Included files keep independent histories. Native TextKit 1 supplies font fallback, shaping, layout, input and selections; the reading font initially uses the original Iowan Old Style with real bold/italic faces. Attributed SwiftUI TextEditor was evaluated; NSTextView supplies the pre-edit, composition, clipboard and caret geometry hooks needed here.
 
-Rust is used only for Typst integration: the official parser behind a small C-compatible library and the Go version's official compiler helper behind a JSON-line process interface. Compilation runs on a background queue. Preview retains the last successful PDF on failure. PDFKit draws pages on demand; the app keeps one successful PDF per window and no raster page cache. The page counter follows native PDF navigation. Export requested during compilation waits for its revision rather than being dropped. Tables use native NSTableView grids and NSTextField cell editors; native checks verify that both document and cell editing retain TextKit 2. Visible table/figure controls are mounted using TextKit 2 attachment geometry; figure thumbnails have a bounded cache.
+Rust is used only for Typst integration: the official parser behind a small C-compatible library and the Go version's official compiler helper behind a JSON-line process interface. Compilation runs on a background queue. Preview retains the last successful PDF on failure. PDFKit draws pages on demand; the app keeps one successful PDF per window and no raster page cache. The page counter follows native PDF navigation. Export requested during compilation waits for its revision rather than being dropped. The editor explicitly selects TextKit 1 so NSTextTable can render and edit table paragraphs directly in the document. Cell projections map native UTF-16 positions to canonical UTF-8 source spans; typing, formatting, Return, clipboard and shared history preserve the surrounding table syntax. Native layout grows rows with their contents. Visible figure controls use native attachment geometry; figure thumbnails have a bounded cache.
 
 ## Functionality roadmap
 
@@ -44,7 +44,7 @@ This carries forward the functionality plans from the Rust README and the Go gui
 - [x] Paragraphs, headings, lists and quotations; splitting/joining, list continuation and empty-item exit; Typst heading/bold/italic typing shortcuts.
 - [x] Shared Write/Source undo, Unicode source mapping and structured internal clipboard preserving heading/list kinds and inline formatting.
 - [x] Caret-adjacent slash commands, block menus/handles, drag previews and block movement; collapsible heading hierarchy and section movement.
-- [x] Native table cells, Tab navigation/final-cell row addition, and row/column editing; native figures with insertion/import and captions.
+- [x] Integrated NSTextTable cells with inline formatting, multiline paragraphs, context-aware slash commands, direct insertion, Tab navigation/final-cell row addition, and row/column editing; native figures with insertion/import and captions.
 - [x] Link, footnote, mathematics, label and cross-reference insertion dialogs.
 - [ ] Edit existing inline links/footnotes directly; richer figure width/alternative-text/PDF-page controls and complete insertion/navigation around objects.
 - [x] Image clipboard paste and file drop; project-relative asset paths and bounded native thumbnails.
@@ -64,14 +64,14 @@ This carries forward the functionality plans from the Rust README and the Go gui
 - [x] Native scrolling at the viewport edge, customizable macOS toolbar and system selection appearance.
 - [ ] Finish long-document scrolling and pointer-drag checks in every view and secondary window.
 - [x] Bounded local projection, cached fonts, changed-range history and background compilation with last-good Preview/PDF export.
-- [ ] Reduce full Source styling/undo projection work on large files; measure total editor/compiler memory on representative theses and long-running sessions.
+- [ ] Reduce large-table editing and full Source styling/undo projection work on large files; measure total editor/compiler memory on representative theses and long-running sessions.
 - [ ] Add opt-in per-window agent/MCP access, revision-checked multi-file transactions and selective agent undo through a native API.
 
 Windows/Linux releases are outside this frontend's scope. Pandoc exchange, cloud collaboration, Word review, visual equation construction and built-in AI chat remain future product work, as in the Go guide.
 
 ## Validation
 
-`bash scripts/check.sh` exercises the production source model, official parser/compiler, real native text views and disposable project files. The Command Line Tools environment lacks XCTest, so the 20 model checks run through the `BlankCoreChecks` executable. Native checks cover typing, paragraph/line breaks and empty insertion slots, formatting, clipboard, block drag handlers/geometry, synthetic composition, tables, figures, view switching, Source font faces, caret-menu geometry, PDF failure retention/export, saving, conflicts, deletion recovery, chapter history and Save As dependencies.
+`bash scripts/check.sh` exercises the production source model, official parser/compiler, real native text views and disposable project files. The Command Line Tools environment lacks XCTest, so the 22 model checks run through the `BlankCoreChecks` executable. Native checks cover typing, paragraph/line breaks and empty insertion slots, formatting, clipboard, block drag handlers/geometry, synthetic composition, tables, figures, view switching, Source font faces, caret-menu geometry, PDF failure retention/export, saving, conflicts, deletion recovery, chapter history and Save As dependencies.
 
 Resource measurements and their limits are recorded in [docs/acceptance.md](docs/acceptance.md). Native IME candidates, VoiceOver, bidirectional navigation and live Zotero remain unverified. The unchanged tutorial describes the Go app; some steps await Swift parity.
 

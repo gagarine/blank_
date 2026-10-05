@@ -108,22 +108,10 @@ struct Recovery: Codable {
         editor?.refresh(reveal:true)
     }
     func undo(_ redo: Bool = false) {
-        var cell: (Int,Int)?
-        if let editor, editor.objectEditing {
-            for (index,table) in editor.tableViews { if let field = table.value?.fields.first(where:{ $0.currentEditor() != nil }) { cell = (index,field.index); break } }
-            editor.objectEditing = false; window?.makeFirstResponder(editor)
-        }
         let projectPath = projectUndoPath, model = projectPath.flatMap { buffers[$0] } ?? buffer
         editor?.finishComposition(); if redo { model.redo() } else { model.undo() }; changed(); projectUndoPath = projectPath; editor?.refresh(reveal:true)
-        if let (index,fieldIndex) = cell, let table = editor?.tableViews[index]?.value, table.fields.indices.contains(fieldIndex), buffer.projection.blocks.indices.contains(index) {
-            let field = table.fields[fieldIndex], span = buffer.projection.blocks[index].tableCells[fieldIndex]
-            table.focusCell(fieldIndex)
-            if let view = field.currentEditor() as? NSTextView {
-                let a = field.model.projection.displayOffset(at:max(0,buffer.selection.anchor-span.start)), z = field.model.projection.displayOffset(at:max(0,buffer.selection.focus-span.start))
-                view.setSelectedRange(NSRange(location:min(a,z),length:abs(z-a)))
-            }
-        }
     }
+
     func format(italic: Bool) {
         guard mode == .write else { return }; synchronizeSelection()
         if let editor { buffer.format(editor.selectedRange(),italic:italic); changed() }
@@ -389,7 +377,14 @@ struct Recovery: Codable {
         buffer.commit(buffer.source.replacingBytes(span,with:insert),selection:EditSelection(span.start+insert.utf8.count,span.start+insert.utf8.count)); changed(); sheet = nil
     }
     func chooseInsertion(_ kind: String) {
-        synchronizeSelection(); insertionAnchor = buffer.selection; insertionKind = kind; sheet = .insertion
+        synchronizeSelection(); insertionAnchor = buffer.selection
+        if kind == "table" {
+            let start = insertionAnchor.span.start+2
+            insertSource("#table(columns: 2,\n  [], [],\n  [], [],\n)",block:true)
+            if let index = buffer.projection.blocks.firstIndex(where:{ $0.kind == "table" && $0.source.start == start }) { editor?.focusTableCell(index,0) }
+            return
+        }
+        insertionKind = kind; sheet = .insertion
     }
     func editObject(_ index: Int) { objectIndex = index; sheet = .object }
     func importImage(_ url: URL) throws -> String {

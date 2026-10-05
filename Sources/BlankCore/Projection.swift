@@ -72,6 +72,10 @@ public struct ProjectedBlock {
     public var inlines: [Inline]
     public var display: NSRange = NSRange(location: 0, length: 0)
     public var tableCells: [ByteSpan] = []
+    // Each cell retains its own lossless projection. Native text tables use
+    // paragraph terminators between cells, which are layout, not source bytes.
+    public var cellProjections: [Projection] = []
+    public var cellRanges: [NSRange] = []
     public var columns: Int = 0
     public var text: String { inlines.flatMap(\.runs).map(\.text).joined() }
     public func shifted(by delta: Int) -> ProjectedBlock {
@@ -84,6 +88,9 @@ public struct ProjectedBlock {
     }
     public var editable: Bool { !["source", "table", "image", "equation"].contains(kind) }
     public func sourceOffset(_ position: Int, endBias: Bool = false) -> Int {
+        if let cell = cellRanges.lastIndex(where:{ $0.location <= position }) {
+            return tableCells[cell].start + cellProjections[cell].sourceOffset(at:min(position-cellRanges[cell].location,cellRanges[cell].length),endBias:endBias)
+        }
         var at = 0
         for run in inlines.flatMap(\.runs) {
             let length = run.text.utf16.count
@@ -189,7 +196,21 @@ public struct Projection {
                             b.columns = Int((raw as NSString).substring(with: match.range(at: 1))) ?? 0
                         }
                     }
-                    if b.kind == "image" || (b.kind == "table" && b.columns > 0 && !b.tableCells.isEmpty && b.tableCells.count % b.columns == 0) {
+                    if b.kind == "table" && b.columns > 0 && !b.tableCells.isEmpty && b.tableCells.count % b.columns == 0 {
+                        b.inlines = []
+                        var offset = 0
+                        for span in b.tableCells {
+                            let raw = source.bytes(span), cell = Projection(source:raw,parsed:ParsedSource.parse(raw))
+                            b.cellProjections.append(cell)
+                            b.cellRanges.append(NSRange(location:offset,length:cell.text.utf16.count))
+                            for (index,part) in cell.blocks.enumerated() {
+                                if index > 0 { b.inlines.append(.text("\n",ByteSpan(span.start+part.source.start,span.start+part.source.start),TextStyle(),false)) }
+                                b.inlines += part.inlines.map { $0.shifted(by:span.start) }
+                            }
+                            b.inlines.append(.text("\n",ByteSpan(span.end,span.end),TextStyle(),false))
+                            offset += cell.text.utf16.count+1
+                        }
+                    } else if b.kind == "image" {
                         b.inlines = [.text("\u{FFFC}", span, TextStyle(), false)]
                     }
                     // Adjacent setup/custom expressions remain one opaque source region.
@@ -225,8 +246,19 @@ public struct Projection {
         let b = blocks[blockIndex(at: utf16)]
         return b.sourceOffset(max(0, min(utf16-b.display.location, b.display.length)), endBias: endBias)
     }
+    public func tableCell(at range: NSRange) -> (block: Int, cell: Int, source: ByteSpan, display: NSRange)? {
+        let index = blockIndex(at:range.location), block = blocks[index]
+        guard let cell = block.cellRanges.lastIndex(where:{ block.display.location+$0.location <= range.location }) else { return nil }
+        let local = block.cellRanges[cell], display = NSRange(location:block.display.location+local.location,length:local.length)
+        guard NSMaxRange(range) <= NSMaxRange(display) else { return nil }
+        return (index,cell,block.tableCells[cell],display)
+    }
     public func displayOffset(at byte: Int) -> Int {
         guard let b = blocks.first(where: { byte <= $0.source.end }) ?? blocks.last else { return 0 }
+        if !b.cellRanges.isEmpty {
+            let cell = b.tableCells.firstIndex(where:{ byte <= $0.end }) ?? b.tableCells.count-1
+            return b.display.location+b.cellRanges[cell].location+b.cellProjections[cell].displayOffset(at:max(0,byte-b.tableCells[cell].start))
+        }
         var at = b.display.location
         for r in b.inlines.flatMap(\.runs) {
             if byte <= r.source.end {

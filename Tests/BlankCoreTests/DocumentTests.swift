@@ -223,8 +223,84 @@ final class DocumentTests {
             XCTAssertEqual(new.replacingBytes(p.newSpan,with:p.removed),old)
         }
     }
+    func testLosslessTableEditing() {
+        let original = "// before\n#let custom = 42\n\n#table(\n  columns: 2,\n  stroke: 0.5pt, // keep this option\n  [*Café* 👩🏽‍💻], [_Next_],\n  [], [#custom],\n)\n\nAfter _table_."
+        let model = DocumentBuffer(original)
+        func range(_ cell: Int) -> NSRange {
+            let block = model.projection.blocks.first { !$0.cellRanges.isEmpty }!, local = block.cellRanges[cell]
+            return NSRange(location:block.display.location+local.location,length:local.length)
+        }
+        let table = model.projection.blocks.first { !$0.cellRanges.isEmpty }!
+        XCTAssertEqual(table.cellProjections.count,4)
+        for (index,span) in table.tableCells.enumerated() {
+            let local = table.cellProjections[index]
+            for offset in 0...local.text.utf16.count {
+                XCTAssertEqual(model.projection.sourceOffset(at:table.display.location+table.cellRanges[index].location+offset),span.start+local.sourceOffset(at:offset))
+            }
+            for run in local.blocks.flatMap(\.inlines).flatMap(\.runs) where run.literal {
+                for character in 1..<max(1,run.text.utf16.count) {
+                    let byte = span.start+run.source.start+run.text.byteOffset(utf16:character)
+                    let at = model.projection.displayOffset(at:byte)
+                    XCTAssertEqual(model.projection.sourceOffset(at:at),span.start+local.sourceOffset(at:at-table.display.location-table.cellRanges[index].location))
+                }
+            }
+        }
+        model.selection = EditSelection(table.tableCells[0].start+1,table.tableCells[0].start+1)
+        model.editWrite(NSRange(location:range(0).location+2,length:0),text:"日本")
+        XCTAssertTrue(model.source.contains("[*Ca日本fé* 👩🏽‍💻]"))
+        XCTAssertTrue(model.source.contains("stroke: 0.5pt, // keep this option"))
+        XCTAssertTrue(model.source.contains("[_Next_],\n  [], [#custom]"))
+        model.undo(); XCTAssertEqual(model.source,original)
+        model.redo(); XCTAssertFalse(model.parsed.erroneous)
+        model.format(range(1),italic:false)
+        XCTAssertTrue(model.source.contains("[*_Next_*]"))
+        let fragment = model.copy(range(1))
+        model.paste(fragment,range:range(2))
+        XCTAssertTrue(model.source.contains("[*_Next_*], [#custom]"))
+        let end = NSMaxRange(range(2)), sourceEnd = model.projection.sourceOffset(at:end)
+        model.selection = EditSelection(sourceEnd,sourceEnd)
+        model.split(NSRange(location:end,length:0))
+        XCTAssertTrue(model.source.contains("[*_Next_*\n\n], [#custom]"))
+        XCTAssertFalse(model.parsed.erroneous)
+        model.undo(); XCTAssertTrue(model.source.contains("[*_Next_*], [#custom]"))
+        let beforeSelection = model.source
+        model.editWrite(NSRange(location:range(0).location+2,length:NSMaxRange(range(1))-range(0).location-2),text:"X")
+        XCTAssertFalse(model.parsed.erroneous)
+        XCTAssertTrue(model.projection.blocks.first { !$0.cellRanges.isEmpty }!.cellProjections[0].text.hasPrefix("CaX"))
+        XCTAssertTrue(model.source.contains("stroke: 0.5pt, // keep this option"))
+        XCTAssertEqual(model.projection.blocks.first { !$0.cellRanges.isEmpty }!.tableCells.count,4)
+        model.undo(); XCTAssertEqual(model.source,beforeSelection)
+        let boundary = DocumentBuffer("Before\n\n#table(columns: 2, [A], [B])\n\nAfter")
+        let grid = boundary.projection.blocks[1]
+        boundary.editWrite(NSRange(location:grid.display.location-1,length:1),text:"")
+        XCTAssertEqual(boundary.source,"Before\n\n#table(columns: 2, [A], [B])\n\nAfter")
+        boundary.editWrite(NSRange(location:NSMaxRange(grid.display),length:1),text:"")
+        XCTAssertEqual(boundary.source,"Before\n\n#table(columns: 2, [A], [B])\n\nAfter")
+        let wholeTable = model.projection.blocks.first { !$0.cellRanges.isEmpty }!
+        let copy = model.copy(wholeTable.display)
+        XCTAssertEqual(copy.source,model.source.bytes(wholeTable.source))
+        let target = DocumentBuffer(); target.paste(copy,range:NSRange(location:0,length:0))
+        XCTAssertEqual(target.source,copy.source)
+        model.editWrite(wholeTable.display,text:"")
+        XCTAssertFalse(model.source.contains("#table(")); XCTAssertTrue(model.source.hasSuffix("After _table_."))
+        model.undo(); XCTAssertEqual(model.source,beforeSelection)
+    }
 }
 
+extension DocumentTests {
+    func testIncompleteBlockMarkersStayVisible() {
+        for prefix in ["=","==","===","-","+"] {
+            let model = DocumentBuffer()
+            for character in prefix { model.editWrite(NSRange(location:model.projection.displayOffset(at:model.selection.focus),length:0),text:String(character)) }
+            XCTAssertEqual(model.projection.text,prefix)
+            XCTAssertEqual(model.projection.blocks[0].kind,"paragraph")
+            model.editWrite(NSRange(location:prefix.utf16.count,length:0),text:" text")
+            XCTAssertEqual(model.projection.text,prefix+" text")
+            XCTAssertFalse(model.parsed.erroneous)
+            model.undo(); XCTAssertEqual(model.source,"")
+        }
+    }
+}
 func XCTAssertEqual<T: Equatable>(_ a: T, _ b: T, file: StaticString = #file, line: UInt = #line) { if a != b { fatalError("Expected \(b), got \(a)",file:file,line:line) } }
 func XCTAssertTrue(_ value: Bool,file: StaticString = #file,line: UInt = #line) { if !value { fatalError("Expected true",file:file,line:line) } }
 func XCTAssertFalse(_ value: Bool,file: StaticString = #file,line: UInt = #line) { XCTAssertTrue(!value,file:file,line:line) }
@@ -253,7 +329,9 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Literal includes and prose statistics",t.testIncludesAndStatistics),
             ("Include movement and conditional boundaries",t.testIncludeMovementPreservesSource),
             ("Literal dependencies ignore commented examples",t.testLiteralDependenciesIgnoreComments),
-            ("Unicode patch round trips",t.testRandomUnicodePatchRoundtrip)
+            ("Unicode patch round trips",t.testRandomUnicodePatchRoundtrip),
+            ("Lossless table cells, mapping and history",t.testLosslessTableEditing),
+            ("Incomplete block markers remain visible",t.testIncompleteBlockMarkersStayVisible)
         ]
         for (name,test) in tests { test(); print("PASS: \(name)") }
         print("\(tests.count) core checks passed")

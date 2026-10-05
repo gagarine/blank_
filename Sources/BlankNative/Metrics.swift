@@ -47,6 +47,17 @@ import Darwin
             durations.sort()
             print(String(format:"1000-paragraph native editor key transaction: median %.1f ms, max %.1f ms; RSS %.1f MiB",durations[5],durations.last!,residentMiB()))
         }
+        let tableSource = "#table(columns: 2,\n"+(0..<200).map { "[Cell \($0) with a *bold* café 👋]," }.joined(separator:"\n")+"\n)\n\nAfter the table."
+        session.buffers[session.active] = DocumentBuffer(tableSource); session.revision += 1; session.editor?.lastRevision = -1; session.editor?.refresh()
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        if let editor = session.editor {
+            editor.focusTableCell(0,100)
+            editor.setSelectedRange(NSRange(location:editor.selectedRange().location+5,length:0)); editor.captureSelection()
+            var durations: [Double] = []
+            for _ in 0..<10 { let start = Date(); editor.insertText("x",replacementRange:editor.selectedRange()); durations.append(Date().timeIntervalSince(start)*1000) }
+            durations.sort()
+            print(String(format:"100-row native table key transaction: median %.1f ms, max %.1f ms; RSS %.1f MiB",durations[5],durations.last!,residentMiB()))
+        }
         session.saveWork?.cancel(); session.dirty = false
         controller.window?.close()
     }

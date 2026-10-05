@@ -8,7 +8,8 @@ struct NativeEditor: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true; scroll.borderType = .noBorder; scroll.drawsBackground = true
-        let view = NativeTextView(usingTextLayoutManager:true)
+        // Choose TextKit 1 at creation: NSTextTable requires its layout engine.
+        let view = NativeTextView(usingTextLayoutManager:false)
         view.session = session; session.editor = view
         view.delegate = view; view.isRichText = true; view.importsGraphics = false
         view.allowsUndo = false; view.usesFindBar = false
@@ -67,8 +68,6 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var lastMode: EditorMode?
     var lastPath = ""
     var lastAppearance = ""
-    var objectEditing = false
-    var tableViews: [Int:WeakTableView] = [:]
     var objectViews: [Int:NSView] = [:]
     var positioningObjects = false
     var fontCache: [String:NSFont] = [:]
@@ -153,6 +152,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         } else {
             for (index,block) in b.projection.blocks.enumerated() {
                 if let onlyBlock, index != onlyBlock { continue }
+                if !block.cellRanges.isEmpty {
+                    renderTable(block,in:result,size:size)
+                    continue
+                }
                 let p = style.mutableCopy() as! NSMutableParagraphStyle
                 var textSize = size
                 if block.kind == "heading" {
@@ -192,11 +195,45 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
         return result
     }
+    private func renderTable(_ block: ProjectedBlock,in result: NSMutableAttributedString,size: CGFloat) {
+        guard let session else { return }
+        let table = NSTextTable(); table.numberOfColumns = block.columns
+        table.collapsesBorders = true; table.hidesEmptyCells = false
+        // NSTextTable's width is its content width; allow its outer cell padding
+        // and border inside the text container so the right border is visible.
+        table.setValue(max(80,(textContainer?.containerSize.width ?? 720)-21),type:.absoluteValueType,for:.width)
+        for (index,cell) in block.cellRanges.enumerated() {
+            let native = NSTextTableBlock(table:table,startingRow:index/block.columns,rowSpan:1,startingColumn:index%block.columns,columnSpan:1)
+            native.setValue(100/CGFloat(block.columns),type:.percentageValueType,for:.width)
+            native.setWidth(0.5,type:.absoluteValueType,for:.border)
+            native.setBorderColor(session.systemColors ? .separatorColor : session.inkColor.withAlphaComponent(0.22))
+            native.setWidth(10,type:.absoluteValueType,for:.padding)
+            let style = NSMutableParagraphStyle(); style.textBlocks = [native]
+            style.lineSpacing = 3; style.paragraphSpacing = 8
+            let range = NSRange(location:block.display.location+cell.location,length:cell.length+1)
+            result.addAttributes([.paragraphStyle:style,.font:readingFont(size:size*0.85,bold:index < block.columns),.foregroundColor:session.inkColor],range:range)
+            for part in block.cellProjections[index].blocks {
+                var at = range.location+part.display.location
+                for run in part.inlines.flatMap(\.runs) {
+                    let r = NSRange(location:at,length:run.text.utf16.count)
+                    if r.length > 0 {
+                        result.addAttribute(.font,value:run.style.code ? NSFont.monospacedSystemFont(ofSize:size*0.8,weight:.regular) : readingFont(size:size*0.85,bold:run.style.bold || index < block.columns,italic:run.style.italic),range:r)
+                        if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:NSColor.linkColor],range:r) }
+                    }
+                    at += r.length
+                }
+            }
+        }
+    }
+    func ensureNativeLayout() {
+        guard let textContainer else { return }
+        layoutManager?.ensureLayout(forBoundingRect:visibleRect.offsetBy(dx:-textContainerOrigin.x,dy:-textContainerOrigin.y),in:textContainer)
+    }
     func refresh(reveal: Bool = false) {
         effectiveAppearance.performAsCurrentDrawingAppearance { refreshContent(reveal:reveal) }
     }
     private func refreshContent(reveal: Bool) {
-        guard !composing, !objectEditing, !hasMarkedText(), let session, session.mode != .preview else { return }
+        guard !composing, !hasMarkedText(), let session, session.mode != .preview else { return }
         updatePadding()
         let appearance = "\(effectiveAppearance.name.rawValue)/\(session.systemColors)/\(session.fontFamily)/\(session.fontSize)/\(session.paragraphFocus)/\(session.paper)/\(session.ink)"
         guard reveal || lastRevision != session.buffer.revision || lastMode != session.mode || lastPath != session.active || lastAppearance != appearance else { return }
@@ -207,7 +244,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         refreshing = true; defer { refreshing = false }
         let local = session.mode == .write && lastMode == .write && lastPath == session.active && lastAppearance == appearance && lastRevision == session.buffer.revision-1 && session.buffer.lastEditWasLocal
         let localIndex = local ? session.buffer.projection.blockIndex(at:session.buffer.projection.displayOffset(at:session.buffer.selection.focus)) : nil
-        if !local { objectViews.values.forEach { $0.removeFromSuperview() }; objectViews.removeAll(); tableViews.removeAll() }
+        if !local { objectViews.values.forEach { $0.removeFromSuperview() }; objectViews.removeAll() }
         let attributed = rendered(onlyBlock:localIndex), old = string
         let displayPatch = SourcePatch.difference(old,attributed.string)
         if let patch = displayPatch {
@@ -234,9 +271,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
         textStorage?.endEditing()
         if textChanged { didChangeText() }
-        if !local, let manager = textLayoutManager, let range = manager.textContentManager?.documentRange {
-            manager.invalidateLayout(for:range)
-            manager.ensureLayout(for:visibleRect)
+        if !local {
+            layoutManager?.invalidateLayout(forCharacterRange:NSRange(location:0,length:string.utf16.count),actualCharacterRange:nil)
+            ensureNativeLayout()
         }
         let selected = session.buffer.selection
         let a = session.mode == .source ? session.buffer.source.utf16Offset(byte:selected.anchor) : session.buffer.projection.displayOffset(at:selected.anchor)
@@ -273,17 +310,15 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             guard let attachment = textStorage?.attribute(.attachment,at:block.display.location,effectiveRange:nil) as? ObjectAttachment else { continue }
             let rect = rectFor(block.display.location)
             let frame = NSRect(x:textContainerInset.width,y:rect.minY,width:attachment.width,height:attachment.height)
-            guard frame.intersects(visibleRect.insetBy(dx:0,dy:-120)) || objectEditing && objectViews[index] != nil else { continue }
+            guard frame.intersects(visibleRect.insetBy(dx:0,dy:-120)) else { continue }
             visible.insert(index)
             if objectViews[index] == nil {
-                let view: NSView
-                if block.kind == "table" { let table = TableBlockView(editor:self,index:index,frame:frame); tableViews[index] = WeakTableView(table); view = table }
-                else { view = FigureBlockView(editor:self,index:index,frame:frame) }
+                let view = FigureBlockView(editor:self,index:index,frame:frame)
                 objectViews[index] = view; addSubview(view)
             }
             objectViews[index]?.frame = frame
         }
-        for index in Array(objectViews.keys) where !visible.contains(index) { objectViews.removeValue(forKey:index)?.removeFromSuperview(); tableViews.removeValue(forKey:index) }
+        for index in Array(objectViews.keys) where !visible.contains(index) { objectViews.removeValue(forKey:index)?.removeFromSuperview() }
     }
     func captureSelection() {
         guard !refreshing, !composing, let session else { return }
@@ -398,13 +433,15 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard session?.mode == .write else { return }
         if selectedRange().length == 0 { let style = caretStyle(); if italic { insertionItalic = !(insertionItalic ?? style.italic) } else { insertionBold = !(insertionBold ?? style.bold) }; return }
         session?.format(italic:italic)
+        let style = caretStyle(); insertionBold = style.bold; insertionItalic = style.italic
     }
     func caretStyle() -> TextStyle {
         guard let session else { return TextStyle() }
         let block = session.buffer.projection.blocks[session.buffer.projection.blockIndex(at:selectedRange().location)]
         var offset = block.display.location
         for run in block.inlines.flatMap(\.runs) {
-            if selectedRange().location > offset && selectedRange().location <= offset+run.text.utf16.count { return run.style }
+            let at = selectedRange().location, end = offset+run.text.utf16.count
+            if selectedRange().length > 0 ? at >= offset && at < end : at > offset && at <= end { return run.style }
             offset += run.text.utf16.count
         }
         return TextStyle()
@@ -426,6 +463,31 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if session.mode == .write { session.buffer.lineBreak(selectedRange()) }
         else { session.buffer.editSource(selectedRange(),text:"\n",group:"") }
         session.changed(); scrollRangeToVisible(selectedRange()); dismissSlash()
+    }
+    func focusTableCell(_ blockIndex: Int,_ cell: Int) {
+        guard let blocks = session?.buffer.projection.blocks, blocks.indices.contains(blockIndex), blocks[blockIndex].cellRanges.indices.contains(cell) else { return }
+        let block = blocks[blockIndex], range = block.cellRanges[cell]
+        setSelectedRange(NSRange(location:block.display.location+range.location,length:range.length))
+        captureSelection(); scrollRangeToVisible(selectedRange()); window?.makeFirstResponder(self)
+    }
+    override func insertTab(_ sender: Any?) {
+        guard let session, session.mode == .write, let cell = session.buffer.projection.tableCell(at:selectedRange()) else { super.insertTab(sender); return }
+        let block = session.buffer.projection.blocks[cell.block]
+        if cell.cell+1 < block.tableCells.count { focusTableCell(cell.block,cell.cell+1); return }
+        captureSelection()
+        let raw = session.buffer.source.bytes(block.source), at = block.source.end-1
+        let comma = raw.dropLast().trimmingCharacters(in:.whitespacesAndNewlines).hasSuffix(",") ? "" : ","
+        let insertion = comma+"\n"+(0..<block.columns).map { _ in "  [],\n" }.joined()
+        session.buffer.commit(session.buffer.source.replacingBytes(ByteSpan(at,at),with:insertion),selection:session.buffer.selection)
+        session.changed(); focusTableCell(cell.block,block.tableCells.count)
+    }
+    override func insertBacktab(_ sender: Any?) {
+        guard let session, session.mode == .write, let cell = session.buffer.projection.tableCell(at:selectedRange()) else { super.insertBacktab(sender); return }
+        if cell.cell > 0 { focusTableCell(cell.block,cell.cell-1) }
+        else {
+            let at = max(0,session.buffer.projection.blocks[cell.block].display.location-1)
+            setSelectedRange(NSRange(location:at,length:0)); captureSelection(); scrollRangeToVisible(selectedRange())
+        }
     }
     override func copy(_ sender: Any?) {
         guard let session, selectedRange().length > 0 else { return }
@@ -623,7 +685,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
         return false
     }
-    var slashMatches: [SlashCommand] { SlashCommand.all.filter { slashQuery.isEmpty || ($0.label+" "+$0.keywords).localizedCaseInsensitiveContains(slashQuery) } }
+    var slashMatches: [SlashCommand] {
+        let inCell = session?.buffer.projection.tableCell(at:NSRange(location:slashStart ?? selectedRange().location,length:0)) != nil
+        return SlashCommand.all.filter { (!inCell || $0.supportedInTableCell) && (slashQuery.isEmpty || ($0.label+" "+$0.keywords).localizedCaseInsensitiveContains(slashQuery)) }
+    }
     func updateSlash() {
         guard let start = slashStart else { return }
         let end = selectedRange().location
@@ -641,7 +706,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         // AppKit's automatic popover sizing cannot collapse its visible rows.
         slashPopover?.contentViewController = NSHostingController(rootView:content.frame(width:280,height:height))
         slashPopover?.contentSize = NSSize(width:280,height:height)
-        textLayoutManager?.ensureLayout(for:visibleRect)
+        ensureNativeLayout()
         // Filtering changes the hosted view's size. Re-associate the popover
         // with the current native caret rectangle after each layout update.
         slashPopover?.show(relativeTo:rectFor(slashStart ?? selectedRange().location),of:self,preferredEdge:.maxY)
@@ -654,8 +719,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let range = NSRange(location:start,length:selectedRange().location-start)
         let copy = DocumentBuffer(session.buffer.source); copy.selection = session.buffer.selection
         copy.editWrite(range,text:"",group:"")
-        let index = copy.projection.blockIndex(at:start)
-        if !command.insertion { copy.setKind(index,kind:command.kind,level:command.level) }
+        if !command.insertion { copy.setKind(at:NSRange(location:copy.projection.displayOffset(at:copy.selection.focus),length:0),kind:command.kind,level:command.level) }
         session.buffer.commit(copy.source,selection:copy.selection); dismissSlash(); session.changed()
         if command.insertion { session.chooseInsertion(command.kind) }
     }
