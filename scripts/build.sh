@@ -3,6 +3,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 configuration=${1:-debug}
 case "$configuration" in debug|release) ;; *) echo "Usage: $0 [debug|release]" >&2; exit 2 ;; esac
+app_version=${BLANK_VERSION:-0.1.0}
+app_version=${app_version#v}
+if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
+    echo 'BLANK_VERSION must be X.Y.Z or vX.Y.Z, optionally with a prerelease/build suffix' >&2; exit 2
+fi
+app_version=${app_version%%[-+]*}
 export MACOSX_DEPLOYMENT_TARGET=26.0
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/module-cache"
@@ -50,5 +56,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Typst document</string><key>CFBundleTypeRole</key><string>Editor</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>org.typst.source</string></array></dict></array>
 </dict></plist>
 PLIST
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $app_version" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $app_version" "$app/Contents/Info.plist"
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"

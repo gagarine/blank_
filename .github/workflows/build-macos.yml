@@ -4,14 +4,16 @@ on:
   push:
     branches: [main, codex/swift-native]
   pull_request:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-macos-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: native-macos-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
 
 jobs:
   build:
@@ -25,6 +27,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: '2'
       MACOSX_DEPLOYMENT_TARGET: '26.0'
+      BLANK_VERSION: ${{ github.event_name == 'release' && github.event.release.tag_name || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,6 +53,9 @@ jobs:
         run: |
           app=build/blank_.app
           codesign --verify --deep --strict "$app"
+          for binary in blank_ libblank_syntax.dylib writer-helper; do
+            lipo -verify_arch arm64 "$app/Contents/MacOS/$binary"
+          done
           # The editor must resolve its parser from the bundle, not this checkout.
           otool -L "$app/Contents/MacOS/blank_"
           otool -L "$app/Contents/MacOS/blank_" | grep '@rpath/libblank_syntax.dylib'
@@ -60,3 +66,28 @@ jobs:
           path: build/blank_-macos-${{ matrix.runner }}.zip
           if-no-files-found: error
           compression-level: 0
+
+  publish-release:
+    name: Attach app to published release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download the SDK 27 app
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: blank_-macos-xcode-27
+          path: release-assets
+      - name: Attach archive and checksum
+        working-directory: release-assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          mv blank_-macos-xcode-27.zip blank_-macos-arm64.zip
+          sha256sum blank_-macos-arm64.zip > SHA256SUMS
+          gh release upload "$RELEASE_TAG" blank_-macos-arm64.zip SHA256SUMS --clobber
