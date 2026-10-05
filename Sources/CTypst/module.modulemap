@@ -1,0 +1,1 @@
+module CTypst { header "blank_syntax.h" export * }

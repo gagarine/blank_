@@ -1,0 +1,15 @@
+[package]
+name = "blank-syntax"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+typst-syntax = "=0.15.1"
+serde_json = "1"
+
+[profile.release]
+opt-level = 2
+strip = true
