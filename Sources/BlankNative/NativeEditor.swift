@@ -525,11 +525,27 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         super.keyDown(with:event)
     }
     func formatNative(_ italic: Bool) {
-        guard session?.mode == .write else { return }
+        guard let session, session.mode == .write, session.requestEditing() else { return }
+        finishComposition()
         if selectedRange().length == 0 { let style = caretStyle(); if italic { insertionItalic = !(insertionItalic ?? style.italic) } else { insertionBold = !(insertionBold ?? style.bold) }; return }
-        session?.format(italic:italic)
+        session.format(italic:italic)
         let style = caretStyle(); insertionBold = style.bold; insertionItalic = style.italic
     }
+    override func changeFont(_ sender: Any?) {
+        // Font-manager actions must use the canonical history, never mutate
+        // attributed text alone. Native headings may already have a bold face;
+        // infer the requested trait independently of the rendered font.
+        guard let manager = sender as? NSFontManager,
+              manager.currentFontAction == .addTraitFontAction || manager.currentFontAction == .removeTraitFontAction else { return }
+        let traits: NSFontTraitMask = [.boldFontMask,.italicFontMask]
+        let changed = manager.convertFontTraits([]).union(traits.subtracting(manager.convertFontTraits(traits)))
+        if changed.contains(.boldFontMask) { formatNative(false) }
+        if changed.contains(.italicFontMask) { formatNative(true) }
+    }
+    // Font-panel attributes and colors have no source transaction. Keep them
+    // from creating presentation-only changes through the responder chain.
+    override func changeAttributes(_ sender: Any?) {}
+    override func changeColor(_ sender: Any?) {}
     func caretStyle() -> TextStyle {
         guard let session else { return TextStyle() }
         let block = session.buffer.projection.blocks[session.buffer.projection.blockIndex(at:selectedRange().location)]
@@ -971,6 +987,7 @@ extension NativeTextView {
     }
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = super.menu(for:event)
+        if let menu { configureFontMenu(menu) }
         if let session, session.mode == .write, let cell = session.buffer.projection.tableCell(at:NSRange(location:characterIndexForInsertion(at:convert(event.locationInWindow,from:nil)),length:0)) {
             let result = menu ?? NSMenu(); result.insertItem(.separator(),at:0)
             let controls = NSMenu(); addTableMenus(to:controls,block:cell.block,cell:cell.cell)
@@ -978,6 +995,25 @@ extension NativeTextView {
             return result
         }
         return menu
+    }
+    func configureFontMenu(_ menu: NSMenu) {
+        for item in menu.items {
+            guard let submenu = item.submenu else { continue }
+            let traitItems = submenu.items.filter {
+                $0.action == #selector(NSFontManager.addFontTrait(_:)) || $0.action == #selector(NSFontManager.removeFontTrait(_:))
+            }
+            if traitItems.isEmpty { configureFontMenu(submenu); continue }
+            // Keep AppKit's localized, styled Bold/Italic items. Other native
+            // font controls have no lossless Typst transaction in this editor.
+            guard session?.mode == .write else { menu.removeItem(item); continue }
+            for option in submenu.items {
+                if traitItems.contains(option), option.tag == Int(NSFontTraitMask.boldFontMask.rawValue) {
+                    option.target = self; option.action = #selector(blankBold(_:))
+                } else if traitItems.contains(option), option.tag == Int(NSFontTraitMask.italicFontMask.rawValue) {
+                    option.target = self; option.action = #selector(blankItalic(_:))
+                } else { submenu.removeItem(option) }
+            }
+        }
     }
     @objc func changeTable(_ item: TableMenuItem) {
         guard let session, session.requestEditing() else { return }
