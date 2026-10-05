@@ -7,6 +7,16 @@ import BlankCore
 // Name the stable property-wrapper type explicitly.
 typealias NativeState<Value> = SwiftUI.State<Value>
 
+enum EditorLayout {
+    static func textPadding(width: CGFloat,mode: EditorMode) -> CGFloat {
+        mode == .source ? 30 : max(48,(width-720)/2)
+    }
+    static func sidebarRevealWidth(width: CGFloat,mode: EditorMode) -> CGFloat {
+        // Leave the 32-point block handle and a 12-point gap before revealing.
+        max(8,textPadding(width:width,mode:mode)-(mode == .source ? 12 : 50))
+    }
+}
+
 struct SlashCommand: Identifiable {
     var kind: String
     var level = 0
@@ -139,16 +149,19 @@ struct EditorRoot: View {
             if session.mode == .preview { previewControls }
             HStack(spacing:0) {
                 if session.sidebar { contents.frame(width:235); Divider() }
-                ZStack(alignment:.leading) {
-                    if session.mode == .preview { PreviewView(session:session) }
-                    else { NativeEditor(session:session).ignoresSafeArea(.container,edges:.top) }
-                    if !session.sidebar {
-                        ZStack(alignment:.leading) {
-                            Color.clear
-                            if session.sidebarHover && (!session.headings.isEmpty || session.includes.count > 1) {
-                                contents.background(chrome).shadow(color:.black.opacity(0.07),radius:12,x:4).transition(.opacity)
-                            }
-                        }.frame(width:session.sidebarHover && (!session.headings.isEmpty || session.includes.count > 1) ? 235 : 18).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
+                GeometryReader { geometry in
+                    ZStack(alignment:.leading) {
+                        if session.mode == .preview { PreviewView(session:session) }
+                        else { NativeEditor(session:session).ignoresSafeArea(.container,edges:.top) }
+                        if !session.sidebar && (!session.headings.isEmpty || session.includes.count > 1) {
+                            let revealWidth = EditorLayout.sidebarRevealWidth(width:geometry.size.width,mode:session.mode)
+                            ZStack(alignment:.leading) {
+                                Color.clear
+                                if session.sidebarHover {
+                                    contents.frame(width:235).background(chrome).shadow(color:.black.opacity(0.07),radius:12,x:4).transition(.opacity)
+                                }
+                            }.frame(width:session.sidebarHover ? max(235,revealWidth) : revealWidth).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
+                        }
                     }
                 }
             }

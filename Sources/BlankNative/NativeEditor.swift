@@ -94,7 +94,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     func updatePadding() {
         guard let session else { return }
-        let padding: CGFloat = session.mode == .source ? 30 : max(48,(bounds.width-720)/2)
+        let padding = EditorLayout.textPadding(width:bounds.width,mode:session.mode)
         let inset = NSSize(width:padding,height:session.mode == .source ? 30 : 54)
         if textContainerInset != inset { textContainerInset = inset }
         textContainer?.containerSize = NSSize(width:max(80,bounds.width-padding*2),height:CGFloat.greatestFiniteMagnitude)
