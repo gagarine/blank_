@@ -78,6 +78,12 @@ public final class DocumentBuffer {
     }
     public func breakUndoGroup() { if !undoSteps.isEmpty { undoSteps[undoSteps.count-1].group = "" } }
     @discardableResult public func moveInclude(_ from: Int, before target: Int) -> Bool {
+        moveInclude(from,target:target,after:false)
+    }
+    @discardableResult public func moveInclude(_ from: Int, after target: Int) -> Bool {
+        moveInclude(from,target:target,after:true)
+    }
+    private func moveInclude(_ from: Int,target: Int,after: Bool) -> Bool {
         guard includes.indices.contains(from), includes.indices.contains(target), from != target else { return false }
         let bytes = Array(source.utf8)
         func line(_ include: LiteralInclude) -> ByteSpan? {
@@ -92,7 +98,8 @@ public final class DocumentBuffer {
         let rows = includes.compactMap(line)
         guard rows.count == includes.count else { return false }
         var contents = rows.map { source.bytes($0) }
-        let moved = contents.remove(at:from), destination = target > from ? target-1 : target
+        let moved = contents.remove(at:from), boundary = target+(after ? 1 : 0)
+        let destination = boundary > from ? boundary-1 : boundary
         contents.insert(moved,at:destination)
         // Rotate only include-line contents. Every intervening newline, blank
         // line and separate comment remains byte-for-byte in its original slot.
@@ -391,19 +398,26 @@ public final class DocumentBuffer {
         text = text.replacingBytes(ByteSpan(at,at),with:insert)
         commit(text,selection:EditSelection(at,at))
     }
-    public func moveSection(_ index: Int, before target: Int) {
+    @discardableResult public func moveSection(_ index: Int, before target: Int) -> Bool {
+        moveSection(index,target:target,after:false)
+    }
+    @discardableResult public func moveSection(_ index: Int, after target: Int) -> Bool {
+        moveSection(index,target:target,after:true)
+    }
+    private func moveSection(_ index: Int,target: Int,after: Bool) -> Bool {
         let blocks = projection.blocks
-        guard blocks.indices.contains(index), blocks.indices.contains(target), blocks[index].kind == "heading", blocks[target].kind == "heading", blocks[index].level == blocks[target].level else { return }
+        guard blocks.indices.contains(index), blocks.indices.contains(target), index != target, blocks[index].kind == "heading", blocks[target].kind == "heading", blocks[index].level == blocks[target].level else { return false }
         let level = blocks[index].level
         let end = blocks.dropFirst(index+1).first { $0.kind == "heading" && $0.level <= level }?.source.start ?? source.utf8.count
         let span = ByteSpan(blocks[index].source.start,end)
-        var at = blocks[target].source.start
-        guard at < span.start || at >= span.end else { return }
+        var at = after ? blocks.dropFirst(target+1).first { $0.kind == "heading" && $0.level <= level }?.source.start ?? source.utf8.count : blocks[target].source.start
+        guard at < span.start || at > span.end else { return false }
         let raw = source.bytes(span)
         var text = source.replacingBytes(span,with:"")
         if at >= span.end { at -= span.count }
-        text = text.replacingBytes(ByteSpan(at,at),with:raw.hasSuffix("\n\n") ? raw : raw+"\n\n")
-        commit(text,selection:EditSelection(at,at))
+        let prefix = at > 0 && !text.bytes(ByteSpan(0,at)).hasSuffix("\n\n") ? "\n\n" : ""
+        text = text.replacingBytes(ByteSpan(at,at),with:prefix+(raw.hasSuffix("\n\n") ? raw : raw+"\n\n"))
+        return commit(text,selection:EditSelection(at+prefix.utf8.count,at+prefix.utf8.count))
     }
     public func copy(_ range: NSRange) -> RichFragment {
         if let cell = projection.tableCell(at:range) {

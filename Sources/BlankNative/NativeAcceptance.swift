@@ -272,6 +272,43 @@ import BlankCore
         check(session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Pinning contents clears transient hover and updates toolbar")
         session.sidebarHover = true; session.toggleSidebar()
         check(!session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Unpinning contents restores transient behavior")
+        let pin = ContentsPinButton(frame:NSRect(x:0,y:0,width:28,height:28))
+        pin.cursorUpdate(with:pointer(.mouseMoved,.zero))
+        session.sidebarHover = true; editor.hoverBlock = 0
+        editor.mouseMoved(with:pointer(.mouseMoved,NSPoint(x:100,y:100)))
+        check(NSCursor.current == .pointingHand && editor.hoverBlock == nil,"Floating Contents preserves the pin button cursor instead of editor cursors")
+        session.sidebarHover = false
+        let sectionSource = "= One\n\n日本\n\n== Child\n\n#let custom = 42\n\n= Two\n\nBody\n\n= Three\n\nTail"
+        session.buffer.loadExternal(sectionSource); session.revision += 1; editor.refresh()
+        let contentsDrag = ContentsDrag(), firstRow = ContentsRowView(frame:NSRect(x:40,y:100,width:180,height:28)), lastRow = ContentsRowView(frame:NSRect(x:40,y:160,width:180,height:28))
+        for row in [firstRow,lastRow] { row.session = session; row.drag = contentsDrag; editor.addSubview(row) }
+        firstRow.item = .heading(0); firstRow.label.stringValue = "One"
+        lastRow.item = .heading(session.headings.last!.0); lastRow.label.stringValue = "Three"
+        contentsDrag.source = firstRow; contentsDrag.path = session.active; contentsDrag.revision = session.buffer.revision
+        session.sidebarDragging = true
+        let drop = ContentsTestDrag(source:firstRow,window:controller.window!)
+        drop.draggingLocation = lastRow.convert(NSPoint(x:50,y:25),to:nil)
+        check(lastRow.draggingEntered(drop) == .move && NSCursor.current == .closedHand,"Contents drag uses a closed hand and a move operation without a copy badge")
+        check(contentsDrag.destination === lastRow && contentsDrag.after,"Lower row half targets insertion after the last section")
+        lastRow.layoutSubtreeIfNeeded()
+        let marker = lastRow.bitmapImageRepForCachingDisplay(in:lastRow.bounds)!
+        lastRow.cacheDisplay(in:lastRow.bounds,to:marker)
+        check((marker.colorAt(x:marker.pixelsWide-10,y:marker.pixelsHigh-1)?.alphaComponent ?? 0) > 0.9 && (marker.colorAt(x:marker.pixelsWide-10,y:0)?.alphaComponent ?? 1) < 0.1,"Contents insertion line renders across the bottom boundary, without a second line above")
+        drop.draggingLocation = lastRow.convert(NSPoint(x:50,y:2),to:nil)
+        check(lastRow.draggingUpdated(drop) == .move && !contentsDrag.after,"Upper row half targets insertion before the section")
+        check(contentsDrag.destination === lastRow,"Contents drag has only one active insertion target")
+        drop.draggingSource = NSObject()
+        check(lastRow.draggingUpdated(drop).isEmpty,"Contents rejects foreign drag sources")
+        drop.draggingSource = firstRow; drop.draggingLocation = lastRow.convert(NSPoint(x:50,y:25),to:nil)
+        check(lastRow.prepareForDragOperation(drop) && lastRow.performDragOperation(drop),"Contents native drop moves a section after the final row")
+        check(session.buffer.source.hasPrefix("= Two") && session.buffer.source.contains("Tail\n\n= One\n\n日本\n\n== Child\n\n#let custom = 42"),"Sidebar movement preserves nested sections, Unicode and custom code")
+        check(contentsDrag.destination == nil,"Finishing a drop removes its insertion line")
+        contentsDrag.finish()
+        check(!session.sidebarDragging,"Ending a drag releases transient sidebar visibility")
+        session.undo(); check(session.buffer.source == sectionSource,"Sidebar section movement shares document undo")
+        contentsDrag.source = firstRow; contentsDrag.path = session.active; contentsDrag.revision = session.buffer.revision-1
+        check(!contentsDrag.canMove(to:lastRow,after:true),"Contents rejects stale document drag snapshots")
+        contentsDrag.finish(); firstRow.removeFromSuperview(); lastRow.removeFromSuperview()
         // Table cells are real paragraphs in the document's native NSTextTable.
         check(EditorPreferences.installedEditorFamily(nil) == "System","Default editor font is the native macOS system face")
         check(EditorPreferences.installedEditorFamilies.contains(session.fontFamily),"Editor font selection is an installed family")
@@ -506,4 +543,24 @@ import BlankCore
         FileAcceptance.run()
         session.saveWork?.cancel(); controller.window?.close()
     }
+}
+
+@MainActor final class ContentsTestDrag: NSObject, NSDraggingInfo {
+    var draggingDestinationWindow: NSWindow?
+    var draggingSourceOperationMask: NSDragOperation = .move
+    var draggingLocation = NSPoint.zero
+    var draggedImageLocation = NSPoint.zero
+    nonisolated var draggedImage: NSImage? { nil }
+    let draggingPasteboard = NSPasteboard(name:NSPasteboard.Name("blank-contents-acceptance"))
+    var draggingSource: Any?
+    var draggingSequenceNumber = 1
+    var draggingFormation: NSDraggingFormation = .none
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    var springLoadingHighlight: NSSpringLoadingHighlight = .none
+    init(source: ContentsRowView,window: NSWindow) { draggingSource = source; draggingDestinationWindow = window }
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    nonisolated override func namesOfPromisedFilesDropped(atDestination dropDestination: URL) -> [String]? { nil }
+    func enumerateDraggingItems(options: NSDraggingItemEnumerationOptions,for view: NSView?,classes classArray: [AnyClass],searchOptions: [NSPasteboard.ReadingOptionKey:Any],using block: (NSDraggingItem,Int,UnsafeMutablePointer<ObjCBool>)->Void) {}
+    func resetSpringLoading() {}
 }

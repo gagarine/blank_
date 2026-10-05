@@ -140,8 +140,7 @@ final class SlashMenuCursorView: NSView {
 struct EditorRoot: View {
     @ObservedObject var session: DocumentSession
     @NativeState private var collapsed = Set<Int>()
-    @NativeState private var draggingHeading: Int?
-    @NativeState private var draggingChapter: String?
+    @StateObject private var contentsDrag = ContentsDrag()
     var chrome: Color { Color(nsColor:.windowBackgroundColor) }
     var body: some View {
         VStack(spacing:0) {
@@ -157,10 +156,10 @@ struct EditorRoot: View {
                             let revealWidth = EditorLayout.sidebarRevealWidth(width:geometry.size.width,mode:session.mode)
                             ZStack(alignment:.leading) {
                                 Color.clear
-                                if session.sidebarHover {
+                                if session.sidebarHover || session.sidebarDragging {
                                     contents.frame(width:235).background(chrome).shadow(color:.black.opacity(0.07),radius:12,x:4).transition(.opacity)
                                 }
-                            }.frame(width:session.sidebarHover ? max(235,revealWidth) : revealWidth).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
+                            }.frame(width:session.sidebarHover || session.sidebarDragging ? max(235,revealWidth) : revealWidth).contentShape(Rectangle()).onHover { session.sidebarHover = $0 }
                         }
                     }
                 }
@@ -238,19 +237,16 @@ struct EditorRoot: View {
             HStack {
                 Text("CONTENTS").font(.system(size:9,weight:.semibold)).tracking(1.2).foregroundStyle(.secondary)
                 Spacer()
-                Button { session.toggleSidebar() } label: { Image(systemName:session.sidebar ? "pin.fill" : "pin").font(.system(size:12)).frame(width:24,height:24) }
-                    .buttonStyle(.borderless).accessibilityLabel(session.sidebar ? "Unpin Contents" : "Pin Contents").help(session.sidebar ? "Unpin Contents · ⌘⇧L" : "Pin Contents · ⌘⇧L")
+                ContentsPin(pinned:session.sidebar,toggle:{ session.toggleSidebar() }).frame(width:28,height:28)
             }.padding(.horizontal,16).padding(.top,18).padding(.bottom,10)
             ScrollView {
                 VStack(alignment:.leading,spacing:3) {
                     if session.includes.count > 1 {
                         ForEach(session.includes,id:\.self) { path in
-                            Button { session.switchFile(path) } label: { Label(path,systemImage:"doc.text").font(.system(size:11)).lineLimit(1).truncationMode(.middle).foregroundStyle(session.active == path ? .primary : .secondary).frame(maxWidth:.infinity,alignment:.leading).padding(.vertical,6) }.buttonStyle(.plain)
-                                .onDrag { draggingChapter = path; return NSItemProvider(object:path as NSString) }
-                                .onDrop(of:["public.text"],isTargeted:nil) { _ in
-                                    guard let from = draggingChapter else { return false }; draggingChapter = nil
-                                    return session.moveChapter(from,before:path)
-                                }
+                            HStack(spacing:5) {
+                                Image(systemName:"doc.text").font(.system(size:11)).foregroundStyle(.secondary).allowsHitTesting(false)
+                                ContentsRow(session:session,drag:contentsDrag,item:.chapter(path),title:path,selected:session.active == path,activate:{ session.switchFile(path) })
+                            }.frame(height:28)
                         }
                         Divider().padding(.vertical,12)
                     }
@@ -258,17 +254,13 @@ struct EditorRoot: View {
                         HStack(spacing:5) {
                             let hasChildren = session.headings.contains { $0.0 > index && $0.1.level > b.level && $0.0 < (session.headings.first { $0.0 > index && $0.1.level <= b.level }?.0 ?? Int.max) }
                             Button { if collapsed.contains(index) { collapsed.remove(index) } else { collapsed.insert(index) } } label: { Image(systemName:collapsed.contains(index) ? "chevron.right" : "chevron.down").font(.system(size:8)).opacity(hasChildren ? 0.6 : 0) }.buttonStyle(.plain).frame(width:10).disabled(!hasChildren)
-                            Button { session.buffer.selection = EditSelection(b.body.start,b.body.start); if session.mode == .preview { session.switchMode(.write) }; session.editor?.refresh(reveal:true) } label: { Text(b.text).font(.system(size:11)).lineLimit(1).truncationMode(.tail).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading) }.buttonStyle(.plain)
-                        }.padding(.leading,CGFloat(max(0,b.level-(session.headings.filter { $0.1.level == 1 }.count == 1 ? 2 : 1)))*12).padding(.vertical,7)
-                        .onDrag { draggingHeading = index; return NSItemProvider(object:String(index) as NSString) }
-                        .onDrop(of:["public.text"],isTargeted:nil) { _ in
-                            if let from = draggingHeading { session.buffer.moveSection(from,before:index); session.changed(); draggingHeading = nil }; return true
-                        }
+                            ContentsRow(session:session,drag:contentsDrag,item:.heading(index),title:b.text,activate:{ session.editor?.finishComposition(); session.buffer.selection = EditSelection(b.body.start,b.body.start); if session.mode == .preview { session.switchMode(.write) }; session.editor?.refresh(reveal:true) })
+                        }.padding(.leading,CGFloat(max(0,b.level-(session.headings.filter { $0.1.level == 1 }.count == 1 ? 2 : 1)))*12).frame(height:28)
                     }
                 }.padding(.horizontal,16)
             }
             Spacer(minLength:0)
-        }.background(chrome)
+        }.background(chrome).background(ContentsCursorArea().allowsHitTesting(false))
     }
 }
 struct PreviewView: NSViewRepresentable {

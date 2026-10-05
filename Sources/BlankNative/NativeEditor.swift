@@ -654,6 +654,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard session?.mode == .write, grabbed == nil else { return }
         if updateSlashMenuCursor(for:event) { return }
         let point = convert(event.locationInWindow,from:nil)
+        if let session, !session.sidebar, (session.sidebarHover || session.sidebarDragging), point.x < 235 {
+            // The floating Contents panel owns its button and drag cursors.
+            if hoverBlock != nil { hoverBlock = nil; needsDisplay = true }
+            return
+        }
         if codeButtons.values.contains(where:{ $0.frame.contains(point) }) || tableButtons.contains(where:{ $0.trackingMenu || !$0.isHidden && $0.frame.insetBy(dx:-6,dy:-6).contains(point) }) { NSCursor.arrow.set(); return }
         let offset = characterIndexForInsertion(at:point)
         if let cell = session?.buffer.projection.tableCell(at:NSRange(location:offset,length:0)), tableCellRect(block:cell.block,cell:cell.cell)?.contains(point) == true { tableControlCell = (cell.block,cell.cell) }

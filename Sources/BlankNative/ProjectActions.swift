@@ -21,14 +21,14 @@ import BlankCore
         visit(entry)
         if added { revision += 1; installWatchers() }
     }
-    @discardableResult func moveChapter(_ from: String,before target: String) -> Bool {
+    @discardableResult func moveChapter(_ from: String,before target: String,after: Bool = false) -> Bool {
         guard from != target, from != entry, target != entry else { return false }
         for parent in includes {
             guard let model = buffers[parent] else { continue }
             let paths = model.includes.map { projectAssetPath($0.path,file:parent) }
             let origins = paths.indices.filter { paths[$0] == from }, destinations = paths.indices.filter { paths[$0] == target }
             guard origins.count == 1, destinations.count == 1 else { continue }
-            guard model.moveInclude(origins[0],before:destinations[0]) else { return false }
+            guard after ? model.moveInclude(origins[0],after:destinations[0]) : model.moveInclude(origins[0],before:destinations[0]) else { return false }
             changed(); projectUndoPath = parent; return true
         }
         return false

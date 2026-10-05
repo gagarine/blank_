@@ -169,6 +169,18 @@ final class DocumentTests {
         b.moveSection(target,before:0)
         XCTAssertTrue(b.source.hasPrefix("= Second")); XCTAssertTrue(b.source.contains("== Child\n\n#custom"))
         b.undo(); XCTAssertEqual(b.source,original)
+        let last = b.projection.blocks.firstIndex { $0.text == "Second" }!
+        XCTAssertTrue(b.moveSection(0,after:last))
+        XCTAssertTrue(b.source.hasPrefix("= Second\n\nB\n"))
+        XCTAssertTrue(b.source.hasSuffix("= First\n\nA\n\n== Child\n\n#custom\n\n"))
+        let moved = b.source, selection = b.selection
+        b.undo(); XCTAssertEqual(b.source,original)
+        b.redo(); XCTAssertEqual(b.source,moved); XCTAssertEqual(b.selection,selection)
+        let end = DocumentBuffer("= First\n\n日本 👋\n\n= Last\n\nTail")
+        XCTAssertTrue(end.moveSection(0,after:end.projection.blocks.firstIndex { $0.text == "Last" }!))
+        XCTAssertTrue(end.source.contains("Tail\n\n= First\n\n日本 👋"))
+        XCTAssertFalse(end.parsed.erroneous)
+        XCTAssertFalse(end.moveSection(0,after:0))
     }
     func testFormatTogglePreservesOtherMarks() {
         let b = DocumentBuffer("plain *bold and _italic_* tail")
@@ -252,6 +264,9 @@ final class DocumentTests {
         XCTAssertTrue(b.moveInclude(1,before:0))
         XCTAssertEqual(b.source,"#include \"β.typ\" // b\r\n// untouched\r\n#include \"a.typ\" // a\r\n\n#if true [#include \"dynamic.typ\"]")
         b.undo(); XCTAssertEqual(b.source,source); b.redo(); XCTAssertEqual(b.includes.map(\.path),["β.typ","a.typ"])
+        b.undo(); XCTAssertTrue(b.moveInclude(0,after:1))
+        XCTAssertEqual(b.source,"#include \"β.typ\" // b\r\n// untouched\r\n#include \"a.typ\" // a\r\n\n#if true [#include \"dynamic.typ\"]")
+        b.undo(); XCTAssertEqual(b.source,source)
         let inline = DocumentBuffer("Before #include \"a.typ\"\n#include \"b.typ\"")
         XCTAssertFalse(inline.moveInclude(1,before:0))
     }
