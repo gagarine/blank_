@@ -58,13 +58,6 @@ import BlankCore
             }
             grid.keyDown(with:key(124,String(UnicodeScalar(NSRightArrowFunctionKey)!)))
             check(library.selection == starters[1].id,"Arrow keys select templates through native collection navigation")
-            if let path = ProcessInfo.processInfo.environment["BLANK_TEMPLATE_SNAPSHOT"], let content = chooser.window?.contentView {
-                content.layoutSubtreeIfNeeded()
-                if let bitmap = content.bitmapImageRepForCachingDisplay(in:content.bounds) {
-                    content.cacheDisplay(in:content.bounds,to:bitmap)
-                    try bitmap.representation(using:.png,properties:[:])?.write(to:URL(fileURLWithPath:path))
-                }
-            }
             grid.keyDown(with:key(49," "))
             let sheetDeadline = Date().addingTimeInterval(3)
             while chooser.window?.attachedSheet == nil && Date() < sheetDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }

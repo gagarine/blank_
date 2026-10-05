@@ -1,10 +1,10 @@
 # blank_
 
-A quiet native macOS editor for [Typst](https://typst.app). Write, Source and PDF Preview share ordinary local `.typ` files. SwiftUI/AppKit interface with native typography, integrated text tables and the official Typst compiler. The editor uses the native macOS system font by default and installed fonts only; PDF compilation includes Typst’s standard bundled fonts.
+A quiet native macOS editor for [Typst](https://typst.app). Write, edit source and preview typeset PDFs in a SwiftUI/AppKit interface, using ordinary local `.typ` projects.
 
-Supports block editing and dragging, sidebar contents/thumbnails with an order lock, a full-window zoomable contact sheet in all three views, collapsible code, inline table row/column menus, shared undo, formatted clipboard, figures/captions, links, footnotes, citations with Zotero, included files/chapter movement, live document/project search, statistics, settings, document windows and recovery. Generated or complex Typst stays editable in Source.
+Native typography and tables, structured block editing, collapsible code, an outline and page thumbnails, shared undo, formatted clipboard, figures, links, footnotes, Zotero citations, live search and recovery. Complex Typst stays editable in Source. Try the [Field notes](examples/Field%20notes.typ) sample.
 
-**File → Templates…** (also Cmd-K) opens a thumbnail library with Standard, Thesis, Paper, Letter A4 and Book. Create independent documents, preview, add, duplicate, edit or trash templates; Save in a template editor updates the library. **Save as Template…** captures the current project. New Document remains empty.
+**File → Templates…** (also Cmd-K) offers Standard, Thesis, Paper, Letter A4 and Book. Preview, add, duplicate, edit or trash templates; Save updates an edited template. **Save as Template…** captures the current project. New Document stays empty.
 
 ## First launch
 
