@@ -117,7 +117,7 @@ struct Recovery: Codable {
         editor?.finishComposition(); if redo { model.redo() } else { model.undo() }; changed(); projectUndoPath = projectPath; editor?.refresh(reveal:true)
         if let (index,fieldIndex) = cell, let table = editor?.tableViews[index]?.value, table.fields.indices.contains(fieldIndex), buffer.projection.blocks.indices.contains(index) {
             let field = table.fields[fieldIndex], span = buffer.projection.blocks[index].tableCells[fieldIndex]
-            window?.makeFirstResponder(field)
+            table.focusCell(fieldIndex)
             if let view = field.currentEditor() as? NSTextView {
                 let a = field.model.projection.displayOffset(at:max(0,buffer.selection.anchor-span.start)), z = field.model.projection.displayOffset(at:max(0,buffer.selection.focus-span.start))
                 view.setSelectedRange(NSRange(location:min(a,z),length:abs(z-a)))

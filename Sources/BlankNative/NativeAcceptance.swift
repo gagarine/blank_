@@ -185,7 +185,7 @@ import BlankCore
         check(session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Hide") == true,"Pinning contents clears transient hover and updates toolbar")
         session.sidebarHover = true; session.toggleSidebar()
         check(!session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Unpinning contents restores transient behavior")
-        // Tables use view-backed TextKit 2 attachments and native field editors.
+        // NSTableView supplies the grid; TextKit 2 supplies document and cell editing.
         session.buffer.loadExternal("#table(columns: 2, [Idea], [Step], [One], [Two])\n\nAfter")
         session.revision += 1; editor.lastRevision = -1; editor.refresh()
         RunLoop.main.run(until:Date().addingTimeInterval(0.15))
@@ -198,6 +198,7 @@ import BlankCore
             fatalError("No native table view")
         }
         check(table.fields.count == 4,"Native table cells created")
+        check(table.tableView.numberOfRows == 2 && table.tableView.tableColumns.count == 2 && table.fields[0].superview is NSTableCellView,"Native NSTableView owns rows, columns and cells")
         check(table.window === controller.window,"Native table controls mounted in document")
         let originalAppearance = controller.window?.appearance
         let originalSystemColors = session.systemColors
@@ -212,8 +213,9 @@ import BlankCore
                 foreground = themedTable.fields[0].textColor!.usingColorSpace(.deviceRGB)!.brightnessComponent
             }
             check(name == .darkAqua ? background < 0.25 && foreground > 0.7 : background > 0.9 && foreground < 0.3,"Native page and table text adapt to \(name.rawValue)")
-            controller.window?.makeFirstResponder(themedTable.fields[0])
+            themedTable.focusCell(0)
             if let cellEditor = themedTable.fields[0].currentEditor() as? NSTextView {
+                check(cellEditor.textLayoutManager != nil,"Native table field editor retains TextKit 2")
                 var editingColor: CGFloat = 0
                 editor.effectiveAppearance.performAsCurrentDrawingAppearance { editingColor = cellEditor.textColor!.usingColorSpace(.deviceRGB)!.brightnessComponent }
                 check(abs(editingColor-foreground) < 0.01,"Active table cell retains readable \(name.rawValue) text")
@@ -231,18 +233,28 @@ import BlankCore
         controller.window?.appearance = originalAppearance; session.systemColors = originalSystemColors
         editor.lastAppearance = ""; editor.refresh(); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let activeTable = editor.tableViews[0]!.value!
-        controller.window?.makeFirstResponder(activeTable.fields[2])
+        activeTable.focusCell(2)
         RunLoop.main.run(until:Date().addingTimeInterval(0.05))
         if let cellEditor = activeTable.fields[2].currentEditor() as? NSTextView {
             cellEditor.selectAll(nil); cellEditor.insertText("Café 👋",replacementRange:cellEditor.selectedRange())
         } else { fatalError("No native cell editor") }
         check(session.buffer.source.contains("[Café 👋]"),"Native table typing preserves source spans")
+        if let cellEditor = activeTable.fields[2].currentEditor() as? NSTextView {
+            cellEditor.doCommand(by:#selector(NSResponder.insertTab(_:)))
+            check(activeTable.fields[3].currentEditor() != nil,"Native table Tab advances cell focus")
+            (activeTable.fields[3].currentEditor() as? NSTextView)?.doCommand(by:#selector(NSResponder.insertBacktab(_:)))
+            check(activeTable.fields[2].currentEditor() != nil,"Native table Shift-Tab restores preceding cell focus")
+        }
         session.undo(); RunLoop.main.run(until:Date().addingTimeInterval(0.05))
         check(session.buffer.source.contains("[One]") && editor.tableViews[0]?.value?.fields[2].currentEditor() != nil,"Table Undo restores source and native cell focus")
         session.undo(true); RunLoop.main.run(until:Date().addingTimeInterval(0.05))
         check(session.buffer.source.contains("[Café 👋]") && editor.tableViews[0]?.value?.fields[2].stringValue == "Café 👋","Table Redo restores native text and source")
-        editor.tableViews[0]?.value?.addRowAndFocus(); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        let finalTable = editor.tableViews[0]!.value!
+        finalTable.focusCell(3)
+        (finalTable.fields[3].currentEditor() as? NSTextView)?.doCommand(by:#selector(NSResponder.insertTab(_:)))
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(session.buffer.projection.blocks[0].tableCells.count == 6,"Final table Tab adds row")
+        check(editor.tableViews[0]?.value?.fields[4].currentEditor() != nil,"New table row receives native cell focus")
         check(!session.buffer.parsed.erroneous,"Added table row is valid Typst syntax")
         editor.objectEditing = false; controller.window?.makeFirstResponder(editor)
         let bitmap = NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:64,pixelsHigh:32,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0)!

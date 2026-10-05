@@ -37,12 +37,13 @@ final class TableCellField: NSTextField {
     var index = 0
     var model = DocumentBuffer()
 }
-final class TableBlockView: NSView, NSTextFieldDelegate {
+final class TableBlockView: NSView, NSTextFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
     weak var editor: NativeTextView?
     let index: Int
     var fields: [TableCellField] = []
     var columns = 1
-    var first = true
+    let tableView = NSTableView()
+    let scrollView = NSScrollView()
     override var isFlipped: Bool { true }
     init(editor: NativeTextView,index: Int,frame: NSRect) {
         self.editor = editor; self.index = index
@@ -57,25 +58,61 @@ final class TableBlockView: NSView, NSTextFieldDelegate {
             field.font = editor.readingFont(size:CGFloat(session.fontSize)*0.85,bold:i < columns)
             field.cell?.wraps = true; field.cell?.isScrollable = false; field.lineBreakMode = .byWordWrapping
             field.delegate = self; field.setAccessibilityLabel("Table row \(i/columns+1), column \(i%columns+1)")
-            addSubview(field); fields.append(field)
+            fields.append(field)
         }
-        let controls = NSButton(title:"Table options…",target:self,action:#selector(options(_:))); controls.isBordered = false; controls.font = .systemFont(ofSize:10); controls.contentTintColor = session.systemColors ? .secondaryLabelColor : session.inkColor.withAlphaComponent(0.65)
-        controls.frame = NSRect(x:0,y:frame.height-27,width:115,height:24); addSubview(controls)
-        layoutFields()
+        // NSTableView owns cell placement, grid rendering and accessibility.
+        // It does not add unsupported text-table attributes to the document.
+        tableView.headerView = nil; tableView.style = .plain
+        tableView.rowHeight = 54; tableView.intercellSpacing = NSSize(width:0,height:0)
+        tableView.gridStyleMask = [.solidHorizontalGridLineMask,.solidVerticalGridLineMask]
+        tableView.backgroundColor = session.paperColor
+        tableView.gridColor = session.inkColor.withAlphaComponent(0.22)
+        tableView.selectionHighlightStyle = .none
+        tableView.allowsEmptySelection = true
+        tableView.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        tableView.delegate = self; tableView.dataSource = self
+        tableView.setAccessibilityLabel("Document table")
+        for column in 0..<columns {
+            let item = NSTableColumn(identifier:NSUserInterfaceItemIdentifier(String(column)))
+            item.width = frame.width/CGFloat(columns); item.minWidth = 40
+            item.resizingMask = [.autoresizingMask]
+            tableView.addTableColumn(item)
+        }
+        scrollView.borderType = .noBorder; scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = false; scrollView.hasHorizontalScroller = false
+        scrollView.documentView = tableView
+        scrollView.frame = NSRect(x:0,y:0,width:frame.width,height:frame.height-30)
+        scrollView.autoresizingMask = [.width,.height]
+        addSubview(scrollView)
+        let controls = NSButton(title:"Table options…",target:self,action:#selector(options(_:)))
+        controls.isBordered = false; controls.font = .systemFont(ofSize:10)
+        controls.contentTintColor = session.systemColors ? .secondaryLabelColor : session.inkColor.withAlphaComponent(0.65)
+        controls.frame = NSRect(x:0,y:frame.height-27,width:115,height:24)
+        controls.autoresizingMask = [.minYMargin]; addSubview(controls)
+        tableView.reloadData()
     }
     required init?(coder: NSCoder) { fatalError() }
-    func layoutFields() {
-        let cellWidth = bounds.width/CGFloat(columns)
-        for field in fields { field.frame = NSRect(x:CGFloat(field.index%columns)*cellWidth+12,y:CGFloat(field.index/columns)*54+15,width:cellWidth-24,height:40) }
+    func numberOfRows(in tableView: NSTableView) -> Int { (fields.count+columns-1)/columns }
+    func tableView(_ tableView: NSTableView,viewFor tableColumn: NSTableColumn?,row: Int) -> NSView? {
+        guard let tableColumn, let column = Int(tableColumn.identifier.rawValue) else { return nil }
+        let index = row*columns+column
+        guard fields.indices.contains(index) else { return nil }
+        let cell = NSTableCellView()
+        let field = fields[index]; field.translatesAutoresizingMaskIntoConstraints = false
+        cell.textField = field; cell.addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo:cell.leadingAnchor,constant:12),
+            field.trailingAnchor.constraint(equalTo:cell.trailingAnchor,constant:-12),
+            field.centerYAnchor.constraint(equalTo:cell.centerYAnchor),
+        ])
+        return cell
     }
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        (editor?.session?.inkColor ?? .labelColor).withAlphaComponent(0.22).setStroke()
-        let path = NSBezierPath(); path.lineWidth = 0.5
-        let rows = (fields.count+columns-1)/columns
-        for row in 0...rows { let y = CGFloat(row)*54+7; path.move(to:NSPoint(x:0,y:y)); path.line(to:NSPoint(x:bounds.width,y:y)) }
-        for column in 0...columns { let x = CGFloat(column)*bounds.width/CGFloat(columns); path.move(to:NSPoint(x:x,y:7)); path.line(to:NSPoint(x:x,y:CGFloat(rows)*54+7)) }
-        path.stroke()
+    func focusCell(_ index: Int) {
+        guard fields.indices.contains(index) else { return }
+        // Ask the table to materialize the native row before moving focus.
+        tableView.scrollRowToVisible(index/columns)
+        _ = tableView.view(atColumn:index%columns,row:index/columns,makeIfNecessary:true)
+        window?.makeFirstResponder(fields[index])
     }
     @objc func options(_ sender: Any?) { window?.makeFirstResponder(editor); editor?.objectEditing = false; editor?.session?.editObject(index) }
     func controlTextDidBeginEditing(_ obj: Notification) { editor?.objectEditing = true; editor?.session?.buffer.breakUndoGroup() }
@@ -102,12 +139,12 @@ final class TableBlockView: NSView, NSTextFieldDelegate {
         guard let field = control as? TableCellField else { return false }
         if commandSelector == #selector(NSResponder.insertTab(_:)) {
             let next = field.index+1
-            if next < fields.count { window?.makeFirstResponder(fields[next]) }
+            if next < fields.count { focusCell(next) }
             else { addRowAndFocus() }
             return true
         }
         if commandSelector == #selector(NSResponder.insertBacktab(_:)) {
-            if field.index > 0 { window?.makeFirstResponder(fields[field.index-1]) }
+            if field.index > 0 { focusCell(field.index-1) }
             else { editor?.objectEditing = false; window?.makeFirstResponder(editor) }
             return true
         }
@@ -124,7 +161,7 @@ final class TableBlockView: NSView, NSTextFieldDelegate {
         session.buffer.commit(session.buffer.source.replacingBytes(ByteSpan(at,at),with:insertion),selection:session.buffer.selection)
         editor.objectEditing = false; session.changed()
         DispatchQueue.main.async { [weak editor] in
-            if let table = editor?.tableViews[self.index]?.value, table.fields.indices.contains(cellCount) { table.window?.makeFirstResponder(table.fields[cellCount]) }
+            if let table = editor?.tableViews[self.index]?.value, table.fields.indices.contains(cellCount) { table.focusCell(cellCount) }
         }
     }
 }
