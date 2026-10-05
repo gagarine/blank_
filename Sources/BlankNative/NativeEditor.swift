@@ -413,6 +413,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
         guard !refreshing, let text = replacementString, let session else { return true }
+        guard session.requestEditing() else { return false }
         if composing || hasMarkedText() { return true }
         captureSelection()
         var editRange = affectedCharRange
@@ -480,6 +481,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         super.insertText(insertString,replacementRange:replacementRange)
     }
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        guard session?.requestEditing() != false else { return }
         if !composing { captureSelection(); compositionOriginal = self.string; composing = true; session?.buffer.breakUndoGroup() }
         super.setMarkedText(string,selectedRange:selectedRange,replacementRange:replacementRange)
     }
@@ -516,6 +518,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             if event.charactersIgnoringModifiers == "i" { formatNative(true); return }
         }
         if event.modifierFlags.contains(.option), [125,126].contains(event.keyCode), session?.mode == .write, let session {
+            guard session.requestEditing() else { return }
             let index = session.buffer.projection.blockIndex(at:selectedRange().location)
             session.buffer.moveBlock(index,before:event.keyCode == 126 ? max(0,index-1) : min(session.buffer.projection.blocks.count,index+2)); session.changed(); return
         }
@@ -539,7 +542,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         return TextStyle()
     }
     override func insertNewline(_ sender: Any?) {
-        guard let session else { return }
+        guard let session, session.requestEditing() else { return }
         finishComposition(); captureSelection()
         if session.mode == .write { session.buffer.split(selectedRange()); session.changed(); scrollRangeToVisible(selectedRange()) }
         else {
@@ -550,7 +553,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         dismissSlash()
     }
     override func insertLineBreak(_ sender: Any?) {
-        guard let session else { return }
+        guard let session, session.requestEditing() else { return }
         finishComposition(); captureSelection()
         if session.mode == .write { session.buffer.lineBreak(selectedRange()) }
         else { session.buffer.editSource(selectedRange(),text:"\n",group:"") }
@@ -567,6 +570,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard let session, session.mode == .write, let cell = session.buffer.projection.tableCell(at:selectedRange()) else { super.insertTab(sender); return }
         let block = session.buffer.projection.blocks[cell.block]
         if cell.cell+1 < block.tableCells.count { focusTableCell(cell.block,cell.cell+1); return }
+        guard session.requestEditing() else { return }
         captureSelection()
         let raw = session.buffer.source.bytes(block.source), at = block.source.end-1
         let comma = raw.dropLast().trimmingCharacters(in:.whitespacesAndNewlines).hasSuffix(",") ? "" : ","
@@ -595,7 +599,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     override func cut(_ sender: Any?) { copy(sender); insertText("",replacementRange:selectedRange()) }
     override func paste(_ sender: Any?) {
-        guard let session else { return }
+        guard let session, session.requestEditing() else { return }
         let board = NSPasteboard.general
         if session.mode == .write, let data = board.data(forType:NSPasteboard.PasteboardType("local.blank.typst-fragment")), let fragment = try? JSONDecoder().decode(RichFragment.self,from:data) {
             captureSelection(); session.buffer.paste(fragment,range:selectedRange()); session.changed(); return
@@ -729,7 +733,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     override func mouseUp(with event: NSEvent) {
         guard let index = grabbed else { super.mouseUp(with:event); return }
         NSCursor.pop(); grabbed = nil; needsDisplay = true
-        if draggingBlock { session?.buffer.moveBlock(index,before:dragTarget); session?.changed() }
+        if draggingBlock { if session?.requestEditing() == true { session?.buffer.moveBlock(index,before:dragTarget); session?.changed() } }
         else { showBlockMenu(index,event:event) }
         draggingBlock = false; dragImage = nil
         mouseMoved(with:event)
@@ -781,6 +785,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     @objc func blockMenuAction(_ item: BlockMenuItem) {
         guard let session else { return }
+        if item.blockAction != "fold", !session.requestEditing() { return }
         if let command = item.command { session.buffer.setKind(item.blockIndex,kind:command.kind,level:command.level) }
         else if item.blockAction == "fold" { toggleCode(item.blockIndex); return }
         else if item.blockAction == "edit" { session.editObject(item.blockIndex); return }
@@ -824,6 +829,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let session, session.mode == .write else { return super.performDragOperation(sender) }
+        guard session.requestEditing() else { return false }
         let point = convert(sender.draggingLocation,from:nil), offset = characterIndexForInsertion(at:point)
         setSelectedRange(NSRange(location:offset,length:0)); captureSelection()
         session.insertionAnchor = session.buffer.selection
@@ -876,6 +882,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     func chooseSlash() {
         guard let start = slashStart, slashMatches.indices.contains(slashIndex), let session else { return }
+        guard session.requestEditing() else { return }
         let command = slashMatches[slashIndex]
         let range = NSRange(location:start,length:selectedRange().location-start)
         let copy = DocumentBuffer(session.buffer.source); copy.selection = session.buffer.selection
@@ -973,7 +980,7 @@ extension NativeTextView {
         return menu
     }
     @objc func changeTable(_ item: TableMenuItem) {
-        guard let session else { return }
+        guard let session, session.requestEditing() else { return }
         finishComposition(); captureSelection()
         let b = session.buffer.projection.blocks[item.blockIndex], cols = b.columns
         if session.buffer.changeTable(item.blockIndex,cell:item.cell,column:item.column,action:item.operation) {

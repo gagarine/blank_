@@ -4,7 +4,7 @@ import PDFKit
 import BlankCore
 
 enum EditorMode: String, CaseIterable { case write = "Write", source = "Source", preview = "Preview" }
-enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict, rename; var id: String { rawValue } }
+enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict; var id: String { rawValue } }
 struct Recovery: Codable {
     var id: String
     var entry: String
@@ -25,6 +25,15 @@ struct Recovery: Codable {
     @Published var dirty = false
     @Published var error: String?
     @Published var sheet: SheetKind?
+    var pendingDocumentAction: (() -> Void)?
+    func performDocumentAction(_ action: @escaping (NativeDocument) -> Void) {
+        guard let document = window?.windowController?.document as? NativeDocument else { return }
+        editor?.finishComposition()
+        if sheet != nil {
+            pendingDocumentAction = { [weak document] in if let document { action(document) } }
+            sheet = nil
+        } else { action(document) }
+    }
     @Published var commandQuery = ""
     var pendingCommandKeys: [NSEvent] = []
     @Published var searchVisible = false
@@ -64,7 +73,7 @@ struct Recovery: Codable {
     var conflictDisk: [String:String] = [:]
     var deletedFiles = Set<String>()
     var buffer: DocumentBuffer { buffers[active]! }
-    var title: String { entry.replacingOccurrences(of:".typ",with:"") }
+    var title: String { ((entry as NSString).lastPathComponent as NSString).deletingPathExtension }
     var onTitle: (() -> Void)?
     weak var contentsCursorView: ContentsCursorView?
     weak var editor: NativeTextView?
@@ -109,6 +118,12 @@ struct Recovery: Codable {
         if mode == .preview { compile() }
     }
     func synchronizeSelection() { editor?.captureSelection() }
+    func requestEditing() -> Bool {
+        guard let document = window?.windowController?.document as? NativeDocument, document.isLocked else { return true }
+        do { try document.checkAutosavingSafety() }
+        catch { return document.presentError(error) && !document.isLocked }
+        return !document.isLocked
+    }
     func switchMode(_ next: EditorMode) {
         guard next != mode else { return }
         editor?.finishComposition()
@@ -123,12 +138,13 @@ struct Recovery: Codable {
         editor?.refresh(reveal:true)
     }
     func undo(_ redo: Bool = false) {
+        guard requestEditing() else { return }
         let projectPath = projectUndoPath, model = projectPath.flatMap { buffers[$0] } ?? buffer
         editor?.finishComposition(); if redo { model.redo() } else { model.undo() }; changed(); projectUndoPath = projectPath; editor?.refresh(reveal:true)
     }
 
     func format(italic: Bool) {
-        guard mode == .write else { return }; synchronizeSelection()
+        guard mode == .write, requestEditing() else { return }; synchronizeSelection()
         if let editor { buffer.format(editor.selectedRange(),italic:italic); changed() }
     }
     func open(_ url: URL) throws {
@@ -207,6 +223,9 @@ struct Recovery: Codable {
     func autosave() {
         persistRecovery()
         if root != nil { do { try saveToDisk() } catch { self.error = error.localizedDescription } }
+        else if let document = window?.windowController?.document as? NativeDocument {
+            document.autosave(withImplicitCancellability:true) { [weak self] error in if let error { self?.error = error.localizedDescription } }
+        }
     }
     func persistRecovery() {
         let payload = Recovery(id:id,entry:entry,root:root?.path,files:buffers.mapValues(\.source),assets:assets)
@@ -396,6 +415,7 @@ struct Recovery: Codable {
         }
     }
     func replace(all: Bool = false) {
+        guard requestEditing() else { return }
         guard let editor, !searchQuery.isEmpty else { return }
         if !all {
             let text = editor.string as NSString, selection = editor.selectedRange()
@@ -421,11 +441,13 @@ struct Recovery: Codable {
         changed()
     }
     func insertSource(_ text: String, block: Bool = false) {
+        guard requestEditing() else { return }
         let span = insertionAnchor.span
         let insert = block ? "\n\n"+text+"\n\n" : text
         buffer.commit(buffer.source.replacingBytes(span,with:insert),selection:EditSelection(span.start+insert.utf8.count,span.start+insert.utf8.count)); changed(); sheet = nil
     }
     func chooseInsertion(_ kind: String) {
+        guard requestEditing() else { return }
         synchronizeSelection(); insertionAnchor = buffer.selection
         if kind == "table" {
             let start = insertionAnchor.span.start+2

@@ -59,7 +59,7 @@ import BlankCore
         check(controller.window?.firstResponder === view && view.shouldDrawInsertionPoint,"Return keeps focus and a native insertion point")
         view.insertText("Second paragraph",replacementRange:view.selectedRange())
         check(session.buffer.projection.blocks.count == 2,"Return splits paragraph")
-        check(controller.window?.isDocumentEdited == true && controller.window?.title == session.title && controller.window?.subtitle == "Edited","Unsaved writing uses the native secondary title and edited flag")
+        check(controller.document as? NativeDocument === controller.nativeDocument && controller.nativeDocument.session === session,"Writing uses AppKit's attached document title control")
         view.ensureNativeLayout()
         let paragraphEnd = view.rectFor(view.selectedRange().location)
         view.insertLineBreak(nil)
@@ -651,6 +651,7 @@ import BlankCore
         tutorialWindow.window?.close()
         print("Native acceptance completed")
         FileAcceptance.run()
+        NativeDocumentAcceptance.run()
         session.saveWork?.cancel(); controller.window?.close()
     }
 }

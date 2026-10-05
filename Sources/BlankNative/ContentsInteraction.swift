@@ -183,6 +183,7 @@ final class ContentsRowView: NSButton, NSDraggingSource {
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { draggingUpdated(sender) == .move }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard draggingUpdated(sender) == .move, let drag, let source = drag.source, let session else { return false }
+        guard session.requestEditing() else { return false }
         let changed: Bool
         switch (source.item,item) {
         case let (.heading(from),.heading(to)):

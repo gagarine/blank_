@@ -89,6 +89,7 @@ enum ZoteroIntegration {
                 switch response {
                 case let .failure(error): completion(error)
                 case let .success(entries):
+                    guard session.requestEditing() else { completion(failure("The document is locked.")); return }
                     var bib = session.buffers["writer-zotero.bib"]?.source ?? ""
                     var metadata = (session.buffers["writer-references.json"].flatMap { try? JSONDecoder().decode([String:ZoteroReference].self,from:Data($0.source.utf8)) }) ?? [:]
                     for (ref,entry) in zip(refs,entries) { bib = upsert(bib,key:ref.citeKey,entry:entry); metadata[ref.citeKey] = ref }
@@ -117,6 +118,7 @@ enum ZoteroIntegration {
             switch result {
             case let .failure(error): session.error = error.localizedDescription
             case let .success(entries):
+                guard session.requestEditing() else { return }
                 let bib = session.buffers["writer-zotero.bib"] ?? DocumentBuffer()
                 var text = bib.source
                 for (ref,entry) in zip(ordered,entries) { text = upsert(text,key:ref.citeKey,entry:entry) }

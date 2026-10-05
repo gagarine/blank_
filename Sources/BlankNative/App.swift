@@ -6,6 +6,9 @@ import Combine
 @main enum BlankMain {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--measure") { ResourceMetrics.run(); return }
+        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") {
+            setbuf(stdout,nil)
+        }
         let app = NSApplication.shared
         let delegate = AppController(); app.delegate = delegate
         app.run()
@@ -26,20 +29,21 @@ import Combine
         installMenus()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
+        let file = CommandLine.arguments.dropFirst().first.flatMap { $0.hasPrefix("-") ? nil : $0 }
         if CommandLine.arguments.contains("--tutorial") { tutorial(nil) }
-        else if let file = args.first { openURL(URL(fileURLWithPath:file)) }
+        else if let file { openURL(URL(fileURLWithPath:file)) }
         else { newDocument(nil) }
         // Finish AppKit's launch/activation-policy transition before requesting
         // activation. The complete menu is already attached at this point.
         DispatchQueue.main.async { NSApp.activate() }
-        if CommandLine.arguments.contains("--self-test") {
+        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") {
             // Run outside a main-queue block: the acceptance suite pumps the
             // run loop while waiting for background compiler/file callbacks.
             RunLoop.main.perform {
                 MainActor.assumeIsolated {
                     guard let controller = self.controllers.first else { fatalError("Launch did not open an editor") }
-                    NativeAcceptance.run(controller:controller)
+                    if CommandLine.arguments.contains("--document-self-test") { NativeDocumentAcceptance.run() }
+                    else { NativeAcceptance.run(controller:controller) }
                     exit(0)
                 }
             }
@@ -50,7 +54,8 @@ import Combine
         controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
     }
     @objc func newDocument(_ sender: Any?) { show(DocumentSession()) }
-    @objc func renameDocument(_ sender: Any?) { current?.sheet = .rename }
+    @objc func renameDocument(_ sender: Any?) { current?.performDocumentAction { $0.rename(sender) } }
+    @objc func moveDocument(_ sender: Any?) { current?.performDocumentAction { $0.move(sender) } }
     @objc func openRecent(_ sender: NSMenuItem) { if let url = sender.representedObject as? URL { openURL(url) } }
     @objc func clearRecent(_ sender: Any?) { NSDocumentController.shared.clearRecentDocuments(sender) }
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -66,8 +71,13 @@ import Combine
         panel.begin { [weak self] result in if result == .OK, let url = panel.url { self?.openURL(url) } }
     }
     func openURL(_ url: URL) {
+        if let document = NSDocumentController.shared.document(for:url) { document.showWindows(); return }
         let session = DocumentSession()
-        do { try session.open(url); show(session); NSDocumentController.shared.noteNewRecentDocumentURL(url) }
+        do {
+            try session.open(url)
+            if let entry = session.root?.appendingPathComponent(session.entry), let document = NSDocumentController.shared.document(for:entry) { document.showWindows(); return }
+            show(session); NSDocumentController.shared.noteNewRecentDocumentURL(url)
+        }
         catch { NSAlert(error:error).runModal() }
     }
     @objc func tutorial(_ sender: Any?) {
@@ -104,6 +114,7 @@ import Combine
     @objc func refreshReferences(_ sender: Any?) { if let current { ZoteroIntegration.refresh(current) } }
     @objc func quit(_ sender: Any?) { NSApp.terminate(nil) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication,hasVisibleWindows flag: Bool) -> Bool { if !flag { newDocument(nil) }; return true }
     func application(_ sender: NSApplication,openFiles filenames: [String]) { filenames.forEach { openURL(URL(fileURLWithPath:$0)) }; sender.reply(toOpenOrPrint:.success) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -142,6 +153,7 @@ import Combine
         add(file,"Close Window",#selector(NSWindow.performClose(_:)),"w"); add(file,"Save",#selector(save(_:)),"s",target:self); add(file,"Save As…",#selector(saveAs(_:)),"s",[.command,.shift],target:self)
         add(file,"Export PDF…",#selector(export(_:)),"e",[.command,.shift],target:self)
         add(file,"Rename Document…",#selector(renameDocument(_:)),target:self)
+        add(file,"Move To…",#selector(moveDocument(_:)),target:self)
         let edit = menu("Edit")
         add(edit,"Undo",#selector(undo(_:)),"z",target:self); add(edit,"Redo",#selector(redo(_:)),"z",[.command,.shift],target:self); edit.addItem(.separator())
         add(edit,"Cut",#selector(NSText.cut(_:)),"x"); add(edit,"Copy",#selector(NSText.copy(_:)),"c"); add(edit,"Paste",#selector(NSText.paste(_:)),"v"); add(edit,"Select All",#selector(NSText.selectAll(_:)),"a"); edit.addItem(.separator()); add(edit,"Find…",#selector(find(_:)),"f",target:self)
@@ -157,36 +169,39 @@ import Combine
 }
 @MainActor final class DocumentWindow: NSWindowController, NSWindowDelegate {
     let session: DocumentSession
+    let nativeDocument: NativeDocument
     var toolbarSubscriptions = Set<AnyCancellable>()
     var modeItem: NSToolbarItemGroup?
     var sidebarItem: NSToolbarItem?
-    init(session: DocumentSession) {
+    init(session: DocumentSession,nativeDocument: NativeDocument? = nil) {
         self.session = session
+        self.nativeDocument = nativeDocument ?? NativeDocument(session:session)
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1060,height:780),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         super.init(window:window)
-        window.title = session.title; window.subtitle = session.dirty ? "Edited" : ""; window.isDocumentEdited = session.dirty; window.representedURL = session.root?.appendingPathComponent(session.entry); window.titlebarAppearsTransparent = true
+        window.titlebarAppearsTransparent = true
         if session.dark { window.appearance = NSAppearance(named:.darkAqua) }
         window.center(); window.delegate = self
         window.acceptsMouseMovedEvents = true
         window.contentView = NSHostingView(rootView:EditorRoot(session:session)); window.minSize = NSSize(width:660,height:480)
         installToolbar()
         window.isReleasedWhenClosed = false; session.window = window
-        session.onTitle = { [weak window,weak session] in guard let session else { return }; window?.title = session.title; window?.subtitle = session.dirty ? "Edited" : ""; window?.representedURL = session.root?.appendingPathComponent(session.entry); window?.isDocumentEdited = session.dirty }
+        self.nativeDocument.addWindowController(self)
+        NSDocumentController.shared.addDocument(self.nativeDocument)
+        session.onTitle = { [weak document = self.nativeDocument] in document?.synchronize() }
+        self.nativeDocument.synchronize()
     }
     required init?(coder: NSCoder) { fatalError() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        session.editor?.finishComposition(); session.autosave()
-        if !session.dirty { return true }
-        if !session.ensureRecovery() { let alert = NSAlert(); alert.messageText = "Recovery could not be saved"; alert.informativeText = session.error ?? "Save your writing before closing."; alert.beginSheetModal(for:sender); return false }
-        let alert = NSAlert(); alert.messageText = "Save changes to \(session.title)?"; alert.informativeText = "Your writing has a recovery copy."; alert.addButton(withTitle:"Save…"); alert.addButton(withTitle:"Don’t Save"); alert.addButton(withTitle:"Cancel")
-        alert.beginSheetModal(for:sender) { [weak self] response in
-            guard let self else { return }
-            if response == .alertFirstButtonReturn { self.session.save { success in if success { self.session.dirty = false; sender.close() } } }
-            else if response == .alertSecondButtonReturn { self.session.dirty = false; sender.close() }
+        // NSDocument has already provided the native Save/Don't Save/Cancel
+        // decision. Keep only the durable-recovery guard here.
+        if session.dirty && !session.ensureRecovery() {
+            let alert = NSAlert(); alert.messageText = "Recovery could not be saved"; alert.informativeText = session.error ?? "Save your writing before closing."; alert.beginSheetModal(for:sender); return false
         }
-        return false
+        return true
     }
     func windowWillClose(_ notification: Notification) {
+        nativeDocument.removeWindowController(self)
+        nativeDocument.close()
         session.watchers.forEach { $0.cancel() }; session.saveWork?.cancel(); session.diskScanWork?.cancel()
         AppController.shared?.controllers.removeAll { $0 === self }
     }

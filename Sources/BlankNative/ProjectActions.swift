@@ -22,6 +22,7 @@ import BlankCore
         if added { revision += 1; installWatchers() }
     }
     @discardableResult func moveChapter(_ from: String,before target: String,after: Bool = false) -> Bool {
+        guard requestEditing() else { return false }
         guard from != target, from != entry, target != entry else { return false }
         for parent in includes {
             guard let model = buffers[parent] else { continue }
@@ -44,7 +45,8 @@ import BlankCore
         var common = 0; while common < min(from.count,to.count) && from[common] == to[common] { common += 1 }
         return (Array(repeating:"..",count:from.count-common)+to.dropFirst(common)).joined(separator:"/")
     }
-    func saveCopy(to url: URL) throws {
+    func saveCopy(to url: URL,removing original: URL? = nil,adopt: Bool = true,overwritingSnapshot: Bool = false) throws {
+        guard !overwritingSnapshot || !adopt else { throw CocoaError(.fileWriteNoPermission) }
         let destination = url.deletingLastPathComponent(), newEntry = url.lastPathComponent
         guard newEntry == entry || buffers[newEntry] == nil else { throw CocoaError(.fileWriteFileExists) }
         let entryModel = buffers[entry]!
@@ -79,14 +81,49 @@ import BlankCore
         for (path,data) in dependencies {
             let target = try Self.dependencyTarget(path,root:destination)
             guard target != url else { throw CocoaError(.fileWriteFileExists) }
-            if FileManager.default.fileExists(atPath:target.path), try Data(contentsOf:target) != data { throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"\(path) already exists with different content. Choose an empty folder."]) }
+            if !overwritingSnapshot, FileManager.default.fileExists(atPath:target.path), try Data(contentsOf:target) != data { throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"\(path) already exists with different content. Choose an empty folder."]) }
         }
-        for (path,data) in dependencies { try Self.writeDependency(data,path:path,root:destination) }
+        for (path,data) in dependencies {
+            if overwritingSnapshot {
+                let target = try Self.dependencyTarget(path,root:destination)
+                try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true)
+                try data.write(to:target,options:.atomic)
+            } else { try Self.writeDependency(data,path:path,root:destination) }
+        }
         try Data(entrySource.utf8).write(to:url,options:.atomic)
+        if let original {
+            // Do not delete a file changed by another writer during relocation.
+            guard try String(contentsOf:original,encoding:.utf8) == entryModel.source else { throw CocoaError(.fileWriteUnknown) }
+            if let tags = try? original.resourceValues(forKeys:[.tagNamesKey]) {
+                var destinationURL = url; try destinationURL.setResourceValues(tags)
+            }
+            try FileManager.default.removeItem(at:original)
+        }
+        guard adopt else { return }
+        let identityChanged = entry != newEntry || root?.path != destination.path || entryModel.source != entrySource
         entryModel.commit(entrySource,selection:entrySelection)
         let old = entry; buffers[newEntry] = buffers.removeValue(forKey:old)
         if active == old { active = newEntry }; entry = newEntry; root = destination; bases = buffers.mapValues(\.source); dirty = false
+        if identityChanged { revision += 1 }
         installWatchers(); onTitle?(); persistRecovery(); NSDocumentController.shared.noteNewRecentDocumentURL(url)
+        if identityChanged && mode == .preview { compile() }
+    }
+    func moveEntry(to url: URL) throws {
+        editor?.finishComposition(); saveWork?.cancel()
+        guard let root else { try saveCopy(to:url); return }
+        let original = try Self.dependencyTarget(entry,root:root)
+        if original.standardizedFileURL == url.standardizedFileURL { return }
+        guard !FileManager.default.fileExists(atPath:url.path) else { throw CocoaError(.fileWriteFileExists) }
+        if original.deletingLastPathComponent().standardizedFileURL == url.deletingLastPathComponent().standardizedFileURL {
+            try renameEntry(url.lastPathComponent); return
+        }
+        try saveToDisk()
+        guard ensureRecovery() else { throw CocoaError(.fileWriteUnknown) }
+        var coordinationError: NSError?, writeError: (any Error)?
+        NSFileCoordinator(filePresenter:window?.windowController?.document as? NSFilePresenter).coordinate(writingItemAt:original,options:.forMoving,writingItemAt:url,options:.forReplacing,error:&coordinationError) { from,to in
+            do { try saveCopy(to:to,removing:from) } catch { writeError = error }
+        }
+        if let error = coordinationError ?? writeError as NSError? { throw error }
     }
     func renameEntry(_ requested: String) throws {
         let name = requested.trimmingCharacters(in:.whitespacesAndNewlines)

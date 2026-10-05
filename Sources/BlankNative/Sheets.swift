@@ -31,7 +31,8 @@ struct CommandsSheet: View {
             ("Preview mode","⌘3",{ session.sheet = nil; session.switchMode(.preview) }),
             ("Find in document","⌘F",{ session.sheet = nil; session.showSearch() }),
             ("New document","⌘N",{ session.sheet = nil; AppController.shared.newDocument(nil) }),
-            ("Rename document","",{ session.sheet = .rename }),
+            ("Rename document","",{ session.performDocumentAction { $0.rename(nil) } }),
+            ("Move document","",{ session.performDocumentAction { $0.move(nil) } }),
             ("Tutorial","",{ session.sheet = nil; AppController.shared.tutorial(nil) }),
             ("Export PDF","⌘⇧E",{ session.sheet = nil; session.exportPDF() }),
             ("Fullscreen","⌃⌘F",{ session.sheet = nil; session.window?.toggleFullScreen(nil) }),
@@ -58,6 +59,7 @@ struct CommandsSheet: View {
         case "Find in document": return "magnifyingglass"
         case "New document": return "doc.badge.plus"
         case "Rename document": return "character.cursor.ibeam"
+        case "Move document": return "folder"
         case "Tutorial": return "book"
         case "Export PDF": return "square.and.arrow.up"
         case "Fullscreen": return "arrow.up.left.and.arrow.down.right"
@@ -87,20 +89,6 @@ struct CommandsSheet: View {
             }.frame(height:min(340,max(64,CGFloat(matches.count)*46-2)))
         }.onDisappear { session.pendingCommandKeys.removeAll() }
     }
-}
-struct RenameSheet: View {
-    @ObservedObject var session: DocumentSession
-    @NativeState var name = ""
-    @NativeState var failure = ""
-    @FocusState var focused: Bool
-    var body: some View {
-        SheetFrame(title:"Rename document",dismiss:{ session.sheet = nil }) {
-            TextField("Document name",text:$name).textFieldStyle(.roundedBorder).focused($focused).onSubmit { rename() }
-            if !failure.isEmpty { Text(failure).font(.system(size:11)).foregroundStyle(.red) }
-            HStack { Spacer(); Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction); Button("Rename") { rename() }.keyboardShortcut(.defaultAction) }
-        }.onAppear { name = (session.entry as NSString).lastPathComponent.replacingOccurrences(of:".typ",with:""); focused = true }
-    }
-    func rename() { do { try session.renameEntry(name); session.sheet = nil } catch { failure = error.localizedDescription } }
 }
 struct SettingsSheet: View {
     @ObservedObject var session: DocumentSession
@@ -217,6 +205,7 @@ struct InsertionSheet: View {
         ZoteroIntegration.search(query:text,library:library) { result in finding = false; switch result { case let .success(items): refs = items; case let .failure(error): failure = error.localizedDescription } }
     }
     func insert() {
+        guard session.requestEditing() else { return }
         switch session.insertionKind {
         case "table":
             let cells = (0..<rows*columns).map { "  [\($0 < columns ? "Column \($0+1)" : "")]," }.joined(separator:"\n")
@@ -254,6 +243,7 @@ struct ObjectSheet: View {
         }.onAppear { raw = session.buffer.source.bytes(block.source) }
     }
     func apply() {
+        guard session.requestEditing() else { return }
         let buffer = session.buffer
         buffer.commit(buffer.source.replacingBytes(block.source,with:raw),selection:buffer.selection)
         session.changed(); session.sheet = nil

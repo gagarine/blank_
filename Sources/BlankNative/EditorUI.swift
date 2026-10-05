@@ -187,6 +187,7 @@ struct EditorRoot: View {
         }.frame(minWidth:660,minHeight:420).background(chrome).preferredColorScheme(session.dark ? .dark : nil)
         .sheet(item:$session.sheet,onDismiss:{
             if searchAfterSheet { searchAfterSheet = false; focusSearch() }
+            let action = session.pendingDocumentAction; session.pendingDocumentAction = nil; action?()
         }) { sheet in
             switch sheet {
             case .commands: CommandsSheet(session:session)
@@ -195,7 +196,6 @@ struct EditorRoot: View {
             case .insertion: InsertionSheet(session:session)
             case .object: ObjectSheet(session:session)
             case .conflict: ConflictSheet(session:session)
-            case .rename: RenameSheet(session:session)
             }
         }
         .onChange(of:session.searchFocusRequest) { _,_ in
