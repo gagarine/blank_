@@ -3,6 +3,7 @@
 import base64
 import json
 import pathlib
+import re
 import subprocess
 import tempfile
 import time
@@ -39,7 +40,16 @@ with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
         assert any(a['path'] == 'chapters/one.typ' for a in result['sourceMap'])
         assert all(0 <= a['y'] <= 1 for a in result['sourceMap'])
         print(f"PASS: in-memory includes, Unicode, table, link, footnote, math, source mapping; {time.monotonic()-start:.3f}s warm compile")
-        result = call('compile',{'root':str(root),'entry':'main.typ','files':{'main.typ':'#nonexistent()'},'revision':3})
+        typography = 'Regular café text. *Bold text.* _Italic text._\n\n$ integral_0^infinity e^(-x^2) dif x = sqrt(pi) / 2 $'
+        result = call('compile', {'root':str(root),'entry':'fonts.typ','files':{'fonts.typ':typography},'revision':3})
+        assert not result['diagnostics'], result
+        pdf = base64.b64decode(result['pdf'])
+        font_names = {name.split(b'+')[-1].removesuffix(b'-Identity-H') for name in re.findall(rb'/BaseFont\s*/([^\s/<>]+)', pdf)}
+        expected = {b'LibertinusSerif-Regular', b'LibertinusSerif-Bold', b'LibertinusSerif-Italic', b'NewCMMath-Book'}
+        assert expected <= font_names, font_names
+        assert not any(b'LastResort' in name for name in font_names), font_names
+        print('PASS: PDF uses bundled regular/bold/italic text and math fonts without LastResort glyph fallback')
+        result = call('compile',{'root':str(root),'entry':'main.typ','files':{'main.typ':'#nonexistent()'},'revision':4})
         assert result['diagnostics'] and 'pdf' not in result
         print('PASS: invalid Typst returns diagnostics without a replacement PDF')
     finally:
