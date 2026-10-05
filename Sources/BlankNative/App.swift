@@ -164,14 +164,14 @@ import Combine
         self.session = session
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1060,height:780),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
         super.init(window:window)
-        window.title = session.windowTitle; window.isDocumentEdited = session.dirty; window.representedURL = session.root?.appendingPathComponent(session.entry); window.titlebarAppearsTransparent = true
+        window.title = session.title; window.subtitle = session.dirty ? "Edited" : ""; window.isDocumentEdited = session.dirty; window.representedURL = session.root?.appendingPathComponent(session.entry); window.titlebarAppearsTransparent = true
         if session.dark { window.appearance = NSAppearance(named:.darkAqua) }
         window.center(); window.delegate = self
         window.acceptsMouseMovedEvents = true
         window.contentView = NSHostingView(rootView:EditorRoot(session:session)); window.minSize = NSSize(width:660,height:480)
         installToolbar()
         window.isReleasedWhenClosed = false; session.window = window
-        session.onTitle = { [weak window,weak session] in guard let session else { return }; window?.title = session.windowTitle; window?.representedURL = session.root?.appendingPathComponent(session.entry); window?.isDocumentEdited = session.dirty }
+        session.onTitle = { [weak window,weak session] in guard let session else { return }; window?.title = session.title; window?.subtitle = session.dirty ? "Edited" : ""; window?.representedURL = session.root?.appendingPathComponent(session.entry); window?.isDocumentEdited = session.dirty }
     }
     required init?(coder: NSCoder) { fatalError() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {

@@ -59,7 +59,7 @@ import BlankCore
         check(controller.window?.firstResponder === view && view.shouldDrawInsertionPoint,"Return keeps focus and a native insertion point")
         view.insertText("Second paragraph",replacementRange:view.selectedRange())
         check(session.buffer.projection.blocks.count == 2,"Return splits paragraph")
-        check(controller.window?.isDocumentEdited == true && controller.window?.title == session.title+" — Edited","Unsaved writing appears as Edited in the native window title")
+        check(controller.window?.isDocumentEdited == true && controller.window?.title == session.title && controller.window?.subtitle == "Edited","Unsaved writing uses the native secondary title and edited flag")
         view.ensureNativeLayout()
         let paragraphEnd = view.rectFor(view.selectedRange().location)
         view.insertLineBreak(nil)
