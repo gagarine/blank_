@@ -4,6 +4,10 @@ public struct LiteralInclude {
     public var path: String
     public var source: ByteSpan
 }
+public struct LiteralFileReference {
+    public var path: String
+    public var source: ByteSpan
+}
 public struct TextCounts {
     public var words = 0
     public var characters = 0
@@ -25,14 +29,26 @@ func literalIncludes(_ source: String,_ parsed: ParsedSource,kind: String = "Mod
     }
 }
 public func literalAssetPaths(_ source: String,_ parsed: ParsedSource) -> [String] {
-    var paths: [String] = []
+    literalAssetReferences(source,parsed).map(\.path)
+}
+public func literalFileReferences(_ source: String,_ parsed: ParsedSource) -> [LiteralFileReference] {
+    var paths = literalAssetReferences(source,parsed)
+    for kind in ["ModuleInclude","ModuleImport"] {
+        for node in parsed.tree.descendants(kind) {
+            if let argument = node.children.first(where:{ $0.kind == "Str" }), let path = try? JSONDecoder().decode(String.self,from:Data(source.bytes(argument.span).utf8)) { paths.append(LiteralFileReference(path:path,source:argument.span)) }
+        }
+    }
+    return paths
+}
+private func literalAssetReferences(_ source: String,_ parsed: ParsedSource) -> [LiteralFileReference] {
+    var paths: [LiteralFileReference] = []
     func string(_ node: SyntaxNode) -> String? { try? JSONDecoder().decode(String.self,from:Data(source.bytes(node.span).utf8)) }
     for call in parsed.tree.descendants("FuncCall") {
         guard let name = call.children.first, ["image","read","bibliography"].contains(source.bytes(name.span)), let args = call.children.first(where:{ $0.kind == "Args" }) else { continue }
-        if let literal = args.children.first(where:{ $0.kind == "Str" }), let path = string(literal) { paths.append(path) }
+        if let literal = args.children.first(where:{ $0.kind == "Str" }), let path = string(literal) { paths.append(LiteralFileReference(path:path,source:literal.span)) }
         if source.bytes(name.span) == "bibliography" {
             for named in args.children where named.kind == "Named" {
-                if let key = named.children.first, source.bytes(key.span) == "style", let value = named.children.first(where:{ $0.kind == "Str" }), let path = string(value), path.lowercased().hasSuffix(".csl") { paths.append(path) }
+                if let key = named.children.first, source.bytes(key.span) == "style", let value = named.children.first(where:{ $0.kind == "Str" }), let path = string(value), path.lowercased().hasSuffix(".csl") { paths.append(LiteralFileReference(path:path,source:value.span)) }
             }
         }
     }

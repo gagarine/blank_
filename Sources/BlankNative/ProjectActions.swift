@@ -47,6 +47,23 @@ import BlankCore
     func saveCopy(to url: URL) throws {
         let destination = url.deletingLastPathComponent(), newEntry = url.lastPathComponent
         guard newEntry == entry || buffers[newEntry] == nil else { throw CocoaError(.fileWriteFileExists) }
+        let entryModel = buffers[entry]!
+        var entrySource = entryModel.source, entrySelection = entryModel.selection
+        if !(entry as NSString).deletingLastPathComponent.isEmpty {
+            // Save As relocates the entry to the chosen filename. Rebase only
+            // literal file arguments; preserve comments and custom expressions.
+            for reference in literalFileReferences(entryModel.source,entryModel.parsed).sorted(by:{ $0.source.start > $1.source.start }) {
+                guard !reference.path.hasPrefix("@"), let path = projectAssetPath(reference.path,file:entry), path != reference.path else { continue }
+                let replacement = typstStringLiteral(path)
+                func mapped(_ position: Int) -> Int {
+                    if position <= reference.source.start { return position }
+                    if position >= reference.source.end { return position+replacement.utf8.count-reference.source.count }
+                    return reference.source.start+replacement.utf8.count
+                }
+                entrySelection = EditSelection(mapped(entrySelection.anchor),mapped(entrySelection.focus))
+                entrySource = entrySource.replacingBytes(reference.source,with:replacement)
+            }
+        }
         var dependencies = assets
         if let root {
             for path in referencedAssets() where dependencies[path] == nil {
@@ -65,7 +82,8 @@ import BlankCore
             if FileManager.default.fileExists(atPath:target.path), try Data(contentsOf:target) != data { throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"\(path) already exists with different content. Choose an empty folder."]) }
         }
         for (path,data) in dependencies { try Self.writeDependency(data,path:path,root:destination) }
-        try Data(buffers[entry]!.source.utf8).write(to:url,options:.atomic)
+        try Data(entrySource.utf8).write(to:url,options:.atomic)
+        entryModel.commit(entrySource,selection:entrySelection)
         let old = entry; buffers[newEntry] = buffers.removeValue(forKey:old)
         if active == old { active = newEntry }; entry = newEntry; root = destination; bases = buffers.mapValues(\.source); dirty = false
         installWatchers(); onTitle?(); persistRecovery(); NSDocumentController.shared.noteNewRecentDocumentURL(url)

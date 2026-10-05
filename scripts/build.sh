@@ -1,13 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+configuration=${1:-debug}
+case "$configuration" in debug|release) ;; *) echo "Usage: $0 [debug|release]" >&2; exit 2 ;; esac
+export MACOSX_DEPLOYMENT_TARGET=26.0
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/module-cache"
 mkdir -p "$CLANG_MODULE_CACHE_PATH" .build/cache
-cargo build --offline --release --locked --manifest-path typst-syntax-bridge/Cargo.toml
-cargo build --offline --release --locked --manifest-path helper/Cargo.toml
-configuration=${1:-debug}
-swift build --disable-sandbox --cache-path .build/cache -c "$configuration"
+cargo_options=(--locked)
+if [[ "${BLANK_OFFLINE:-0}" == 1 ]]; then cargo_options+=(--offline); fi
+cargo build --release "${cargo_options[@]}" --manifest-path typst-syntax-bridge/Cargo.toml
+cargo build --release "${cargo_options[@]}" --manifest-path helper/Cargo.toml
+sdk_path=${BLANK_SDK_PATH:-$(xcrun --sdk macosx --show-sdk-path)}
+sdk_version=$(/usr/libexec/PlistBuddy -c 'Print :Version' "$sdk_path/SDKSettings.plist")
+swift_options=(--sdk "$sdk_path")
+if (( ${sdk_version%%.*} >= 27 )); then swift_options+=(-Xswiftc -DBLANK_MACOS27_SDK); fi
+swift build --disable-sandbox --cache-path .build/cache -c "$configuration" "${swift_options[@]}"
 app="$PWD/build/blank_.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 install_binary() {
@@ -21,7 +29,10 @@ install_binary typst-syntax-bridge/target/release/libblank_syntax.dylib "$app/Co
 install_binary helper/target/release/writer-helper "$app/Contents/MacOS/writer-helper"
 cp examples/Tutorial.typ "$app/Contents/Resources/"
 install_name_tool -id @rpath/libblank_syntax.dylib "$app/Contents/MacOS/libblank_syntax.dylib"
-install_name_tool -change "$PWD/typst-syntax-bridge/target/release/libblank_syntax.dylib" @rpath/libblank_syntax.dylib "$app/Contents/MacOS/blank_"
+parser_dependency=$(otool -L "$app/Contents/MacOS/blank_" | sed -n 's/^[[:space:]]*\(.*libblank_syntax\.dylib\) (compatibility.*$/\1/p')
+if [[ -z "$parser_dependency" ]]; then echo 'Missing Typst parser dependency in editor executable' >&2; exit 1; fi
+install_name_tool -change "$parser_dependency" @rpath/libblank_syntax.dylib "$app/Contents/MacOS/blank_"
+otool -L "$app/Contents/MacOS/blank_" | grep -q '@rpath/libblank_syntax.dylib'
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

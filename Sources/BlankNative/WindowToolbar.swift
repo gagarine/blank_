@@ -34,7 +34,9 @@ extension DocumentWindow: NSToolbarDelegate {
             let item = NSToolbarItemGroup(itemIdentifier:identifier,titles:EditorMode.allCases.map(\.rawValue),selectionMode:.selectOne,labels:nil,target:self,action:#selector(chooseMode(_:)))
             item.label = "Editor View"; item.paletteLabel = "Write, Source and Preview"; item.controlRepresentation = .expanded
             item.selectedIndex = EditorMode.allCases.firstIndex(of:session.mode) ?? 0
+            #if BLANK_MACOS27_SDK
             if #available(macOS 27, *) { item.role = .tabs }
+            #endif
             item.visibilityPriority = .high; modeItem = item; return item
         }
         let item = NSToolbarItem(itemIdentifier:identifier); item.target = self

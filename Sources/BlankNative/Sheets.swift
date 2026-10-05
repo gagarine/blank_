@@ -215,7 +215,7 @@ struct InsertionSheet: View {
         }
     }
 }
-func jsonString(_ text: String) -> String { String(data:try! JSONEncoder().encode(text),encoding:.utf8)! }
+func jsonString(_ text: String) -> String { typstStringLiteral(text) }
 func safeLabel(_ text: String) -> String { text.filter { $0.isLetter || $0.isNumber || "-_:.".contains($0) } }
 struct ObjectSheet: View {
     @ObservedObject var session: DocumentSession
@@ -276,15 +276,7 @@ struct ConflictSheet: View {
             Text(session.conflictDisk.keys.sorted().joined(separator:"\n")).font(.system(size:12,design:.monospaced))
             HStack {
                 Button("Use disk version") {
-                    session.persistRecovery()
-                    for (path,text) in session.conflictDisk {
-                        if session.deletedFiles.contains(path) {
-                            if path == session.entry { session.root = nil; session.buffers[path]?.loadExternal(""); session.bases.removeAll() }
-                            else { session.buffers.removeValue(forKey:path); session.bases.removeValue(forKey:path); if session.active == path { session.active = session.entry } }
-                        } else { session.buffers[path]?.loadExternal(text); session.bases[path] = text }
-                    }
-                    session.deletedFiles.removeAll()
-                    session.conflictDisk.removeAll(); session.sheet = nil; session.error = nil; session.revision += 1; session.editor?.refresh()
+                    session.useDiskVersion()
                 }
                 Spacer()
                 Button("Keep my writing") {

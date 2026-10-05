@@ -73,3 +73,9 @@ public func escapeTypst(_ text: String) -> String {
     }
     return result
 }
+public func typstStringLiteral(_ text: String) -> String {
+    let encoder = JSONEncoder()
+    // Typst treats an escaped slash as a backslash in file paths.
+    encoder.outputFormatting = [.withoutEscapingSlashes]
+    return String(data:try! encoder.encode(text),encoding:.utf8)!
+}

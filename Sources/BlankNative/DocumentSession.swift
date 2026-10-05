@@ -179,6 +179,7 @@ struct Recovery: Codable {
         let target = root.appendingPathComponent(path)
         guard let disk = try? String(contentsOf:target,encoding:.utf8) else {
             if !FileManager.default.fileExists(atPath:target.path) { deletedFiles.insert(path); conflictDisk[path] = ""; error = "\(path) was deleted outside blank_. Your writing is retained in recovery."; sheet = .conflict; persistRecovery() }
+            else { error = "Could not read \(path) as UTF-8. Saving is blocked until the file can be read; your local writing is retained in recovery."; persistRecovery() }
             return
         }
         guard disk != base else { if reinstall { installWatchers() }; return }
@@ -206,6 +207,26 @@ struct Recovery: Codable {
             try recoveryQueue.sync { try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true); try data.write(to:target,options:.atomic) }
             return true
         } catch { self.error = "Recovery could not be saved: "+error.localizedDescription; return false }
+    }
+    @discardableResult func useDiskVersion() -> Bool {
+        editor?.finishComposition()
+        // Keep the discarded local revision independently of the rolling journal.
+        // Later autosaves and termination must not replace this conflict copy.
+        let archive = recoveryURL.deletingLastPathComponent().appendingPathComponent("\(id)-conflict-\(UUID().uuidString).json")
+        do {
+            let payload = Recovery(id:id,entry:entry,root:root?.path,files:buffers.mapValues(\.source),assets:assets)
+            let data = try JSONEncoder().encode(payload)
+            try recoveryQueue.sync { try FileManager.default.createDirectory(at:archive.deletingLastPathComponent(),withIntermediateDirectories:true); try data.write(to:archive,options:.atomic) }
+        } catch { self.error = "Local writing could not be preserved: "+error.localizedDescription; return false }
+        for (path,text) in conflictDisk {
+            if deletedFiles.contains(path) {
+                if path == entry { root = nil; buffers[path]?.loadExternal(""); bases.removeAll() }
+                else { buffers.removeValue(forKey:path); bases.removeValue(forKey:path); if active == path { active = entry } }
+            } else { buffers[path]?.loadExternal(text); bases[path] = text }
+        }
+        deletedFiles.removeAll(); conflictDisk.removeAll(); sheet = nil; error = nil
+        refreshIncludes(); revision += 1; editor?.refresh(); onTitle?()
+        return true
     }
     func save(_ saveAs: Bool = false, completion: ((Bool)->Void)? = nil) {
         editor?.finishComposition()
@@ -252,8 +273,13 @@ struct Recovery: Codable {
             if bases[path] != nil && !FileManager.default.fileExists(atPath:target.path) {
                 checkDisk(path); throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"A project file was deleted. Resolve the change before saving."])
             }
-            if let disk = try? String(contentsOf:target,encoding:.utf8), let base = bases[path], disk != base && disk != buffer.source {
-                checkDisk(path); throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"External changes detected. Your local recovery copy is safe."])
+            if FileManager.default.fileExists(atPath:target.path) {
+                let disk: String
+                do { disk = try String(contentsOf:target,encoding:.utf8) }
+                catch { persistRecovery(); throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"Could not read \(path) as UTF-8. The file has not been overwritten; your local writing is retained in recovery.",NSUnderlyingErrorKey:error]) }
+                if disk != bases[path] && disk != buffer.source {
+                    checkDisk(path); persistRecovery(); throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"External changes detected in \(path). Your local writing is retained in recovery."])
+                }
             }
         }
         for (path,data) in assets {

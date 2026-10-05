@@ -69,9 +69,15 @@ import BlankCore
         editor.insertText("日本",replacementRange:NSRange(location:NSNotFound,length:0))
         check(session.buffer.projection.text.hasSuffix("日本"),"Native marked-text composition commits once")
         check(editor.textLayoutManager == nil,"TextKit 1 retained through composition")
+        editor.setMarkedText("語",selectedRange:NSRange(location:1,length:0),replacementRange:editor.selectedRange())
+        let terminatingController = AppController(); terminatingController.controllers = [controller]
+        terminatingController.prepareDocumentsForTermination(); session.recoveryQueue.sync {}
+        check(!editor.hasMarkedText() && session.buffer.projection.text.hasSuffix("日本語"),"Quit preparation commits visible marked text before autosave")
+        let terminationRecovery = try! JSONDecoder().decode(Recovery.self,from:Data(contentsOf:session.recoveryURL))
+        check(terminationRecovery.files[session.entry] == session.buffer.source,"Quit recovery includes the completed native composition")
         editor.formatNative(false)
         editor.insertText("A",replacementRange:editor.selectedRange()); editor.insertText("B",replacementRange:editor.selectedRange())
-        check(session.buffer.projection.text.hasSuffix("日本AB") && !session.buffer.parsed.erroneous,"Bold typing remains valid across keystrokes")
+        check(session.buffer.projection.text.hasSuffix("日本語AB") && !session.buffer.parsed.erroneous,"Bold typing remains valid across keystrokes")
         editor.formatNative(false); editor.insertText("C",replacementRange:editor.selectedRange())
         check(!session.buffer.projection.blocks.last!.inlines.flatMap(\.runs).last!.style.bold && !session.buffer.parsed.erroneous,"Bold typing can be turned off inside a word")
         editor.insertionBold = nil
@@ -303,7 +309,7 @@ import BlankCore
         let pixels = bitmap.bitmapData!
         for x in 0..<64 { for y in 0..<32 { let at = y*bitmap.bytesPerRow+x*4; pixels[at] = x < 32 ? 40 : 240; pixels[at+1] = x < 32 ? 100 : 140; pixels[at+2] = x < 32 ? 200 : 30; pixels[at+3] = 255 } }
         session.assets["assets/test.png"] = bitmap.representation(using:.png,properties:[:])!
-        session.buffer.loadExternal("#figure(image(\"assets/test.png\", width: 85%), caption: [A native caption])\n\nAfter")
+        session.buffer.loadExternal("#figure(image(\(jsonString("assets/test.png")), width: 85%), caption: [A native caption])\n\nAfter")
         session.revision += 1; editor.refresh(); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(editor.objectViews[0] is FigureBlockView && loadImage("assets/test.png",session:session) != nil,"Figure renders through native AppKit image view")
         check(editor.textLayoutManager == nil,"TextKit 1 retained with native figure")

@@ -95,6 +95,30 @@ final class DocumentTests {
         XCTAssertEqual(target.projection.blocks[0].level,2)
         XCTAssertEqual(target.projection.blocks[1].kind,"bullet")
     }
+    func testStructuredPasteAtCaret() {
+        let heading = DocumentBuffer("= Heading"), fragment = heading.copy(NSRange(location:0,length:heading.projection.text.utf16.count))
+        for (source,caret,expected) in [("HelloWorld",5,["Hello","Heading","World"]),("Café 👋*bold* tail",9,["Café 👋bo","Heading","ld tail"]),("- HelloWorld",5,["Hello","Heading","World"])] {
+            let original = "// unchanged\n#set text(size: 11pt)\n\n"+source+"\n\n#custom"
+            let target = DocumentBuffer(original), block = target.projection.blocks.first { $0.editable }!
+            let range = NSRange(location:block.display.location+caret,length:0), at = target.projection.sourceOffset(at:range.location)
+            target.selection = EditSelection(at,at)
+            target.paste(fragment,range:range)
+            XCTAssertEqual(target.projection.blocks.filter(\.editable).map(\.text),expected)
+            XCTAssertFalse(target.parsed.erroneous)
+            XCTAssertTrue(target.source.hasPrefix("// unchanged\n#set text(size: 11pt)\n\n")); XCTAssertTrue(target.source.hasSuffix("\n\n#custom"))
+            XCTAssertEqual(target.projection.blocks.first { $0.text == "Heading" }?.kind,"heading")
+            target.undo(); XCTAssertEqual(target.source,original); XCTAssertEqual(target.selection,EditSelection(at,at))
+            target.redo(); XCTAssertEqual(target.projection.blocks.filter(\.editable).map(\.text),expected)
+        }
+    }
+    func testTypstStringLiterals() {
+        for text in ["assets/café image.png","../chapters/one.typ","https://typst.app/docs","a \"quote\" and \\ backslash"] {
+            let literal = typstStringLiteral(text)
+            XCTAssertFalse(literal.contains("\\/"))
+            XCTAssertEqual(try! JSONDecoder().decode(String.self,from:Data(literal.utf8)),text)
+            XCTAssertFalse(ParsedSource.parse("#let value = "+literal).erroneous)
+        }
+    }
     func testHistoryGroupingAndSelections() {
         let b = DocumentBuffer()
         b.commit("a",selection:EditSelection(1,1),group:"typing",now:1)
@@ -316,6 +340,8 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Paragraph joining",t.testParagraphJoinKeepsFormatting),
             ("Paragraph and soft line breaks",t.testParagraphAndLineBreaks),
             ("Structured clipboard",t.testClipboardHeadingAndList),
+            ("Structured paste at caret",t.testStructuredPasteAtCaret),
+            ("Typst string literals",t.testTypstStringLiterals),
             ("Grouped history and selections",t.testHistoryGroupingAndSelections),
             ("Cross-mark deletion",t.testCrossMarkupDeletionRemainsValid),
             ("Consecutive code",t.testConsecutiveCodeBlocksStayTogether),

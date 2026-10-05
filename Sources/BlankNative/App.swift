@@ -93,7 +93,7 @@ import Combine
     func applicationShouldHandleReopen(_ sender: NSApplication,hasVisibleWindows flag: Bool) -> Bool { if !flag { newDocument(nil) }; return true }
     func application(_ sender: NSApplication,openFiles filenames: [String]) { filenames.forEach { openURL(URL(fileURLWithPath:$0)) }; sender.reply(toOpenOrPrint:.success) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        controllers.forEach { $0.session.autosave() }
+        prepareDocumentsForTermination()
         let unsaved = controllers.filter { $0.session.dirty }
         if unsaved.contains(where:{ !$0.session.ensureRecovery() }) { let alert = NSAlert(); alert.messageText = "Recovery could not be saved"; alert.informativeText = "Keep blank_ open and save your writing to a writable location before quitting."; alert.runModal(); return .terminateCancel }
         if unsaved.isEmpty { return .terminateNow }
@@ -102,6 +102,9 @@ import Combine
         if result == .alertSecondButtonReturn { return .terminateNow }
         if result == .alertFirstButtonReturn { unsaved.first?.window?.makeKeyAndOrderFront(nil); unsaved.first?.session.save() }
         return .terminateCancel
+    }
+    func prepareDocumentsForTermination() {
+        controllers.forEach { $0.session.editor?.finishComposition(); $0.session.autosave() }
     }
     func installMenus() {
         let bar = NSMenu(); NSApp.mainMenu = bar

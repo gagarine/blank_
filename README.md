@@ -8,16 +8,18 @@ The Go implementation on `codex/legacy-go` is the reference for document behavio
 
 ## Build and run
 
-Requires macOS **26 or newer**, Swift 6.4 Command Line Tools with the macOS 27 SDK, Rust and Python 3 for checks. Current verification is on Apple Silicon/macOS 27. The pinned Rust dependencies build offline when cached; remove `--offline` in the build script for a first dependency download.
+Requires macOS **26 or newer**, Xcode/Command Line Tools with the macOS 26 or 27 SDK and Swift 6, Rust **1.98.1** (pinned in `rust-toolchain.toml`) and Python 3 for checks. Current local verification is on Apple Silicon/macOS 27 with Swift 6.4, using both installed SDKs. Dependencies download automatically on a first build; set `BLANK_OFFLINE=1` to require cached Rust dependencies.
 
 ```sh
 bash scripts/build.sh          # debug app; optimized compiler/parser
 open build/blank_.app
 bash scripts/build.sh release  # optimized frontend
-bash scripts/check.sh          # model, parser, compiler and native acceptance
+bash scripts/check.sh          # release build, model, parser, compiler and native acceptance
 ```
 
 Both build configurations update the same `build/blank_.app`. The obsolete QA/layout/review app copies have been removed; debug binaries and compiler caches remain in `.build` and the Rust target directories for iteration.
+
+GitHub Actions builds, checks and archives the native app on macOS 26 and [the Xcode 27 runner](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md) for pushes and pull requests. The bundled app has a macOS 26 deployment target. SDK 26 uses the standard native segmented toolbar; SDK 27 builds additionally enable the native tab role when running macOS 27. To choose an installed SDK locally, set `BLANK_SDK_PATH` to its absolute path. Automated artifacts are ad-hoc signed, without notarization or automatic release publishing. Intel builds are not currently verified.
 
 Write follows native text-substitution and spelling preferences; Source disables prose substitutions to preserve Typst code. Native Services and saved-document title proxies are available.
 
@@ -27,7 +29,7 @@ In Write, Return starts a new paragraph with a visible gap, including empty para
 
 The page, text, tables and Source colors follow the macOS appearance by default. Settings can force Dark appearance or disable “Use system colors” for a custom page and text palette.
 
-The native menus provide document windows, New Paper/New Thesis, Open Recent, save/rename, PDF export, shared undo/redo, formatting and search. Saved files autosave after 650 ms of inactivity. Unsaved writing gets recovery copies; File → Open Recovery Copy opens one as an unsaved document. External conflicts and deleted files require resolution before overwriting. Save As copies known project dependencies and imported assets after checking collisions. Local imports are loaded as dependencies; literal image/read/bibliography/custom-CSL paths are discovered from syntax rather than commented examples. Dynamic dependencies and package caches still need separate handling.
+The native menus provide document windows, New Paper/New Thesis, Open Recent, save/rename, PDF export, shared undo/redo, formatting and search. Saved files autosave after 650 ms of inactivity. Unsaved writing gets recovery copies; File → Open Recovery Copy opens one as an unsaved document. External conflicts, deleted files and unreadable/non-UTF-8 replacements block saving. Choosing the disk version retains discarded local writing in a separate conflict recovery file. Save As copies known project dependencies and imported assets after checking collisions; moving a nested entry rebases literal file references and preserves unrelated source. Local imports are loaded as dependencies; literal image/read/bibliography/custom-CSL paths are discovered from syntax rather than commented examples. Dynamic dependencies and package caches still need separate handling.
 
 ## Architecture
 
@@ -71,7 +73,7 @@ Windows/Linux releases are outside this frontend's scope. Pandoc exchange, cloud
 
 ## Validation
 
-`bash scripts/check.sh` exercises the production source model, official parser/compiler, real native text views and disposable project files. The Command Line Tools environment lacks XCTest, so the 22 model checks run through the `BlankCoreChecks` executable. Native checks cover typing, paragraph/line breaks and empty insertion slots, formatting, clipboard, block drag handlers/geometry, synthetic composition, tables, figures, view switching, Source font faces, caret-menu geometry, PDF failure retention/export, saving, conflicts, deletion recovery, chapter history and Save As dependencies.
+`bash scripts/check.sh` exercises the production source model, official parser/compiler, real native text views and disposable project files. The Command Line Tools environment lacks XCTest, so the 24 model checks run through the `BlankCoreChecks` executable. Native checks cover typing, paragraph/line breaks and empty insertion slots, formatting, clipboard, block drag handlers/geometry, synthetic composition and Quit snapshots, tables, figures, view switching, Source font faces, caret-menu geometry, PDF failure retention/export, saving, conflicts, deletion recovery, chapter history and nested-entry Save As dependencies. Native checks require a logged-in macOS window-server session and briefly open a disposable window. Test recovery data is removed automatically; debug/release compiler caches remain for iteration.
 
 Resource measurements and their limits are recorded in [docs/acceptance.md](docs/acceptance.md). Native IME candidates, VoiceOver, bidirectional navigation and live Zotero remain unverified. The unchanged tutorial describes the Go app; some steps await Swift parity.
 

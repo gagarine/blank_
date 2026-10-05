@@ -402,6 +402,15 @@ public final class DocumentBuffer {
             let at = b.source.start
             commit(source.replacingBytes(ByteSpan(at,projection.blocks[projection.blockIndex(at:NSMaxRange(range))].source.end),with:fragment.source),selection:EditSelection(at+fragment.source.utf8.count,at+fragment.source.utf8.count))
         } else if fragment.block && range.length == 0 {
+            let offset = range.location-b.display.location
+            if b.editable && offset > 0 && offset < b.display.length {
+                let prefix = source.bytes(ByteSpan(b.source.start,b.body.start)), suffix = source.bytes(ByteSpan(b.body.end,b.source.end))
+                let left = prefix+sliceInlines(b.inlines,0,offset,source:source)+suffix
+                let right = (b.kind == "heading" ? "" : prefix)+sliceInlines(b.inlines,offset,b.display.length,source:source)+(b.kind == "heading" ? "" : suffix)
+                let inserted = left+"\n\n"+fragment.source+"\n\n"+right
+                let caret = b.source.start+left.utf8.count+2+fragment.source.utf8.count
+                commit(source.replacingBytes(b.source,with:inserted),selection:EditSelection(caret,caret)); return
+            }
             let before = range.location == b.display.location
             let at = before ? b.source.start : b.source.end
             let inserted = (before ? "" : "\n\n")+fragment.source+(before ? "\n\n" : "")

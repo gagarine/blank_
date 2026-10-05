@@ -8,10 +8,10 @@ import tempfile
 import time
 
 repo = pathlib.Path(__file__).resolve().parent.parent
-helper = repo / 'helper/target/release/writer-helper'
+helper = repo / 'build/blank_.app/Contents/MacOS/writer-helper'
 with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
     root = pathlib.Path(temp)
-    process = subprocess.Popen([str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    process = subprocess.Popen([str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=root)
     seq = 0
     def call(method, params):
         global seq
