@@ -398,6 +398,45 @@ import BlankCore
         session.buffer.loadExternal(tableBeforeDimensions); session.revision += 1; editor.refresh()
         editor.tableControlCell = (0,2); editor.positionTableControls()
         check(editor.tableButtons.count == 2 && editor.tableButtons.allSatisfy { !$0.isHidden },"Native row and column controls are visible beside table")
+        let rowButton = editor.tableButtons[0], columnButton = editor.tableButtons[1]
+        let rowBounds = editor.tableCellRect(block:0,cell:2)!, columnBounds = editor.tableCellRect(block:0,cell:0)!
+        check(editor.tableButtons.allSatisfy { $0.frame.width >= 28 && $0.frame.height >= 28 && $0.isBordered },"Table action controls have visible native buttons and generous targets")
+        check(abs(rowButton.frame.midY-rowBounds.midY) < 1 && rowButton.frame.maxX < rowBounds.minX && abs(columnButton.frame.midX-columnBounds.midX) < 1 && columnButton.frame.maxY < columnBounds.minY,"Table controls align to cell borders without covering content")
+        check(editor.tableButtons.allSatisfy { ($0.cell as? NSPopUpButtonCell)?.arrowPosition == .noArrow },"Table action icons do not have crowded dropdown arrows")
+        check(editor.tableButtons.allSatisfy { button in editor.hitTest(editor.convert(NSPoint(x:button.frame.midX,y:button.frame.midY),to:editor.superview)) === button },"Mouse hits reach the native table buttons instead of the text view")
+        check(editor.tableButtons.allSatisfy { button in editor.accessibilityChildren()?.contains { ($0 as? NSView) === button } == true },"Native table actions are exposed to accessibility tools")
+        let tableHandle = editor.tableBlockHandleRect(0)!
+        check(!tableHandle.intersects(rowButton.frame) && !tableHandle.intersects(columnButton.frame),"Table block grip is separate from row and column action buttons")
+        let tableHandlePoint = NSPoint(x:tableHandle.midX,y:tableHandle.midY)
+        editor.mouseEntered(with:pointer(.mouseMoved,tableHandlePoint))
+        check(editor.hoverBlock == 0 && NSCursor.current == .openHand,"Table block grip remains reachable with an open-hand cursor")
+        editor.mouseDown(with:pointer(.leftMouseDown,tableHandlePoint))
+        check(editor.grabbed == 0 && NSCursor.current == .closedHand,"Separate table grip starts a block drag")
+        let tableDragPoint = NSPoint(x:tableHandlePoint.x+5,y:tableHandlePoint.y)
+        editor.mouseDragged(with:pointer(.leftMouseDragged,tableDragPoint)); editor.mouseUp(with:pointer(.leftMouseUp,tableDragPoint))
+        let outsideTable = session.buffer.projection.blocks.last!.display.location
+        editor.setSelectedRange(NSRange(location:outsideTable,length:0)); editor.captureSelection()
+        editor.tableControlCell = (0,2); editor.positionTableControls()
+        let rowFrame = rowButton.frame, columnFrame = columnButton.frame
+        let pointerSelection = editor.selectedRange(), pointerSource = session.buffer.source
+        for x in stride(from:rowBounds.minX+4,through:rowFrame.midX,by:-2) {
+            editor.mouseMoved(with:pointer(.mouseMoved,NSPoint(x:x,y:rowFrame.midY)))
+            check(!rowButton.isHidden && rowButton.frame == rowFrame && editor.tableControlCell?.1 == 2,"Row control stays reachable across the table gutter")
+        }
+        for y in stride(from:columnBounds.minY+4,through:columnFrame.midY,by:-2) {
+            editor.mouseMoved(with:pointer(.mouseMoved,NSPoint(x:columnFrame.midX,y:y)))
+            check(!columnButton.isHidden && columnButton.frame == columnFrame && editor.tableControlCell.map { $0.1%2 == 0 } == true,"Column control stays reachable across the table gutter")
+        }
+        check(NSCursor.current == .arrow && editor.selectedRange() == pointerSelection && session.buffer.source == pointerSource,"Approaching table controls uses an arrow and preserves document selection")
+        editor.tableControlCell = (0,2); editor.positionTableControls()
+        let trackedMenu = rowButton.menu!
+        rowButton.menuWillOpen(trackedMenu)
+        editor.mouseMoved(with:pointer(.mouseMoved,NSPoint(x:editor.rectFor(cellRange(3).location).midX,y:editor.rectFor(cellRange(3).location).midY)))
+        editor.positionTableControls()
+        check(rowButton.menu === trackedMenu && rowButton.frame == rowFrame && editor.tableControlCell?.1 == 2,"Open table menus retain their target and menu while the pointer moves")
+        rowButton.menuDidClose(trackedMenu)
+        editor.mouseMoved(with:pointer(.mouseMoved,NSPoint(x:rowBounds.minX,y:editor.rectFor(outsideTable).maxY+100)))
+        check(editor.tableButtons.allSatisfy(\.isHidden),"Leaving an unselected table hides its controls")
         editor.focusTableCell(0,4); editor.insertText("/",replacementRange:editor.selectedRange())
         check(Set(editor.slashMatches.map(\.kind)) == Set(["paragraph","link","footnote","citation","label","reference"]),"Cell slash menu offers only supported paragraph and inline actions")
         editor.slashQuery = "table"

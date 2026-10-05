@@ -67,7 +67,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var track: NSTrackingArea?
     var lastPresentationRevision = -1
     var codeButtons: [Int:CodeDisclosureButton] = [:]
-    var tableButtons: [NSPopUpButton] = []
+    var tableButtons: [TableActionButton] = []
     var tableControlCell: (Int,Int)?
     var lastRevision = -1
     var lastMode: EditorMode?
@@ -80,6 +80,13 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var insertionItalic: Bool?
     private var undoProxy = UndoManager()
     override var undoManager: UndoManager? { undoProxy }
+    override func accessibilityChildren() -> [Any]? {
+        let children = super.accessibilityChildren() ?? []
+        // NSTextView exposes text rather than its overlay subviews by default.
+        // Include the native controls so assistive tools can reach their menus.
+        let controls: [NSView] = tableButtons.filter { !$0.isHidden } + codeButtons.values.filter { !$0.isHidden }
+        return children + controls.filter { control in !children.contains { ($0 as? NSView) === control } }
+    }
     override func setFrameSize(_ size: NSSize) {
         let changedWidth = abs(size.width-frame.width) > 1
         super.setFrameSize(size); updatePadding()
@@ -615,8 +622,18 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard let session, session.mode == .write else { return nil }
         return session.buffer.projection.blocks.indices.first { index in
             let rect = blockRect(index)
+            if tableBlockHandleRect(index)?.contains(point) == true { return true }
             return point.y >= rect.minY-5 && point.y < rect.maxY+5 && point.x >= textContainerInset.width-38 && point.x < bounds.width-textContainerInset.width
         }
+    }
+    func tableBlockHandleRect(_ index: Int) -> NSRect? {
+        guard let blocks = session?.buffer.projection.blocks, blocks.indices.contains(index), blocks[index].kind == "table",
+              let firstCell = tableCellRect(block:index,cell:0) else { return nil }
+        return NSRect(x:textContainerInset.width-38,y:firstCell.minY-30,width:32,height:28)
+    }
+    func isOverBlockHandle(_ point: NSPoint,index: Int) -> Bool {
+        if let rect = tableBlockHandleRect(index) { return rect.contains(point) }
+        return point.x >= textContainerInset.width-38 && point.x <= textContainerInset.width-6
     }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with:event) }
     private func updateSlashMenuCursor(for event: NSEvent) -> Bool {
@@ -637,21 +654,21 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard session?.mode == .write, grabbed == nil else { return }
         if updateSlashMenuCursor(for:event) { return }
         let point = convert(event.locationInWindow,from:nil)
-        if codeButtons.values.contains(where:{ $0.frame.contains(point) }) || tableButtons.contains(where:{ $0.frame.contains(point) && !$0.isHidden }) { NSCursor.arrow.set(); return }
+        if codeButtons.values.contains(where:{ $0.frame.contains(point) }) || tableButtons.contains(where:{ $0.trackingMenu || !$0.isHidden && $0.frame.insetBy(dx:-6,dy:-6).contains(point) }) { NSCursor.arrow.set(); return }
         let offset = characterIndexForInsertion(at:point)
-        if let cell = session?.buffer.projection.tableCell(at:NSRange(location:offset,length:0)), hoveredBlock(at:point) == cell.block { tableControlCell = (cell.block,cell.cell) }
-        else { tableControlCell = session?.buffer.projection.tableCell(at:selectedRange()).map { ($0.block,$0.cell) } }
+        if let cell = session?.buffer.projection.tableCell(at:NSRange(location:offset,length:0)), tableCellRect(block:cell.block,cell:cell.cell)?.contains(point) == true { tableControlCell = (cell.block,cell.cell) }
+        else if tableControlReachRect()?.contains(point) != true { tableControlCell = session?.buffer.projection.tableCell(at:selectedRange()).map { ($0.block,$0.cell) } }
         positionTableControls()
         let next = bounds.contains(point) ? hoveredBlock(at:point) : nil
         if next != hoverBlock { hoverBlock = next; needsDisplay = true }
-        if point.x >= textContainerInset.width-35 && point.x <= textContainerInset.width-8 && next != nil { NSCursor.openHand.set() }
+        if let next, isOverBlockHandle(point,index:next) { NSCursor.openHand.set() }
         else { (bounds.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set() }
     }
     override func mouseExited(with event: NSEvent) { if grabbed == nil { hoverBlock = nil; needsDisplay = true; NSCursor.arrow.set() } }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow,from:nil)
         if grabbed == nil { hoverBlock = hoveredBlock(at:point); needsDisplay = true }
-        if let hoverBlock = hoveredBlock(at:point), point.x >= textContainerInset.width-38 && point.x <= textContainerInset.width-6 {
+        if let hoverBlock = hoveredBlock(at:point), isOverBlockHandle(point,index:hoverBlock) {
             self.hoverBlock = hoverBlock
             grabbed = hoverBlock; pressPoint = point; dragPoint = point; draggingBlock = false
             let region = blockRect(hoverBlock)
@@ -743,8 +760,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             if let line = dropIndicatorRect() { session.inkColor.withAlphaComponent(0.45).setFill(); line.fill() }
         } else if let index = grabbed ?? hoverBlock {
             let rect = rectFor(session.buffer.projection.blocks[index].display.location)
+            let centerY = tableBlockHandleRect(index)?.midY ?? rect.midY
             session.inkColor.withAlphaComponent(0.45).setFill()
-            for row in 0..<3 { for column in 0..<2 { NSBezierPath(ovalIn:NSRect(x:textContainerInset.width-26+CGFloat(column*5),y:rect.midY-6+CGFloat(row*5),width:3,height:3)).fill() } }
+            for row in 0..<3 { for column in 0..<2 { NSBezierPath(ovalIn:NSRect(x:textContainerInset.width-26+CGFloat(column*5),y:centerY-6+CGFloat(row*5),width:3,height:3)).fill() } }
         }
     }
     func listNumber(_ index: Int) -> Int {
@@ -826,6 +844,14 @@ final class BlockMenuItem: NSMenuItem {
 }
 
 final class CodeDisclosureButton: NSButton { var blockIndex = 0; var collapsed = false }
+final class TableActionButton: NSPopUpButton, NSMenuDelegate {
+    var trackingMenu = false
+    weak var editor: NativeTextView?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() { super.resetCursorRects(); addCursorRect(bounds,cursor:.arrow) }
+    func menuWillOpen(_ menu: NSMenu) { trackingMenu = true }
+    func menuDidClose(_ menu: NSMenu) { trackingMenu = false; editor?.positionTableControls() }
+}
 final class TableMenuItem: NSMenuItem {
     var blockIndex = 0
     var cell = 0
@@ -909,28 +935,55 @@ extension NativeTextView {
             let targetRow = row+(item.column ? 0 : item.operation == "after" ? 1 : 0)
             let targetCol = col+(item.column && item.operation == "after" ? 1 : 0)
             focusTableCell(item.blockIndex,min(next.tableCells.count-1,min(targetRow,next.tableCells.count/next.columns-1)*next.columns+min(targetCol,next.columns-1)))
-            tableControlCell = nil; positionTableControls()
         } else { session.error = "This table's structure must be edited in Source." }
     }
     func positionTableControls() {
+        guard !tableButtons.contains(where:{ $0.trackingMenu }) else { return }
         guard let session, session.mode == .write, let (index,cell) = tableControlCell, session.buffer.projection.blocks.indices.contains(index) else { tableButtons.forEach { $0.isHidden = true }; return }
         let block = session.buffer.projection.blocks[index]
         guard block.cellRanges.indices.contains(cell), block.columns > 0 else { tableButtons.forEach { $0.isHidden = true }; return }
         if tableButtons.isEmpty {
             for column in [false,true] {
-                let button = NSPopUpButton(frame:.zero,pullsDown:true)
-                button.isBordered = false; button.bezelStyle = .smallSquare
+                let button = TableActionButton(frame:.zero,pullsDown:true)
+                button.editor = self
+                button.isBordered = true; button.bezelStyle = .rounded
+                button.imagePosition = .imageOnly
+                (button.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
                 button.setAccessibilityLabel(column ? "Table column actions" : "Table row actions")
                 addSubview(button); tableButtons.append(button)
             }
         }
-        let cellRect = rectFor(block.display.location+block.cellRanges[cell].location)
-        let columnRect = rectFor(block.display.location+block.cellRanges[cell%block.columns].location)
+        guard let rowRect = tableCellRect(block:index,cell:cell/block.columns*block.columns),
+              let columnRect = tableCellRect(block:index,cell:cell%block.columns) else { tableButtons.forEach { $0.isHidden = true }; return }
         for (offset,button) in tableButtons.enumerated() {
             let column = offset == 1, menu = tableMenu(block:index,cell:cell,column:column)
             let label = NSMenuItem(title:"",action:nil,keyEquivalent:""); label.image = NSImage(systemSymbolName:"ellipsis",accessibilityDescription:nil); menu.insertItem(label,at:0)
+            menu.delegate = button
             button.menu = menu; button.isHidden = false
-            button.frame = column ? NSRect(x:columnRect.minX+4,y:columnRect.minY-27,width:25,height:18) : NSRect(x:textContainerInset.width-18,y:cellRect.minY,width:18,height:25)
+            button.toolTip = column ? "Column \(cell%block.columns+1) actions" : "Row \(cell/block.columns+1) actions"
+            button.frame = column ? NSRect(x:columnRect.midX-14,y:columnRect.minY-30,width:28,height:28) : NSRect(x:rowRect.minX-30,y:rowRect.midY-14,width:28,height:28)
         }
+    }
+    func tableCellRect(block index: Int,cell: Int) -> NSRect? {
+        guard let blocks = session?.buffer.projection.blocks, blocks.indices.contains(index),
+              let storage = textStorage, let layoutManager else { return nil }
+        let block = blocks[index]
+        guard block.cellRanges.indices.contains(cell) else { return nil }
+        let native = block.cellRanges[cell], range = NSRange(location:block.display.location+native.location,length:native.length+1)
+        guard NSMaxRange(range) <= storage.length,
+              let style = storage.attribute(.paragraphStyle,at:range.location,effectiveRange:nil) as? NSParagraphStyle,
+              let textBlock = style.textBlocks.first as? NSTextTableBlock else { return nil }
+        layoutManager.ensureLayout(forCharacterRange:range)
+        let glyphs = layoutManager.glyphRange(forCharacterRange:range,actualCharacterRange:nil)
+        let rect = layoutManager.boundsRect(for:textBlock,glyphRange:glyphs)
+        return rect.isEmpty ? nil : rect.offsetBy(dx:textContainerOrigin.x,dy:textContainerOrigin.y)
+    }
+    func tableControlReachRect() -> NSRect? {
+        guard let (index,cell) = tableControlCell, let blocks = session?.buffer.projection.blocks, blocks.indices.contains(index) else { return nil }
+        let block = blocks[index]
+        guard block.columns > 0, let active = tableCellRect(block:index,cell:cell),
+              let row = tableCellRect(block:index,cell:cell/block.columns*block.columns),
+              let column = tableCellRect(block:index,cell:cell%block.columns) else { return nil }
+        return active.union(row).union(column).insetBy(dx:-36,dy:-36)
     }
 }
