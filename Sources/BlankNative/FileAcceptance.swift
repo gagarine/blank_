@@ -1,11 +1,17 @@
-import Foundation
+import AppKit
 import BlankCore
 
 @MainActor enum FileAcceptance {
     static func run() {
         let fm = FileManager.default, folder = fm.temporaryDirectory.appendingPathComponent("blank-files-"+UUID().uuidString)
+        let recentDocuments = NSDocumentController.shared.recentDocumentURLs
         var sessions: [DocumentSession] = []
-        defer { sessions.forEach { $0.saveWork?.cancel(); $0.diskScanWork?.cancel(); $0.watchers.forEach { $0.cancel() }; $0.recoveryQueue.sync {} }; try? fm.removeItem(at:folder) }
+        defer {
+            sessions.forEach { $0.saveWork?.cancel(); $0.diskScanWork?.cancel(); $0.watchers.forEach { $0.cancel() }; $0.recoveryQueue.sync {} }
+            try? fm.removeItem(at:folder)
+            NSDocumentController.shared.clearRecentDocuments(nil)
+            recentDocuments.reversed().forEach { NSDocumentController.shared.noteNewRecentDocumentURL($0) }
+        }
         func check(_ value: Bool,_ label: String) { precondition(value,label); print("PASS: "+label) }
         do {
             let root = folder.appendingPathComponent("original"), copy = folder.appendingPathComponent("copy")
