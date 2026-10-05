@@ -76,6 +76,7 @@ public struct ProjectedBlock {
     // paragraph terminators between cells, which are layout, not source bytes.
     public var cellProjections: [Projection] = []
     public var cellRanges: [NSRange] = []
+    public var collapsed = false
     public var columns: Int = 0
     public var text: String { inlines.flatMap(\.runs).map(\.text).joined() }
     public func shifted(by delta: Int) -> ProjectedBlock {
@@ -190,11 +191,9 @@ public struct Projection {
                     if raw.hasPrefix("#quote"), let content = next.descendants("ContentBlock").first?.markup {
                         b = block(n, kind: "quote", body: content)
                     }
-                    if b.kind == "table" {
-                        b.tableCells = next.children.first { $0.kind == "Args" }?.children.filter { $0.kind == "ContentBlock" }.compactMap { $0.markup?.span } ?? []
-                        if let regex = try? NSRegularExpression(pattern: "columns:\\s*(\\d+)"), let match = regex.firstMatch(in: raw, range: NSRange(location: 0, length: raw.utf16.count)) {
-                            b.columns = Int((raw as NSString).substring(with: match.range(at: 1))) ?? 0
-                        }
+                    if b.kind == "table", let table = nativeTableArguments(next,source:source) {
+                        b.tableCells = table.cells.compactMap { $0.markup?.span }
+                        b.columns = Int(source.bytes(table.columns.span)) ?? 0
                     }
                     if b.kind == "table" && b.columns > 0 && !b.tableCells.isEmpty && b.tableCells.count % b.columns == 0 {
                         b.inlines = []

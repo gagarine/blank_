@@ -47,6 +47,7 @@ jobs:
             helper/target
             typst-syntax-bridge/target
           key: native-${{ matrix.runner }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
+          restore-keys: native-${{ matrix.runner }}-${{ runner.arch }}-
       - name: Build release and run checks
         run: bash scripts/check.sh release
       - name: Verify portable bundle and archive

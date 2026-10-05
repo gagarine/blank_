@@ -131,7 +131,7 @@ fn compile(params: Value) -> Result<Value,String> {
     let p: CompileRequest = serde_json::from_value(params).map_err(|e| e.to_string())?;
     let root = Path::new(&p.root).canonicalize().map_err(|e|e.to_string())?;
     static FONTS: OnceLock<typst_kit::fonts::FontStore> = OnceLock::new();
-    let fonts = FONTS.get_or_init(||{let mut store=typst_kit::fonts::FontStore::new();store.extend(typst_kit::fonts::embedded());store.extend(typst_kit::fonts::system());store});
+    let fonts = FONTS.get_or_init(||{let mut store=typst_kit::fonts::FontStore::new();store.extend(typst_kit::fonts::system());store});
     let path=VirtualPath::new(&p.entry).map_err(|e|e.to_string())?;
     let world = Environment { root, main: FileId::new(RootedPath::new(VirtualRoot::Project,path)), library: LazyHash::new(Library::default()), fonts, files:p.files, sources:Mutex::new(HashMap::new()),binary:Mutex::new(HashMap::new()),time:typst_kit::datetime::Time::system() };
     let compiled = typst::compile::<typst_layout::PagedDocument>(&world);

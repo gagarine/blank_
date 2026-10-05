@@ -32,8 +32,6 @@ struct CommandsSheet: View {
             ("Preview mode","⌘3",{ session.sheet = nil; session.switchMode(.preview) }),
             ("Find in document","⌘F",{ session.sheet = nil; session.searchVisible = true }),
             ("New document","⌘N",{ session.sheet = nil; AppController.shared.newDocument(nil) }),
-            ("New paper","",{ session.sheet = nil; AppController.shared.newPaper(nil) }),
-            ("New thesis","",{ session.sheet = nil; AppController.shared.newThesis(nil) }),
             ("Rename document","",{ session.sheet = .rename }),
             ("Tutorial","",{ session.sheet = nil; AppController.shared.tutorial(nil) }),
             ("Export PDF","⌘⇧E",{ session.sheet = nil; session.exportPDF() }),
@@ -45,8 +43,37 @@ struct CommandsSheet: View {
         ]
     }
     var matches: [(String,String,()->Void)] { actions.filter { session.commandQuery.isEmpty || $0.0.localizedCaseInsensitiveContains(session.commandQuery) } }
+    var commandWidth: CGFloat {
+        let widest = actions.map { ($0.0 as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:12)]).width + ($0.1 as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:10)]).width }.max() ?? 200
+        return ceil(widest+140)
+    }
+    func symbol(_ title: String) -> String {
+        switch title {
+        case "Settings": return "gearshape"
+        case "Statistics & info": return "chart.bar"
+        case "Open document": return "folder"
+        case "Save": return "square.and.arrow.down"
+        case "Write mode": return "pencil"
+        case "Source mode": return "chevron.left.forwardslash.chevron.right"
+        case "Preview mode": return "doc.richtext"
+        case "Find in document": return "magnifyingglass"
+        case "New document": return "doc.badge.plus"
+        case "Rename document": return "character.cursor.ibeam"
+        case "Tutorial": return "book"
+        case "Export PDF": return "square.and.arrow.up"
+        case "Fullscreen": return "arrow.up.left.and.arrow.down.right"
+        case "Refresh preview": return "arrow.clockwise"
+        case "Bibliography style": return "books.vertical"
+        case "Refresh Zotero references": return "arrow.triangle.2.circlepath"
+        case "Open recovery copy": return "clock.arrow.circlepath"
+        default:
+            if title.contains("contents") { return "sidebar.left" }
+            if title.contains("focus") { return "text.alignleft" }
+            return "arrow.up.and.down.text.horizontal"
+        }
+    }
     var body: some View {
-        SheetFrame(title:"Commands",dismiss:{ session.sheet = nil }) {
+        SheetFrame(title:"Commands",width:commandWidth,dismiss:{ session.sheet = nil }) {
             TextField("Search commands…",text:$session.commandQuery).textFieldStyle(.roundedBorder).focused($focused).onSubmit { if matches.indices.contains(selectedCommand) { matches[selectedCommand].2() } }
                 .onKeyPress(.downArrow) { selectedCommand = min(selectedCommand+1,max(0,matches.count-1)); return .handled }
                 .onKeyPress(.upArrow) { selectedCommand = max(0,selectedCommand-1); return .handled }
@@ -55,7 +82,7 @@ struct CommandsSheet: View {
                 ScrollView {
                     VStack(spacing:2) {
                         ForEach(Array(matches.enumerated()),id:\.offset) { index,action in
-                            Button { action.2() } label: { HStack { Text(action.0).font(.system(size:12)); Spacer(); Text(action.1).font(.system(size:10)).foregroundStyle(.tertiary) }.padding(10).background(index == selectedCommand ? Color.primary.opacity(0.05) : .clear).clipShape(RoundedRectangle(cornerRadius:5)).contentShape(Rectangle()) }.buttonStyle(.plain).id(index)
+                            MenuRowButton(label:action.0,action:action.2) { HStack(spacing:10) { Image(systemName:symbol(action.0)).frame(width:20).foregroundStyle(.secondary); Text(action.0).font(.system(size:12)).lineLimit(1).fixedSize(); Spacer(); Text(action.1).font(.system(size:10)).foregroundStyle(.tertiary).fixedSize() }.padding(10).frame(maxWidth:.infinity).contentShape(Rectangle()).background(index == selectedCommand ? Color.primary.opacity(0.05) : .clear).clipShape(RoundedRectangle(cornerRadius:5)).contentShape(.interaction,Rectangle()) }.id(index)
                         }
                     }
                 }.onChange(of:selectedCommand) { _,index in proxy.scrollTo(index) }.onChange(of:session.commandQuery) { _,_ in proxy.scrollTo(0) }
@@ -79,11 +106,11 @@ struct RenameSheet: View {
 }
 struct SettingsSheet: View {
     @ObservedObject var session: DocumentSession
-    var fonts: [String] { NSFontManager.shared.availableFontFamilies.sorted() }
+    var fonts: [String] { EditorPreferences.installedEditorFamilies }
     var body: some View {
         SheetFrame(title:"Settings",dismiss:{ session.sheet = nil }) {
             Form {
-                Picker("Reading font",selection:$session.fontFamily) { ForEach(fonts,id:\.self) { Text($0).tag($0) } }
+                Picker("Editor font",selection:$session.fontFamily) { ForEach(fonts,id:\.self) { Text($0).tag($0) } }.pickerStyle(.menu)
                 HStack { Text("Text size"); Slider(value:$session.fontSize,in:13...28,step:1); Text("\(Int(session.fontSize)) pt").monospacedDigit().frame(width:45) }
                 Toggle("Use system colors",isOn:$session.systemColors)
                 ColorPicker("Page",selection:$session.paper,supportsOpacity:false).disabled(session.systemColors)
@@ -93,7 +120,7 @@ struct SettingsSheet: View {
                 Toggle("Typewriter scrolling",isOn:$session.typewriter)
             }.formStyle(.grouped).frame(height:370)
             Text("Source uses the system monospace face. PDF typography is controlled by your Typst source.").font(.system(size:11)).foregroundStyle(.secondary)
-            HStack { Spacer(); Button("Done") { UserDefaults.standard.set(session.fontFamily,forKey:"readingFont"); UserDefaults.standard.set(session.fontSize,forKey:"readingSize"); UserDefaults.standard.set(session.systemColors,forKey:"systemColors"); EditorPreferences.store(session.paper,key:"paper"); EditorPreferences.store(session.ink,key:"ink"); UserDefaults.standard.set(session.dark,forKey:"dark"); session.sheet = nil; session.editor?.lastAppearance = ""; session.editor?.refresh() }.keyboardShortcut(.defaultAction) }
+            HStack { Spacer(); Button("Done") { UserDefaults.standard.set(session.fontFamily,forKey:"editorFont"); UserDefaults.standard.set(session.fontSize,forKey:"readingSize"); UserDefaults.standard.set(session.systemColors,forKey:"systemColors"); EditorPreferences.store(session.paper,key:"paper"); EditorPreferences.store(session.ink,key:"ink"); UserDefaults.standard.set(session.dark,forKey:"dark"); session.sheet = nil; session.editor?.lastAppearance = ""; session.editor?.refresh() }.keyboardShortcut(.defaultAction) }
         }
     }
 }
@@ -220,52 +247,18 @@ func safeLabel(_ text: String) -> String { text.filter { $0.isLetter || $0.isNum
 struct ObjectSheet: View {
     @ObservedObject var session: DocumentSession
     @NativeState var raw = ""
-    @NativeState var cells: [String] = []
-    @NativeState var columns = 0
-    @NativeState var originalCells: [String] = []
-    @NativeState var originalColumns = 0
     var block: ProjectedBlock { session.buffer.projection.blocks[min(session.objectIndex,session.buffer.projection.blocks.count-1)] }
     var body: some View {
-        SheetFrame(title:block.kind == "table" && columns > 0 ? "Edit table" : "Edit \(block.kind)",width:620,dismiss:{ session.sheet = nil }) {
-            if block.kind == "table" && columns > 0 {
-                ScrollView {
-                    LazyVGrid(columns:Array(repeating:GridItem(.flexible()),count:columns),spacing:9) {
-                        ForEach(cells.indices,id:\.self) { index in TextField("Cell",text:$cells[index],axis:.vertical).textFieldStyle(.roundedBorder).lineLimit(1...4) }
-                    }
-                }.frame(maxHeight:300)
-                HStack {
-                    Button("Add row") { cells += Array(repeating:"",count:columns) }
-                    Button("Remove row") { if cells.count > columns { cells.removeLast(columns) } }.disabled(cells.count <= columns)
-                    Spacer()
-                    Button("Add column") { var next: [String] = []; for row in stride(from:0,to:cells.count,by:columns) { next += Array(cells[row..<min(row+columns,cells.count)])+[""] }; cells = next; columns += 1 }.disabled(columns >= 12)
-                    Button("Remove column") { if columns > 1 { cells = cells.enumerated().filter { $0.offset % columns != columns-1 }.map(\.element); columns -= 1 } }.disabled(columns <= 1)
-                }.controlSize(.small)
-            } else {
-                TextEditor(text:$raw).font(.system(size:13,design:.monospaced)).frame(height:260).border(Color.primary.opacity(0.1))
-                Text("Every character is preserved. Preview shows the typeset result.").font(.system(size:11)).foregroundStyle(.secondary)
-            }
+        SheetFrame(title:"Edit source",width:620,dismiss:{ session.sheet = nil }) {
+            TextEditor(text:$raw).font(.system(size:13,design:.monospaced)).frame(height:260).border(Color.primary.opacity(0.1))
+            Text("Every character is preserved. Preview shows the typeset result.").font(.system(size:11)).foregroundStyle(.secondary)
             HStack { Spacer(); Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction); Button("Apply") { apply() }.keyboardShortcut(.defaultAction) }
-        }.onAppear {
-            raw = session.buffer.source.bytes(block.source); columns = block.columns
-            cells = block.tableCells.map { session.buffer.source.bytes($0) }; originalCells = cells; originalColumns = columns
-        }
+        }.onAppear { raw = session.buffer.source.bytes(block.source) }
     }
     func apply() {
-        let buffer = session.buffer, b = block
-        var text = buffer.source
-        if b.kind == "table" && columns > 0 {
-            if cells.count == originalCells.count && columns == originalColumns {
-                for index in cells.indices.reversed() where cells[index] != originalCells[index] { text = text.replacingBytes(b.tableCells[index],with:cells[index]) }
-            } else {
-                // Keep named table options when changing dimensions.
-                let parsed = ParsedSource.parse(raw)
-                let named = parsed.tree.descendants("Named").filter { !raw.bytes($0.span).hasPrefix("columns:") }.map { "  "+raw.bytes($0.span)+"," }.joined(separator:"\n")
-                let content = cells.map { "  [\($0)]," }.joined(separator:"\n")
-                let replacement = "#table(columns: \(columns),\n\(named)\n\(content)\n)"
-                text = text.replacingBytes(b.source,with:replacement)
-            }
-        } else { text = text.replacingBytes(b.source,with:raw) }
-        buffer.commit(text,selection:buffer.selection); session.changed(); session.sheet = nil
+        let buffer = session.buffer
+        buffer.commit(buffer.source.replacingBytes(block.source,with:raw),selection:buffer.selection)
+        session.changed(); session.sheet = nil
     }
 }
 struct ConflictSheet: View {

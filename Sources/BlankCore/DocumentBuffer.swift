@@ -62,6 +62,8 @@ public final class DocumentBuffer {
         let parsed = ParsedSource.parse(source); parsedCache = parsed; return parsed
     }
     public private(set) var lastEditWasLocal = false
+    private var collapsedSourceStarts = Set<Int>()
+    public private(set) var presentationRevision = 0
     public private(set) var projection: Projection
     public private(set) var revision: Int = 0
     public var selection = EditSelection(0, 0)
@@ -111,10 +113,19 @@ public final class DocumentBuffer {
         assign(text,patch:patch); selection = after; return true
     }
     public func loadExternal(_ text: String) {
-        guard text != source else { return }; undoSteps.removeAll(); redoSteps.removeAll(); assign(text)
+        guard text != source else { return }; collapsedSourceStarts.removeAll(); projection = Projection(source:source,parsed:parsed); undoSteps.removeAll(); redoSteps.removeAll(); assign(text)
         selection = EditSelection(min(selection.anchor, source.utf8.count), min(selection.focus, source.utf8.count))
     }
     private func assign(_ text: String, patch: SourcePatch? = nil) {
+        if let change = patch ?? SourcePatch.difference(source,text) {
+            collapsedSourceStarts = Set(projection.blocks.filter { $0.collapsed }.compactMap { block in
+                if change.start+change.removed.utf8.count <= block.source.start {
+                    return block.source.start+change.inserted.utf8.count-change.removed.utf8.count
+                }
+                if change.start >= block.source.end { return block.source.start }
+                return nil
+            })
+        }
         lastEditWasLocal = false
         // Conservative local reparse: one text block, no newline or structural
         // boundary change. Unknown code and cross-block edits always take the full path.
@@ -138,7 +149,7 @@ public final class DocumentBuffer {
         source = text; let fresh = ParsedSource.parse(text); parsedCache = fresh; hasSyntaxErrors = fresh.erroneous
         includes = literalIncludes(text,fresh)
         imports = literalIncludes(text,fresh,kind:"ModuleImport")
-        projection = Projection(source:text,parsed:fresh); revision += 1
+        projection = folded(Projection(source:text,parsed:fresh)); revision += 1
     }
     public func undo() {
         guard let step = undoSteps.popLast() else { return }
@@ -391,7 +402,12 @@ public final class DocumentBuffer {
                 }
             } else { pieces.append(sliceInlines(b.inlines,a,z,source:source)) }
         }
-        let plain = (projection.text as NSString).substring(with:range)
+        var plain = (projection.text as NSString).substring(with:range)
+        if projection.blocks.contains(where:{ $0.collapsed && NSIntersectionRange($0.display,range).length > 0 }) {
+            let expanded = Projection(source:source,parsed:parsed)
+            let a = expanded.displayOffset(at:projection.sourceOffset(at:range.location)), z = expanded.displayOffset(at:projection.sourceOffset(at:NSMaxRange(range)))
+            plain = (expanded.text as NSString).substring(with:NSRange(location:a,length:max(0,z-a)))
+        }
         let entire = range.location == projection.blocks[first].display.location && NSMaxRange(range) == NSMaxRange(projection.blocks[last].display)
         return RichFragment(source:pieces.joined(separator:"\n\n"),plain:plain,block:entire)
     }
@@ -416,5 +432,73 @@ public final class DocumentBuffer {
             let inserted = (before ? "" : "\n\n")+fragment.source+(before ? "\n\n" : "")
             commit(source.replacingBytes(ByteSpan(at,at),with:inserted),selection:EditSelection(at+inserted.utf8.count,at+inserted.utf8.count))
         } else { editWrite(range,text:fragment.source,raw:true,group:"") }
+    }
+}
+
+
+extension DocumentBuffer {
+    private func folded(_ original: Projection) -> Projection {
+        var blocks = original.blocks
+        for index in blocks.indices where blocks[index].kind == "source" && collapsedSourceStarts.contains(blocks[index].source.start) {
+            let raw = source.bytes(blocks[index].source)
+            let lines = raw.components(separatedBy:"\n")
+            let summary = String((lines.first ?? "Typst code").prefix(70))+"  …  \(lines.count) lines"
+            blocks[index].inlines = [.text(summary,blocks[index].source,TextStyle(),false)]
+            blocks[index].collapsed = true
+        }
+        return Projection(blocks:blocks)
+    }
+    public func setSourceCollapsed(_ index: Int,_ collapsed: Bool) {
+        guard projection.blocks.indices.contains(index), projection.blocks[index].kind == "source" else { return }
+        let start = projection.blocks[index].source.start
+        if collapsed { collapsedSourceStarts.insert(start) } else { collapsedSourceStarts.remove(start) }
+        projection = folded(Projection(source:source,parsed:parsed)); presentationRevision += 1
+        lastEditWasLocal = false
+    }
+
+    /// Insert/delete a row or column without regenerating cell contents, options or comments.
+    @discardableResult public func changeTable(_ index: Int,cell: Int,column: Bool,action: String) -> Bool {
+        guard projection.blocks.indices.contains(index) else { return false }
+        let block = projection.blocks[index], cols = block.columns, count = block.tableCells.count
+        guard cols > 0, count > 0, count % cols == 0, cell >= 0, cell < count,
+              let call = parsed.tree.descendants("FuncCall").first(where:{ $0.start == block.source.start+1 }),
+              let table = nativeTableArguments(call,source:source) else { return false }
+        let args = table.args, cells = table.cells, number = table.columns
+        guard cells.count == count else { return false }
+        let dimension = column ? cols : count/cols, position = column ? cell%cols : cell/cols
+        guard ["before","after","delete"].contains(action), action != "delete" || dimension > 1 else { return false }
+        var edits: [(ByteSpan,String)] = []
+        if action == "delete" {
+            let removing = cells.indices.filter { column ? $0%cols == position : $0/cols == position }
+            let commas = args.children.filter { $0.kind == "Comma" }
+            var removedCommas = Set<Int>()
+            for at in removing {
+                edits.append((cells[at].span,""))
+                if let comma = commas.first(where:{ $0.start >= cells[at].end }) ?? commas.last(where:{ $0.end <= cells[at].start }), removedCommas.insert(comma.start).inserted { edits.append((comma.span,"")) }
+            }
+        } else if column {
+            for row in 0..<count/cols {
+                let argument = cells[row*cols+position]
+                let at = action == "before" ? argument.start : argument.end
+                edits.append((ByteSpan(at,at),action == "before" ? "[], " : ", []"))
+            }
+        } else {
+            let at = action == "before" ? cells[position*cols].start : cells[(position+1)*cols-1].end
+            let blanks = Array(repeating:"[]",count:cols).joined(separator:", ")
+            edits.append((ByteSpan(at,at),action == "before" ? blanks+",\n  " : ",\n  "+blanks))
+        }
+        if column { edits.append((number.span,String(cols+(action == "delete" ? -1 : 1)))) }
+        var next = source
+        for (range,text) in edits.sorted(by:{ $0.0.start > $1.0.start }) { next = next.replacingBytes(range,with:text) }
+        let parsedNext = ParsedSource.parse(next)
+        guard !parsedNext.erroneous else { return false }
+        let projected = Projection(source:next,parsed:parsedNext), updated = projected.blocks[index]
+        let row = cell/cols+(column ? 0 : action == "after" ? 1 : 0)
+        let col = cell%cols+(column && action == "after" ? 1 : 0)
+        let target = min(row,updated.tableCells.count/updated.columns-1)*updated.columns+min(col,updated.columns-1)
+        let range = updated.cellRanges[target]
+        let a = projected.sourceOffset(at:updated.display.location+range.location)
+        let z = projected.sourceOffset(at:updated.display.location+NSMaxRange(range))
+        return commit(next,selection:EditSelection(a,z))
     }
 }

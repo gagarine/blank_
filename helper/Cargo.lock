@@ -2462,7 +2462,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
- "typst-assets",
  "typst-library",
  "typst-syntax",
  "typst-timing",

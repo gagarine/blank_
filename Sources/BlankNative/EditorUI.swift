@@ -44,24 +44,62 @@ struct SlashMenu: View {
     var commands: [SlashCommand]
     var index: Int
     var choose: (Int)->Void
+    static func contentWidth(_ commands: [SlashCommand]) -> CGFloat {
+        let textWidth = commands.map { max(($0.label as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:12,weight:.medium)]).width, ($0.hint as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:10)]).width) }.max() ?? 140
+        return ceil(textWidth+100)
+    }
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing:2) {
                     if commands.isEmpty { Text("No matching commands").foregroundStyle(.secondary).padding() }
                     ForEach(Array(commands.enumerated()),id:\.element.id) { i,command in
-                        Button { choose(i) } label: {
+                        MenuRowButton(label:command.label+", "+command.hint,action:{ choose(i) }) {
                             HStack(spacing:12) {
                                 Image(systemName:command.systemSymbol).font(.system(size:17)).frame(width:28)
-                                VStack(alignment:.leading,spacing:3) { Text(command.label).font(.system(size:12,weight:.medium)); Text(command.hint).font(.system(size:10)).foregroundStyle(.secondary) }
+                                VStack(alignment:.leading,spacing:3) { Text(command.label).font(.system(size:12,weight:.medium)).lineLimit(1); Text(command.hint).font(.system(size:10)).foregroundStyle(.secondary).lineLimit(1) }
                                 Spacer()
-                            }.padding(.horizontal,10).padding(.vertical,7).frame(height:44).background(i == index ? Color.primary.opacity(0.07) : .clear).clipShape(RoundedRectangle(cornerRadius:5))
-                        }.buttonStyle(.plain).id(i)
+                            }.padding(.horizontal,10).padding(.vertical,7).frame(maxWidth:.infinity).frame(height:44).contentShape(Rectangle()).background(i == index ? Color.primary.opacity(0.07) : .clear).clipShape(RoundedRectangle(cornerRadius:5)).contentShape(.interaction,Rectangle())
+                        }.id(i)
                     }
                 }.padding(6)
             }.onAppear { proxy.scrollTo(index) }.onChange(of:index) { _,value in proxy.scrollTo(value) }
-        }.frame(width:280).background(.background)
+        }.background(.background)
     }
+}
+// A native button supplies one rectangular target beneath the SwiftUI label.
+// Decoration never participates in hit testing, including empty row space.
+struct MenuRowButton<Content: View>: View {
+    var label: String
+    var action: ()->Void
+    @ViewBuilder var content: Content
+    var body: some View {
+        MenuButtonTarget(label:label,action:action)
+            .frame(maxWidth:.infinity)
+            .overlay { content.allowsHitTesting(false).accessibilityHidden(true) }
+            .frame(height:44)
+    }
+}
+struct MenuButtonTarget: NSViewRepresentable {
+    var label: String
+    var action: ()->Void
+    func makeNSView(context: Context) -> MenuActionButton {
+        let button = MenuActionButton()
+        button.title = ""; button.isBordered = false; button.isTransparent = true
+        button.target = button; button.action = #selector(MenuActionButton.activate(_:))
+        return button
+    }
+    func sizeThatFits(_ proposal: ProposedViewSize,nsView: MenuActionButton,context: Context) -> CGSize? {
+        CGSize(width:proposal.width ?? 200,height:44)
+    }
+    func updateNSView(_ button: MenuActionButton,context: Context) {
+        button.setAccessibilityLabel(label); button.perform = action
+    }
+}
+final class MenuActionButton: NSButton {
+    var perform: ()->Void = {}
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    @objc func activate(_ sender: Any?) { perform() }
 }
 struct EditorRoot: View {
     @ObservedObject var session: DocumentSession

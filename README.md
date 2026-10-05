@@ -1,8 +1,8 @@
 # blank_
 
-A quiet native macOS editor for [Typst](https://typst.app). Write, Source and PDF Preview share ordinary local `.typ` files. SwiftUI/AppKit interface with native typography, integrated text tables and the official Typst compiler.
+A quiet native macOS editor for [Typst](https://typst.app). Write, Source and PDF Preview share ordinary local `.typ` files. SwiftUI/AppKit interface with native typography, integrated text tables and the official Typst compiler. Uses the native macOS system font by default and installed fonts only.
 
-Supports block editing and dragging, shared undo, formatted clipboard, figures/captions, links, footnotes, citations with Zotero, included files/chapter movement, project search, statistics, settings, document windows and recovery. Generated or complex Typst stays editable in Source.
+Supports block editing and dragging, collapsible code, inline table row/column menus, shared undo, formatted clipboard, figures/captions, links, footnotes, citations with Zotero, included files/chapter movement, project search, statistics, settings, document windows and recovery. Generated or complex Typst stays editable in Source.
 
 ## Development
 

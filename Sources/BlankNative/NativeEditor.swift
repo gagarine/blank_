@@ -64,6 +64,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var draggingBlock = false
     var dragImage: NSImage?
     var track: NSTrackingArea?
+    var lastPresentationRevision = -1
+    var codeButtons: [Int:CodeDisclosureButton] = [:]
+    var tableButtons: [NSPopUpButton] = []
+    var tableControlCell: (Int,Int)?
     var lastRevision = -1
     var lastMode: EditorMode?
     var lastPath = ""
@@ -99,9 +103,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         addTrackingArea(track!)
     }
     func readingFont(size: CGFloat, bold: Bool = false, italic: Bool = false) -> NSFont {
-        let key = "\(session?.fontFamily ?? "Iowan Old Style")/\(size)/\(bold)/\(italic)"
+        let key = "\(session?.fontFamily ?? "System")/\(size)/\(bold)/\(italic)"
         if let cached = fontCache[key] { return cached }
-        let base = NSFontManager.shared.font(withFamily:session?.fontFamily ?? "Iowan Old Style",traits:[],weight:5,size:size) ?? NSFont.systemFont(ofSize:size)
+        let family = session?.fontFamily ?? "System"
+        let base = family == "System" ? NSFont.systemFont(ofSize:size) : NSFontManager.shared.font(withFamily:family,traits:[],weight:5,size:size) ?? NSFont.systemFont(ofSize:size)
         var traits: NSFontTraitMask = []
         if bold { traits.insert(.boldFontMask) }; if italic { traits.insert(.italicFontMask) }
         let font = traits.isEmpty ? base : NSFontManager.shared.convert(base,toHaveTrait:traits)
@@ -167,6 +172,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 if block.kind == "quote" { p.firstLineHeadIndent = 24; p.headIndent = 24 }
                 let raw = !block.editable
                 if raw { p.lineSpacing = 4; p.paragraphSpacing = 12 }
+                if block.collapsed { p.lineBreakMode = .byTruncatingTail }
                 let range = block.display
                 // Include the paragraph terminator: an empty next paragraph has
                 // no glyphs from which TextKit can recover its preceding spacing.
@@ -234,9 +240,17 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     private func refreshContent(reveal: Bool) {
         guard !composing, !hasMarkedText(), let session, session.mode != .preview else { return }
+        if reveal && session.mode == .write {
+            let selection = session.buffer.selection
+            let hidden = session.buffer.projection.blocks.indices.filter { index in
+                let block = session.buffer.projection.blocks[index]
+                return block.collapsed && (selection.anchor > block.source.start && selection.anchor < block.source.end || selection.focus > block.source.start && selection.focus < block.source.end)
+            }
+            for index in hidden { session.buffer.setSourceCollapsed(index,false) }
+        }
         updatePadding()
         let appearance = "\(effectiveAppearance.name.rawValue)/\(session.systemColors)/\(session.fontFamily)/\(session.fontSize)/\(session.paragraphFocus)/\(session.paper)/\(session.ink)"
-        guard reveal || lastRevision != session.buffer.revision || lastMode != session.mode || lastPath != session.active || lastAppearance != appearance else { return }
+        guard reveal || lastPresentationRevision != session.buffer.presentationRevision || lastRevision != session.buffer.revision || lastMode != session.mode || lastPath != session.active || lastAppearance != appearance else { return }
         if lastMode != session.mode {
             if lastMode == .write { inputDefaults = NativeInputDefaults(self) }
             inputDefaults?.apply(to:self,source:session.mode == .source)
@@ -282,13 +296,14 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         typingAttributes = [.font:session.mode == .source ? NSFont.monospacedSystemFont(ofSize:14,weight:.regular) : readingFont(size:CGFloat(session.fontSize)),.foregroundColor:session.inkColor,.ligature:1]
         backgroundColor = session.paperColor; insertionPointColor = session.systemColors ? .textInsertionPointColor : session.inkColor
         enclosingScrollView?.backgroundColor = backgroundColor
+        lastPresentationRevision = session.buffer.presentationRevision
         lastRevision = session.buffer.revision; lastMode = session.mode; lastPath = session.active; lastAppearance = appearance
         setAccessibilityLabel("\(session.mode.rawValue) editor")
         needsDisplay = true
         if reveal { scrollRangeToVisible(selectedRange()) }
         if session.typewriter { centerSelectionInVisibleArea(self) }
         updateSlash()
-        positionObjects()
+        positionObjects(); positionCodeControls(); positionTableControls()
         // Restart AppKit's insertion point after layout and the final selection.
         updateInsertionPointStateAndRestartTimer(true)
         // keyDown can finish its own insertion-point bookkeeping after the
@@ -301,7 +316,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             }
         }
     }
-    override func layout() { super.layout(); positionObjects() }
+    override func layout() { super.layout(); positionObjects(); positionCodeControls() }
     func positionObjects() {
         guard !positioningObjects, let session, session.mode == .write, window != nil else { return }
         positioningObjects = true; defer { positioningObjects = false }
@@ -340,19 +355,44 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let byte = session.mode == .source ? string.byteOffset(utf16:index) : session.buffer.projection.sourceOffset(at:index)
         session.buffer.selection = EditSelection(byte,byte)
     }
+    func textView(_ textView: NSTextView,willChangeSelectionFromCharacterRange old: NSRange,toCharacterRange proposed: NSRange) -> NSRange {
+        guard !refreshing, let session, session.mode == .write else { return proposed }
+        var result = proposed
+        for block in session.buffer.projection.blocks where block.collapsed {
+            if result.length == 0 && result.location > block.display.location && result.location < NSMaxRange(block.display) {
+                result.location = result.location > old.location ? NSMaxRange(block.display) : block.display.location
+            } else if result.length > 0 && NSIntersectionRange(result,block.display).length > 0 { result = NSUnionRange(result,block.display) }
+        }
+        return result
+    }
     func textViewDidChangeSelection(_ notification: Notification) {
         captureSelection(); if session?.paragraphFocus == true { lastAppearance = ""; refresh() }
+        if !refreshing, session?.mode == .write {
+            tableControlCell = session?.buffer.projection.tableCell(at:selectedRange()).map { ($0.block,$0.cell) }
+            positionTableControls()
+        }
         if let slashStart, selectedRange().location < slashStart || selectedRange().length > 0 { dismissSlash() }
     }
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
         guard !refreshing, let text = replacementString, let session else { return true }
         if composing || hasMarkedText() { return true }
         captureSelection()
-        if session.mode == .source { session.buffer.editSource(affectedCharRange,text:text) }
+        var editRange = affectedCharRange
+        if session.mode == .write {
+            let folded = session.buffer.projection.blocks.indices.filter { session.buffer.projection.blocks[$0].collapsed && NSIntersectionRange(session.buffer.projection.blocks[$0].display,NSRange(location:affectedCharRange.location,length:max(1,affectedCharRange.length))).length > 0 }
+            // A folded summary is one atomic block, including boundary deletes.
+            if editRange.length > 0 {
+                for index in folded { editRange = NSUnionRange(editRange,session.buffer.projection.blocks[index].display) }
+            }
+            let a = session.buffer.projection.sourceOffset(at:editRange.location), z = session.buffer.projection.sourceOffset(at:NSMaxRange(editRange))
+            for index in folded { session.buffer.setSourceCollapsed(index,false) }
+            if !folded.isEmpty { refresh(); let start = session.buffer.projection.displayOffset(at:a), end = session.buffer.projection.displayOffset(at:z); editRange = NSRange(location:start,length:end-start) }
+        }
+        if session.mode == .source { session.buffer.editSource(editRange,text:text) }
         else {
             var style = caretStyle()
             if let insertionBold { style.bold = insertionBold }; if let insertionItalic { style.italic = insertionItalic }
-            session.buffer.editWrite(affectedCharRange,text:text,styleOverride:insertionBold != nil || insertionItalic != nil ? style : nil)
+            session.buffer.editWrite(editRange,text:text,styleOverride:insertionBold != nil || insertionItalic != nil ? style : nil)
         }
         session.changed(); scrollRangeToVisible(selectedRange())
         if text == "/", session.mode == .write { slashStart = selectedRange().location-1; slashIndex = 0; updateSlash() }
@@ -469,6 +509,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let block = blocks[blockIndex], range = block.cellRanges[cell]
         setSelectedRange(NSRange(location:block.display.location+range.location,length:range.length))
         captureSelection(); scrollRangeToVisible(selectedRange()); window?.makeFirstResponder(self)
+        tableControlCell = (blockIndex,cell); positionTableControls()
     }
     override func insertTab(_ sender: Any?) {
         guard let session, session.mode == .write, let cell = session.buffer.projection.tableCell(at:selectedRange()) else { super.insertTab(sender); return }
@@ -492,12 +533,12 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     override func copy(_ sender: Any?) {
         guard let session, selectedRange().length > 0 else { return }
         let board = NSPasteboard.general; board.clearContents()
-        let plain = (string as NSString).substring(with:selectedRange())
+        let plain = session.mode == .write ? session.buffer.copy(selectedRange()).plain : (string as NSString).substring(with:selectedRange())
         board.setString(session.mode == .write ? plain.replacingOccurrences(of:"\u{2028}",with:"\n") : plain,forType:.string)
         if session.mode == .write {
             let fragment = session.buffer.copy(selectedRange())
             if let data = try? JSONEncoder().encode(fragment) { board.setData(data,forType:NSPasteboard.PasteboardType("local.blank.typst-fragment")) }
-            if let data = try? textStorage?.attributedSubstring(from:selectedRange()).data(from:NSRange(location:0,length:selectedRange().length),documentAttributes:[.documentType:NSAttributedString.DocumentType.rtf]) { board.setData(data,forType:.rtf) }
+            if !session.buffer.projection.blocks.contains(where:{ $0.collapsed && NSIntersectionRange($0.display,selectedRange()).length > 0 }), let data = try? textStorage?.attributedSubstring(from:selectedRange()).data(from:NSRange(location:0,length:selectedRange().length),documentAttributes:[.documentType:NSAttributedString.DocumentType.rtf]) { board.setData(data,forType:.rtf) }
         }
     }
     override func cut(_ sender: Any?) { copy(sender); insertText("",replacementRange:selectedRange()) }
@@ -568,6 +609,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     override func mouseMoved(with event: NSEvent) {
         guard session?.mode == .write, grabbed == nil else { return }
         let point = convert(event.locationInWindow,from:nil)
+        if codeButtons.values.contains(where:{ $0.frame.contains(point) }) || tableButtons.contains(where:{ $0.frame.contains(point) && !$0.isHidden }) { NSCursor.arrow.set(); return }
+        let offset = characterIndexForInsertion(at:point)
+        if let cell = session?.buffer.projection.tableCell(at:NSRange(location:offset,length:0)), hoveredBlock(at:point) == cell.block { tableControlCell = (cell.block,cell.cell) }
+        else { tableControlCell = session?.buffer.projection.tableCell(at:selectedRange()).map { ($0.block,$0.cell) } }
+        positionTableControls()
         let next = bounds.contains(point) ? hoveredBlock(at:point) : nil
         if next != hoverBlock { hoverBlock = next; needsDisplay = true }
         if point.x >= textContainerInset.width-35 && point.x <= textContainerInset.width-8 && next != nil { NSCursor.openHand.set() }
@@ -583,6 +629,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             let region = blockRect(hoverBlock)
             if let bitmap = bitmapImageRepForCachingDisplay(in:region) { cacheDisplay(in:region,to:bitmap); let image = NSImage(size:region.size); image.addRepresentation(bitmap); dragImage = image }
             NSCursor.closedHand.push(); needsDisplay = true; return
+        }
+        if event.clickCount == 2, let session, session.mode == .write {
+            let index = session.buffer.projection.blockIndex(at:characterIndexForInsertion(at:point))
+            if session.buffer.projection.blocks[index].collapsed { toggleCode(index); return }
         }
         dismissSlash(); super.mouseDown(with:event)
     }
@@ -622,7 +672,13 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 let item = BlockMenuItem(title:command.label,action:#selector(blockMenuAction(_:)),keyEquivalent:""); item.target = self; item.blockIndex = index; item.command = command; submenu.addItem(item)
             }
             turn.submenu = submenu; menu.addItem(turn)
+        } else if block.kind == "table", !block.cellRanges.isEmpty {
+            addTableMenus(to:menu,block:index,cell:0)
         } else {
+            if block.kind == "source" {
+                let fold = BlockMenuItem(title:block.collapsed ? "Expand code" : "Collapse code",action:#selector(blockMenuAction(_:)),keyEquivalent:"")
+                fold.target = self; fold.blockIndex = index; fold.blockAction = "fold"; menu.addItem(fold)
+            }
             let edit = BlockMenuItem(title:"Edit \(block.kind == "table" ? "table" : "source")…",action:#selector(blockMenuAction(_:)),keyEquivalent:""); edit.target = self; edit.blockIndex = index; edit.blockAction = "edit"; menu.addItem(edit)
         }
         for title in ["Duplicate","Delete"] {
@@ -633,6 +689,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     @objc func blockMenuAction(_ item: BlockMenuItem) {
         guard let session else { return }
         if let command = item.command { session.buffer.setKind(item.blockIndex,kind:command.kind,level:command.level) }
+        else if item.blockAction == "fold" { toggleCode(item.blockIndex); return }
         else if item.blockAction == "edit" { session.editObject(item.blockIndex); return }
         else { session.buffer.blockAction(item.blockIndex,action:item.blockAction) }
         session.changed()
@@ -642,7 +699,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         NSGraphicsContext.saveGraphicsState()
         super.draw(dirtyRect)
         NSGraphicsContext.restoreGraphicsState()
-        positionObjects()
+        positionObjects(); positionCodeControls()
         guard session?.mode == .write, let session else { return }
         for (index,b) in session.buffer.projection.blocks.enumerated() where ["bullet","number"].contains(b.kind) {
             let r = rectFor(b.display.location)
@@ -702,10 +759,12 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let choices = slashMatches, chosen = slashIndex
         let content = SlashMenu(commands:choices,index:chosen,choose:{ [weak self] index in self?.slashIndex = index; self?.chooseSlash() })
         let height = min(390,CGFloat(max(1,choices.count))*46+12)
+        let width = SlashMenu.contentWidth(choices)
         // ScrollView has no intrinsic height. Constrain the hosted root so
         // AppKit's automatic popover sizing cannot collapse its visible rows.
-        slashPopover?.contentViewController = NSHostingController(rootView:content.frame(width:280,height:height))
-        slashPopover?.contentSize = NSSize(width:280,height:height)
+        let controller = NSHostingController(rootView:content.frame(width:width,height:height))
+        slashPopover?.contentViewController = controller
+        slashPopover?.contentSize = NSSize(width:width,height:height)
         ensureNativeLayout()
         // Filtering changes the hosted view's size. Re-associate the popover
         // with the current native caret rectangle after each layout update.
@@ -728,4 +787,114 @@ final class BlockMenuItem: NSMenuItem {
     var blockIndex = 0
     var command: SlashCommand?
     var blockAction = ""
+}
+
+final class CodeDisclosureButton: NSButton { var blockIndex = 0; var collapsed = false }
+final class TableMenuItem: NSMenuItem {
+    var blockIndex = 0
+    var cell = 0
+    var column = false
+    var operation = "after"
+}
+
+extension NativeTextView {
+    func toggleCode(_ index: Int) {
+        guard let session, session.buffer.projection.blocks.indices.contains(index) else { return }
+        finishComposition(); captureSelection()
+        let block = session.buffer.projection.blocks[index]
+        session.buffer.setSourceCollapsed(index,!block.collapsed)
+        session.buffer.selection = EditSelection(block.source.start,block.source.start)
+        refresh(); window?.makeFirstResponder(self)
+    }
+    @objc func codeDisclosure(_ sender: CodeDisclosureButton) { toggleCode(sender.blockIndex) }
+    func positionCodeControls() {
+        guard let session, session.mode == .write, window != nil else {
+            codeButtons.values.forEach { $0.removeFromSuperview() }; codeButtons.removeAll(); return
+        }
+        var visible = Set<Int>()
+        for (index,block) in session.buffer.projection.blocks.enumerated() where block.kind == "source" && (block.collapsed || block.text.contains("\n")) {
+            let rect = rectFor(block.display.location)
+            guard rect.intersects(visibleRect) else { continue }
+            visible.insert(index)
+            let button = codeButtons[index] ?? CodeDisclosureButton()
+            if codeButtons[index] == nil {
+                button.isBordered = false; button.bezelStyle = .smallSquare
+                button.target = self; button.action = #selector(codeDisclosure(_:)); addSubview(button); codeButtons[index] = button
+            }
+            button.blockIndex = index
+            if button.image == nil || button.collapsed != block.collapsed {
+                button.collapsed = block.collapsed
+                button.image = NSImage(systemSymbolName:block.collapsed ? "chevron.right" : "chevron.down",accessibilityDescription:nil)
+                button.setAccessibilityLabel(block.collapsed ? "Expand code block" : "Collapse code block")
+                button.toolTip = block.collapsed ? "Expand code" : "Collapse code"
+            }
+            let frame = NSRect(x:textContainerInset.width-50,y:rect.midY-9,width:18,height:18)
+            if button.frame != frame { button.frame = frame }
+        }
+        for index in Array(codeButtons.keys) where !visible.contains(index) { codeButtons.removeValue(forKey:index)?.removeFromSuperview() }
+    }
+    func tableMenu(block: Int,cell: Int,column: Bool) -> NSMenu {
+        let menu = NSMenu()
+        guard let b = session?.buffer.projection.blocks[block] else { return menu }
+        let dimension = column ? "Column" : "Row"
+        for (title,action) in [("Add \(dimension) Before","before"),("Add \(dimension) After","after"),("Delete \(dimension)","delete")] {
+            let item = TableMenuItem(title:title,action:#selector(changeTable(_:)),keyEquivalent:"")
+            item.target = self; item.blockIndex = block; item.cell = cell; item.column = column; item.operation = action
+            item.isEnabled = action != "delete" || (column ? b.columns : b.tableCells.count/b.columns) > 1
+            menu.addItem(item)
+        }
+        menu.autoenablesItems = false
+        return menu
+    }
+    func addTableMenus(to menu: NSMenu,block: Int,cell: Int) {
+        for column in [false,true] {
+            let item = NSMenuItem(title:column ? "Column" : "Row",action:nil,keyEquivalent:"")
+            item.submenu = tableMenu(block:block,cell:cell,column:column); menu.addItem(item)
+        }
+    }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for:event)
+        if let session, session.mode == .write, let cell = session.buffer.projection.tableCell(at:NSRange(location:characterIndexForInsertion(at:convert(event.locationInWindow,from:nil)),length:0)) {
+            let result = menu ?? NSMenu(); result.insertItem(.separator(),at:0)
+            let controls = NSMenu(); addTableMenus(to:controls,block:cell.block,cell:cell.cell)
+            for item in controls.items.reversed() { controls.removeItem(item); result.insertItem(item,at:0) }
+            return result
+        }
+        return menu
+    }
+    @objc func changeTable(_ item: TableMenuItem) {
+        guard let session else { return }
+        finishComposition(); captureSelection()
+        let b = session.buffer.projection.blocks[item.blockIndex], cols = b.columns
+        if session.buffer.changeTable(item.blockIndex,cell:item.cell,column:item.column,action:item.operation) {
+            session.changed()
+            let next = session.buffer.projection.blocks[item.blockIndex]
+            let row = item.cell/cols, col = item.cell%cols
+            let targetRow = row+(item.column ? 0 : item.operation == "after" ? 1 : 0)
+            let targetCol = col+(item.column && item.operation == "after" ? 1 : 0)
+            focusTableCell(item.blockIndex,min(next.tableCells.count-1,min(targetRow,next.tableCells.count/next.columns-1)*next.columns+min(targetCol,next.columns-1)))
+            tableControlCell = nil; positionTableControls()
+        } else { session.error = "This table's structure must be edited in Source." }
+    }
+    func positionTableControls() {
+        guard let session, session.mode == .write, let (index,cell) = tableControlCell, session.buffer.projection.blocks.indices.contains(index) else { tableButtons.forEach { $0.isHidden = true }; return }
+        let block = session.buffer.projection.blocks[index]
+        guard block.cellRanges.indices.contains(cell), block.columns > 0 else { tableButtons.forEach { $0.isHidden = true }; return }
+        if tableButtons.isEmpty {
+            for column in [false,true] {
+                let button = NSPopUpButton(frame:.zero,pullsDown:true)
+                button.isBordered = false; button.bezelStyle = .smallSquare
+                button.setAccessibilityLabel(column ? "Table column actions" : "Table row actions")
+                addSubview(button); tableButtons.append(button)
+            }
+        }
+        let cellRect = rectFor(block.display.location+block.cellRanges[cell].location)
+        let columnRect = rectFor(block.display.location+block.cellRanges[cell%block.columns].location)
+        for (offset,button) in tableButtons.enumerated() {
+            let column = offset == 1, menu = tableMenu(block:index,cell:cell,column:column)
+            let label = NSMenuItem(title:"",action:nil,keyEquivalent:""); label.image = NSImage(systemSymbolName:"ellipsis",accessibilityDescription:nil); menu.insertItem(label,at:0)
+            button.menu = menu; button.isHidden = false
+            button.frame = column ? NSRect(x:columnRect.minX+4,y:columnRect.minY-27,width:25,height:18) : NSRect(x:textContainerInset.width-18,y:cellRect.minY,width:18,height:25)
+        }
+    }
 }

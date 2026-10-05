@@ -325,6 +325,57 @@ extension DocumentTests {
         }
     }
 }
+extension DocumentTests {
+    func testSourceFoldingPreservesBytesAndOffsets() {
+        let raw = "#set text(size: 11pt)\n#let café = \"日本😀\"\n\nAfter *bold*"
+        let model = DocumentBuffer(raw)
+        let code = model.projection.blocks.firstIndex { $0.kind == "source" && $0.text.contains("\n") }!
+        model.setSourceCollapsed(code,true)
+        let block = model.projection.blocks[code]
+        XCTAssertTrue(block.collapsed); XCTAssertFalse(block.text.contains("\n"))
+        XCTAssertEqual(model.source,raw); XCTAssertFalse(model.canUndo)
+        XCTAssertEqual(model.copy(block.display).source,raw.bytes(block.source))
+        XCTAssertEqual(model.projection.sourceOffset(at:block.display.location),block.source.start)
+        XCTAssertEqual(model.projection.sourceOffset(at:NSMaxRange(block.display)),block.source.end)
+        let after = model.projection.blocks.last!
+        model.editWrite(NSRange(location:NSMaxRange(after.display),length:0),text:"!")
+        XCTAssertTrue(model.projection.blocks[code].collapsed)
+        model.undo(); XCTAssertEqual(model.source,raw)
+        model.setSourceCollapsed(code,false)
+        XCTAssertEqual(model.projection.text,DocumentBuffer(raw).projection.text)
+        XCTAssertEqual(model.projection.blocks[code].text,raw.bytes(block.source))
+    }
+    func testTableDimensionsPreserveSource() {
+        let raw = "// outside\n#table(columns: 2, inset: 9pt, // options\n [日本 *bold*], /* keep */ [B],\n [C], [D]\n)\n\nAfter"
+        for column in [false,true] {
+            for action in ["before","after","delete"] {
+                let model = DocumentBuffer(raw), index = model.projection.blocks.firstIndex { !$0.cellRanges.isEmpty }!
+                XCTAssertTrue(model.changeTable(index,cell:1,column:column,action:action))
+                XCTAssertFalse(model.parsed.erroneous)
+                XCTAssertTrue(model.source.contains("inset: 9pt, // options"))
+                XCTAssertTrue(model.source.contains("/* keep */"))
+                XCTAssertTrue(model.source.hasPrefix("// outside\n")); XCTAssertTrue(model.source.hasSuffix("\n\nAfter"))
+                let block = model.projection.blocks[index]
+                XCTAssertEqual(block.columns,column ? action == "delete" ? 1 : 3 : 2)
+                XCTAssertEqual(block.tableCells.count,column ? action == "delete" ? 2 : 6 : action == "delete" ? 2 : 6)
+                XCTAssertTrue(model.source.contains("[C]"))
+                let afterSelection = model.selection
+                model.undo(); XCTAssertEqual(model.source,raw)
+                model.redo(); XCTAssertFalse(model.parsed.erroneous); XCTAssertEqual(model.selection,afterSelection)
+            }
+        }
+        for complex in ["#table(columns: 2 + 2, [A], [B], [C], [D])", "#table(columns: 2, [A], [B], ..([C], [D]))", "#table(columns: 2, table.header[A][B], [C], [D])"] {
+            let model = DocumentBuffer(complex)
+            XCTAssertTrue(model.projection.blocks[0].cellRanges.isEmpty)
+            XCTAssertEqual(model.projection.text,complex)
+            XCTAssertFalse(model.changeTable(0,cell:0,column:true,action:"after"))
+            XCTAssertEqual(model.source,complex)
+        }
+        let one = DocumentBuffer("#table(columns: 1, [Only])")
+        XCTAssertFalse(one.changeTable(0,cell:0,column:true,action:"delete"))
+        XCTAssertFalse(one.changeTable(0,cell:0,column:false,action:"delete"))
+    }
+}
 func XCTAssertEqual<T: Equatable>(_ a: T, _ b: T, file: StaticString = #file, line: UInt = #line) { if a != b { fatalError("Expected \(b), got \(a)",file:file,line:line) } }
 func XCTAssertTrue(_ value: Bool,file: StaticString = #file,line: UInt = #line) { if !value { fatalError("Expected true",file:file,line:line) } }
 func XCTAssertFalse(_ value: Bool,file: StaticString = #file,line: UInt = #line) { XCTAssertTrue(!value,file:file,line:line) }
@@ -335,6 +386,8 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
         let t = DocumentTests()
         let tests: [(String,()->Void)] = [
             ("Unicode source mapping",t.testUnicodeSourceOffsets),
+            ("Source folding preserves bytes and offsets",t.testSourceFoldingPreservesBytesAndOffsets),
+            ("Table dimension transactions preserve source",t.testTableDimensionsPreserveSource),
             ("Lossless styled edit",t.testProjectionAndLosslessEdit),
             ("List continuation and exit",t.testListContinueAndExit),
             ("Paragraph joining",t.testParagraphJoinKeepsFormatting),

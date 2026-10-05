@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 configuration=${1:-debug}
 case "$configuration" in debug|release) ;; *) echo "Usage: $0 [debug|release]" >&2; exit 2 ;; esac
-app_version=${BLANK_VERSION:-0.1.0}
+app_version=${BLANK_VERSION:-0.2.0}
 app_version=${app_version#v}
 if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
     echo 'BLANK_VERSION must be X.Y.Z or vX.Y.Z, optionally with a prerelease/build suffix' >&2; exit 2
@@ -33,7 +33,7 @@ install_binary() {
 install_binary ".build/$configuration/blank_" "$app/Contents/MacOS/blank_"
 install_binary typst-syntax-bridge/target/release/libblank_syntax.dylib "$app/Contents/MacOS/libblank_syntax.dylib"
 install_binary helper/target/release/writer-helper "$app/Contents/MacOS/writer-helper"
-cp examples/Tutorial.typ "$app/Contents/Resources/"
+cp examples/Tutorial.typ Resources/AppIcon.icns "$app/Contents/Resources/"
 install_name_tool -id @rpath/libblank_syntax.dylib "$app/Contents/MacOS/libblank_syntax.dylib"
 parser_dependency=$(otool -L "$app/Contents/MacOS/blank_" | sed -n 's/^[[:space:]]*\(.*libblank_syntax\.dylib\) (compatibility.*$/\1/p')
 if [[ -z "$parser_dependency" ]]; then echo 'Missing Typst parser dependency in editor executable' >&2; exit 1; fi
@@ -48,7 +48,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>local.blank.swift-native</string>
 <key>CFBundleExecutable</key><string>blank_</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleShortVersionString</key><string>0.2.0</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>

@@ -150,6 +150,10 @@ import BlankCore
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(editor.slashPopover?.isShown == true && (editor.slashPopover?.contentViewController?.view.bounds.height ?? 0) >= 140,"Slash popover retains visible filtered rows")
         if let content = editor.slashPopover?.contentViewController?.view, let popoverWindow = content.window, let window = editor.window {
+            func menuButtons(_ view: NSView) -> [MenuActionButton] { (view as? MenuActionButton).map { [$0] } ?? view.subviews.flatMap(menuButtons) }
+            let buttons = menuButtons(content)
+            check(!buttons.isEmpty && buttons.allSatisfy { $0.bounds.width > content.bounds.width*0.8 },"Native command rows fill the menu width")
+            check(buttons.allSatisfy { $0.hitTest(NSPoint(x:$0.frame.maxX-3,y:$0.frame.midY)) === $0 },"Empty trailing row space hits its native button")
             let menuRect = popoverWindow.convertToScreen(content.convert(content.bounds,to:nil))
             let caret = window.convertToScreen(editor.convert(editor.rectFor(0),to:nil))
             check(!menuRect.contains(NSPoint(x:caret.midX,y:caret.midY)),"Slash popover does not obscure the native caret")
@@ -214,6 +218,37 @@ import BlankCore
         session.sidebarHover = true; session.toggleSidebar()
         check(!session.sidebar && !session.sidebarHover && controller.sidebarItem?.toolTip?.hasPrefix("Show") == true,"Unpinning contents restores transient behavior")
         // Table cells are real paragraphs in the document's native NSTextTable.
+        check(EditorPreferences.installedEditorFamily(nil) == "System","Default editor font is the native macOS system face")
+        check(EditorPreferences.installedEditorFamilies.contains(session.fontFamily),"Editor font selection is an installed family")
+        check(EditorPreferences.installedEditorFamilies.contains(EditorPreferences.installedEditorFamily("Missing-font-XYZ")),"Missing saved font falls back to an installed family")
+        let commands = CommandsSheet(session:session)
+        check(!commands.actions.contains { ["New paper","New thesis"].contains($0.0) },"Cmd-K excludes paper and thesis templates")
+        check(commands.actions.allSatisfy { NSImage(systemSymbolName:commands.symbol($0.0),accessibilityDescription:nil) != nil },"Cmd-K commands have available native symbols")
+        let foldingSource = (0..<20).map { "#let value\($0) = \($0)" }.joined(separator:"\n")+"\n\nAfter 日本😀"
+        session.buffer.loadExternal(foldingSource); session.revision += 1; editor.refresh()
+        let expandedHeight = editor.rectFor(session.buffer.projection.blocks.last!.display.location).minY
+        editor.toggleCode(0)
+        check(session.buffer.source == foldingSource && session.buffer.projection.blocks[0].collapsed,"Code folding leaves canonical source untouched")
+        check(editor.codeButtons[0]?.accessibilityLabel() == "Expand code block","Collapsed code has an accessible disclosure control")
+        check(editor.rectFor(session.buffer.projection.blocks.last!.display.location).minY < expandedHeight-100,"Collapsed code occupies one native line")
+        let foldedRange = session.buffer.projection.blocks[0].display
+        editor.setSelectedRange(NSRange(location:foldedRange.location+1,length:2))
+        check(editor.selectedRange() == foldedRange,"Collapsed source selects as one lossless block")
+        editor.setSelectedRange(foldedRange); editor.copy(nil)
+        check(NSPasteboard.general.string(forType:.string) == session.buffer.source.bytes(session.buffer.projection.blocks[0].source),"Collapsed code copies its exact plain source")
+        session.switchMode(.source); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(editor.string == foldingSource,"Source shows every character while Write is folded")
+        session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        editor.toggleCode(0)
+        check(editor.string == session.buffer.projection.text && editor.string.contains("value19"),"Expanding restores complete native code text")
+        for backward in [true,false] {
+            session.buffer.loadExternal(foldingSource); session.revision += 1; editor.refresh(); editor.toggleCode(0)
+            let block = session.buffer.projection.blocks[0]
+            editor.setSelectedRange(NSRange(location:backward ? NSMaxRange(block.display) : block.display.location,length:0)); editor.captureSelection()
+            if backward { editor.deleteBackward(nil) } else { editor.deleteForward(nil) }
+            check(!session.buffer.source.contains("value0") && session.buffer.source.contains("After 日本😀"),"Folded code boundary delete is atomic (backward=\(backward))")
+            session.undo(); check(session.buffer.source == foldingSource,"Folded block deletion undo restores every source byte")
+        }
         let tableSource = "#table(columns: 2, [Idea], [Step], [One], [Two])\n\nAfter"
         session.buffer.loadExternal(tableSource)
         session.revision += 1; editor.lastRevision = -1; editor.refresh()
@@ -290,6 +325,24 @@ import BlankCore
         check(session.buffer.projection.blocks[0].tableCells.count == 6,"Final table Tab adds row")
         check(editor.selectedRange() == cellRange(4) && controller.window?.firstResponder === editor,"New table row receives native document focus")
         check(!session.buffer.parsed.erroneous,"Added table row is valid Typst syntax")
+        let tableBeforeDimensions = session.buffer.source
+        let columnAction = editor.tableMenu(block:0,cell:1,column:true).items[1] as! TableMenuItem
+        editor.changeTable(columnAction)
+        check(session.buffer.projection.blocks[0].columns == 3 && controller.window?.firstResponder === editor,"Column menu changes dimensions inline and retains focus")
+        session.undo(); check(session.buffer.source == tableBeforeDimensions,"Inline table dimensions share exact-source Undo")
+        for column in [false,true] {
+            for operation in ["before","after","delete"] {
+                session.buffer.loadExternal(tableSource); session.revision += 1; editor.refresh(); editor.focusTableCell(0,1)
+                let item = editor.tableMenu(block:0,cell:1,column:column).items.compactMap { $0 as? TableMenuItem }.first { $0.operation == operation }!
+                editor.changeTable(item)
+                let sourceAfter = session.buffer.source, selectionAfter = session.buffer.selection, nativeAfter = editor.selectedRange()
+                session.undo(); session.undo(true)
+                check(session.buffer.source == sourceAfter && session.buffer.selection == selectionAfter && editor.selectedRange() == nativeAfter,"Table dimension Redo restores focused cell (column=\(column), operation=\(operation))")
+            }
+        }
+        session.buffer.loadExternal(tableBeforeDimensions); session.revision += 1; editor.refresh()
+        editor.tableControlCell = (0,2); editor.positionTableControls()
+        check(editor.tableButtons.count == 2 && editor.tableButtons.allSatisfy { !$0.isHidden },"Native row and column controls are visible beside table")
         editor.focusTableCell(0,4); editor.insertText("/",replacementRange:editor.selectedRange())
         check(Set(editor.slashMatches.map(\.kind)) == Set(["paragraph","link","footnote","citation","label","reference"]),"Cell slash menu offers only supported paragraph and inline actions")
         editor.slashQuery = "table"

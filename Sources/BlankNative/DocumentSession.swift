@@ -34,7 +34,7 @@ struct Recovery: Codable {
     @Published var previewPage = 1
     @Published var paragraphFocus = false
     @Published var typewriter = false
-    @Published var fontFamily: String = UserDefaults.standard.string(forKey:"readingFont") ?? "Iowan Old Style"
+    @Published var fontFamily: String = EditorPreferences.preferredEditorFamily
     @Published var fontSize: Double = UserDefaults.standard.object(forKey:"readingSize") as? Double ?? 18
     @Published var paper: Color = EditorPreferences.color("paper",fallback:.white)
     @Published var ink: Color = EditorPreferences.color("ink",fallback:NSColor(calibratedWhite:0.20,alpha:1))

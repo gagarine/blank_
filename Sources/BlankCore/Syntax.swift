@@ -79,3 +79,22 @@ public func typstStringLiteral(_ text: String) -> String {
     encoder.outputFormatting = [.withoutEscapingSlashes]
     return String(data:try! encoder.encode(text),encoding:.utf8)!
 }
+
+// Native tables require literal dimensions and positional content blocks.
+// Computed/spread cells remain source so their compiler semantics stay intact.
+func nativeTableArguments(_ call: SyntaxNode,source: String) -> (args: SyntaxNode,cells: [SyntaxNode],columns: SyntaxNode)? {
+    guard call.kind == "FuncCall", let name = call.children.first, source.bytes(name.span) == "table",
+          let args = call.children.first(where:{ $0.kind == "Args" }) else { return nil }
+    let trivia = Set(["Space","LineComment","BlockComment"])
+    guard args.children.allSatisfy({ trivia.contains($0.kind) || ["LeftParen","RightParen","Comma","Named","ContentBlock"].contains($0.kind) }) else { return nil }
+    let named = args.children.filter { node in
+        node.kind == "Named" && node.children.first(where:{ !trivia.contains($0.kind) }).map { source.bytes($0.span) == "columns" } == true
+    }
+    guard named.count == 1 else { return nil }
+    let value = named[0].children.filter { !trivia.contains($0.kind) }
+    guard value.count == 3, value[0].kind == "Ident", value[1].kind == "Colon", value[2].kind == "Int",
+          let count = Int(source.bytes(value[2].span)), count > 0 else { return nil }
+    let cells = args.children.filter { $0.kind == "ContentBlock" }
+    guard !cells.isEmpty, cells.count % count == 0 else { return nil }
+    return (args,cells,value[2])
+}
