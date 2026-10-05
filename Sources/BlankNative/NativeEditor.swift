@@ -487,6 +487,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         session.changed()
     }
     override func keyDown(with event: NSEvent) {
+        if let session, session.sheet == .commands {
+            // SwiftUI attaches the sheet on the next run-loop turn. Preserve
+            // early key events for its native field, never the document.
+            session.pendingCommandKeys.append(event); return
+        }
         if session?.mode == .write, [36,76].contains(event.keyCode), event.modifierFlags.intersection([.shift,.command,.option,.control]) == [.shift] {
             insertLineBreak(nil); return
         }

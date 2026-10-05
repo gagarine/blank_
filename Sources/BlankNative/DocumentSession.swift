@@ -25,7 +25,11 @@ struct Recovery: Codable {
     @Published var error: String?
     @Published var sheet: SheetKind?
     @Published var commandQuery = ""
+    var pendingCommandKeys: [NSEvent] = []
     @Published var searchVisible = false
+    @Published var searchFocusRequest = 0
+    func showSearch() { editor?.finishComposition(); searchVisible = true; searchFocusRequest += 1 }
+    func hideSearch() { searchVisible = false; window?.makeFirstResponder(editor) }
     @Published var searchQuery = ""
     @Published var replaceText = ""
     @Published var caseSensitive = false
@@ -43,6 +47,14 @@ struct Recovery: Codable {
     var paperColor: NSColor { systemColors ? .textBackgroundColor : NSColor(paper) }
     var inkColor: NSColor { systemColors ? .labelColor : NSColor(ink) }
     @Published var dark = UserDefaults.standard.bool(forKey:"dark")
+    func storeEditorPreferences() {
+        UserDefaults.standard.set(fontFamily,forKey:"editorFont")
+        UserDefaults.standard.set(fontSize,forKey:"readingSize")
+        UserDefaults.standard.set(systemColors,forKey:"systemColors")
+        EditorPreferences.store(paper,key:"paper"); EditorPreferences.store(ink,key:"ink")
+        UserDefaults.standard.set(dark,forKey:"dark")
+        editor?.lastAppearance = ""; editor?.refresh()
+    }
     var buffers: [String:DocumentBuffer] = ["Untitled.typ":DocumentBuffer()]
     var bases: [String:String] = [:]
     var assets: [String:Data] = [:]
@@ -384,7 +396,15 @@ struct Recovery: Codable {
     }
     func replace(all: Bool = false) {
         guard let editor, !searchQuery.isEmpty else { return }
-        if !all { editor.insertText(replaceText,replacementRange:editor.selectedRange()); find(); return }
+        if !all {
+            let text = editor.string as NSString, selection = editor.selectedRange()
+            let options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
+            // A search can fail or the user can select unrelated text between
+            // matches. Replace must never overwrite an arbitrary selection.
+            guard selection.length > 0, NSMaxRange(selection) <= text.length,
+                  (text.substring(with:selection) as NSString).compare(searchQuery,options:options) == .orderedSame else { find(); return }
+            editor.insertText(replaceText,replacementRange:selection); find(); return
+        }
         let paths = projectSearch ? includes : [active]
         let options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
         for path in paths {

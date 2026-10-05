@@ -23,6 +23,29 @@ import BlankCore
         check(view.textLayoutManager == nil && view.layoutManager != nil,"TextKit 1 selected explicitly at creation")
         check(controller.window?.firstResponder === view,"Empty editor is focused")
         check(view.string.isEmpty,"Launch has no welcome screen")
+        AppController.shared.commands(nil)
+        for character in "fast café" {
+            let key = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:String(character),charactersIgnoringModifiers:String(character),isARepeat:false,keyCode:0)!
+            view.keyDown(with:key)
+        }
+        check(view.string.isEmpty && session.buffer.source.isEmpty,"Typing immediately after Cmd-K cannot reach the document")
+        RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+        let commandField = controller.window?.attachedSheet?.firstResponder as? NSTextView
+        check(session.commandQuery == "fast café" && commandField?.string == "fast café" && session.pendingCommandKeys.isEmpty,"Opening Commands delivers early Unicode keys to its native field editor")
+        session.sheet = nil
+        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        AppController.shared.find(nil)
+        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        check((controller.window?.firstResponder as? NSTextView)?.isFieldEditor == true,"Cmd-F focuses the native Find field instead of the document")
+        session.searchQuery = "Find again"
+        controller.window?.makeFirstResponder(view)
+        AppController.shared.find(nil)
+        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        let findEditor = controller.window?.firstResponder as? NSTextView
+        check(findEditor?.isFieldEditor == true && findEditor?.string == "Find again","Repeated Cmd-F returns to the existing search field")
+        session.hideSearch(); session.searchQuery = ""
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(controller.window?.firstResponder === view && view.string.isEmpty,"Closing search restores the untouched editor and caret")
         check(controller.window?.styleMask.contains(.fullSizeContentView) == true && controller.window?.titlebarAppearsTransparent == true,"Document extends beneath native transparent toolbar")
         for scalar in "Hello café 👩🏽‍💻".unicodeScalars { view.insertText(String(scalar),replacementRange:view.selectedRange()) }
         check(session.buffer.projection.text == "Hello café 👩🏽‍💻","Native typing and Unicode")
@@ -64,6 +87,18 @@ import BlankCore
         session.undo(); check(!session.buffer.source.contains("*Hello*"),"Undo shared across views")
         session.undo(true); check(session.buffer.source.contains("*Hello*"),"Redo shared across views")
         let editor = session.editor!
+        let beforeReplace = session.buffer.source
+        editor.setSelectedRange(NSRange(location:0,length:5)); editor.captureSelection()
+        session.searchQuery = "No such phrase"; session.replaceText = "Replacement"
+        session.replace()
+        check(session.buffer.source == beforeReplace,"Replace after an unmatched query preserves unrelated selected text")
+        session.searchQuery = "Second paragraph"
+        session.replace()
+        check(session.buffer.source == beforeReplace && (editor.string as NSString).substring(with:editor.selectedRange()) == "Second paragraph","Replace first locates a match when the selection is unrelated")
+        session.replace()
+        check(session.buffer.projection.text.contains("Replacement") && !session.buffer.projection.text.contains("Second paragraph"),"Replace changes only the located match")
+        session.undo(); session.searchQuery = ""; session.replaceText = ""
+        check(session.buffer.source == beforeReplace,"Search replacement shares document undo")
         editor.setSelectedRange(NSRange(location:editor.string.utf16.count,length:0)); editor.captureSelection()
         editor.setMarkedText("に",selectedRange:NSRange(location:1,length:0),replacementRange:editor.selectedRange())
         editor.setMarkedText("日本",selectedRange:NSRange(location:2,length:0),replacementRange:NSRange(location:NSNotFound,length:0))

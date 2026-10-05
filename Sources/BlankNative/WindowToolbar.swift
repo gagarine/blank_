@@ -24,7 +24,7 @@ extension NSToolbarItem.Identifier {
     }
     @objc func toggleContents(_ sender: Any?) { session.toggleSidebar() }
     @objc func exportDocument(_ sender: Any?) { session.exportPDF() }
-    @objc func findDocument(_ sender: Any?) { session.searchVisible = true }
+    @objc func findDocument(_ sender: Any?) { session.showSearch() }
 }
 extension DocumentWindow: NSToolbarDelegate {
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.blankSidebar,.flexibleSpace,.blankModes,.flexibleSpace,.blankExport] }

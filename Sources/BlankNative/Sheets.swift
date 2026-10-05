@@ -9,14 +9,13 @@ struct SheetFrame<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment:.leading,spacing:20) {
-            HStack { Text(title).font(.system(size:18,weight:.semibold)); Spacer(); Button { dismiss() } label: { Image(systemName:"xmark").font(.system(size:11)).foregroundStyle(.secondary) }.buttonStyle(.plain).keyboardShortcut(.cancelAction) }
+            HStack { Text(title).font(.system(size:18,weight:.semibold)); Spacer(); Button { dismiss() } label: { Image(systemName:"xmark").font(.system(size:11)).foregroundStyle(.secondary).frame(width:28,height:28).contentShape(Rectangle()) }.buttonStyle(.plain).help("Close "+title).accessibilityLabel("Close "+title).keyboardShortcut(.cancelAction) }
             content
         }.padding(28).frame(width:width).background(Color(nsColor:.windowBackgroundColor))
     }
 }
 struct CommandsSheet: View {
     @ObservedObject var session: DocumentSession
-    @FocusState var focused: Bool
     @NativeState var selectedCommand = 0
     var actions: [(String,String,()->Void)] {
         [
@@ -30,7 +29,7 @@ struct CommandsSheet: View {
             ("Write mode","⌘1",{ session.sheet = nil; session.switchMode(.write) }),
             ("Source mode","⌘2",{ session.sheet = nil; session.switchMode(.source) }),
             ("Preview mode","⌘3",{ session.sheet = nil; session.switchMode(.preview) }),
-            ("Find in document","⌘F",{ session.sheet = nil; session.searchVisible = true }),
+            ("Find in document","⌘F",{ session.sheet = nil; session.showSearch() }),
             ("New document","⌘N",{ session.sheet = nil; AppController.shared.newDocument(nil) }),
             ("Rename document","",{ session.sheet = .rename }),
             ("Tutorial","",{ session.sheet = nil; AppController.shared.tutorial(nil) }),
@@ -74,20 +73,19 @@ struct CommandsSheet: View {
     }
     var body: some View {
         SheetFrame(title:"Commands",width:commandWidth,dismiss:{ session.sheet = nil }) {
-            TextField("Search commands…",text:$session.commandQuery).textFieldStyle(.roundedBorder).focused($focused).onSubmit { if matches.indices.contains(selectedCommand) { matches[selectedCommand].2() } }
-                .onKeyPress(.downArrow) { selectedCommand = min(selectedCommand+1,max(0,matches.count-1)); return .handled }
-                .onKeyPress(.upArrow) { selectedCommand = max(0,selectedCommand-1); return .handled }
-                .onChange(of:session.commandQuery) { _,_ in selectedCommand = 0 }
+            CommandSearchField(session:session,submit:{ if matches.indices.contains(selectedCommand) { matches[selectedCommand].2() } },move:{ delta in selectedCommand = max(0,min(selectedCommand+delta,matches.count-1)) },changed:{ selectedCommand = 0 })
+                .frame(height:24)
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing:2) {
+                        if matches.isEmpty { Text("No matching commands").font(.system(size:12)).foregroundStyle(.secondary).frame(maxWidth:.infinity).padding(.vertical,20) }
                         ForEach(Array(matches.enumerated()),id:\.offset) { index,action in
                             MenuRowButton(label:action.0,action:action.2) { HStack(spacing:10) { Image(systemName:symbol(action.0)).frame(width:20).foregroundStyle(.secondary); Text(action.0).font(.system(size:12)).lineLimit(1).fixedSize(); Spacer(); Text(action.1).font(.system(size:10)).foregroundStyle(.tertiary).fixedSize() }.padding(10).frame(maxWidth:.infinity).contentShape(Rectangle()).background(index == selectedCommand ? Color.primary.opacity(0.05) : .clear).clipShape(RoundedRectangle(cornerRadius:5)).contentShape(.interaction,Rectangle()) }.id(index)
                         }
                     }
                 }.onChange(of:selectedCommand) { _,index in proxy.scrollTo(index) }.onChange(of:session.commandQuery) { _,_ in proxy.scrollTo(0) }
-            }.frame(height:340)
-        }.onAppear { focused = true }
+            }.frame(height:min(340,max(64,CGFloat(matches.count)*46-2)))
+        }.onDisappear { session.pendingCommandKeys.removeAll() }
     }
 }
 struct RenameSheet: View {
@@ -118,10 +116,10 @@ struct SettingsSheet: View {
                 Toggle("Dark appearance",isOn:$session.dark)
                 Toggle("Paragraph focus",isOn:$session.paragraphFocus)
                 Toggle("Typewriter scrolling",isOn:$session.typewriter)
-            }.formStyle(.grouped).frame(height:370)
+            }.formStyle(.grouped).scrollContentBackground(.hidden).frame(height:370)
             Text("Source uses the system monospace face. PDF typography is controlled by your Typst source.").font(.system(size:11)).foregroundStyle(.secondary)
-            HStack { Spacer(); Button("Done") { UserDefaults.standard.set(session.fontFamily,forKey:"editorFont"); UserDefaults.standard.set(session.fontSize,forKey:"readingSize"); UserDefaults.standard.set(session.systemColors,forKey:"systemColors"); EditorPreferences.store(session.paper,key:"paper"); EditorPreferences.store(session.ink,key:"ink"); UserDefaults.standard.set(session.dark,forKey:"dark"); session.sheet = nil; session.editor?.lastAppearance = ""; session.editor?.refresh() }.keyboardShortcut(.defaultAction) }
-        }
+            HStack { Spacer(); Button("Done") { session.sheet = nil }.keyboardShortcut(.defaultAction) }
+        }.onDisappear { session.storeEditorPreferences() }
     }
 }
 struct StatisticsSheet: View {

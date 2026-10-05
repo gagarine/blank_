@@ -90,10 +90,10 @@ import Combine
     @objc func writeMode(_ sender: Any?) { current?.switchMode(.write) }
     @objc func sourceMode(_ sender: Any?) { current?.switchMode(.source) }
     @objc func previewMode(_ sender: Any?) { current?.switchMode(.preview) }
-    @objc func commands(_ sender: Any?) { current?.editor?.finishComposition(); current?.commandQuery = ""; current?.sheet = .commands }
+    @objc func commands(_ sender: Any?) { current?.editor?.finishComposition(); current?.commandQuery = ""; current?.pendingCommandKeys.removeAll(); current?.sheet = .commands }
     @objc func settings(_ sender: Any?) { current?.sheet = .settings }
     @objc func statistics(_ sender: Any?) { current?.sheet = .statistics }
-    @objc func find(_ sender: Any?) { current?.searchVisible = true }
+    @objc func find(_ sender: Any?) { current?.showSearch() }
     @objc func outline(_ sender: Any?) { current?.toggleSidebar() }
     @objc func undo(_ sender: Any?) { current?.undo() }
     @objc func redo(_ sender: Any?) { current?.undo(true) }

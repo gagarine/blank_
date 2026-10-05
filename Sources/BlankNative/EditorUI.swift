@@ -140,6 +140,8 @@ final class SlashMenuCursorView: NSView {
 struct EditorRoot: View {
     @ObservedObject var session: DocumentSession
     @StateObject private var contentsDrag = ContentsDrag()
+    @FocusState private var searchFocused: Bool
+    @NativeState private var searchAfterSheet = false
     var chrome: Color { Color(nsColor:.windowBackgroundColor) }
     var body: some View {
         VStack(spacing:0) {
@@ -179,7 +181,9 @@ struct EditorRoot: View {
                 Text("⌘K").font(.system(size:10)).foregroundStyle(.tertiary).padding(.leading,18)
             }.padding(.horizontal,26).frame(height:30).background(chrome)
         }.frame(minWidth:660,minHeight:420).background(chrome).preferredColorScheme(session.dark ? .dark : nil)
-        .sheet(item:$session.sheet) { sheet in
+        .sheet(item:$session.sheet,onDismiss:{
+            if searchAfterSheet { searchAfterSheet = false; focusSearch() }
+        }) { sheet in
             switch sheet {
             case .commands: CommandsSheet(session:session)
             case .settings: SettingsSheet(session:session)
@@ -190,8 +194,18 @@ struct EditorRoot: View {
             case .rename: RenameSheet(session:session)
             }
         }
+        .onChange(of:session.searchFocusRequest) { _,_ in
+            // Repeated Cmd-F re-enters the existing field rather than editing
+            // the document. Defer until SwiftUI has installed the search bar.
+            if session.window?.attachedSheet != nil { searchAfterSheet = true }
+            else { focusSearch() }
+        }
         .onChange(of:session.active) { _,_ in contentsDrag.collapsed.removeAll() }
         .onChange(of:session.dark) { _,dark in session.window?.appearance = dark ? NSAppearance(named:.darkAqua) : nil }
+    }
+    private func focusSearch() {
+        searchFocused = false
+        DispatchQueue.main.async { if session.searchVisible && session.sheet == nil { searchFocused = true } }
     }
     var wordCount: Int { session.buffer.counts.words }
     var previewControls: some View {
@@ -208,16 +222,16 @@ struct EditorRoot: View {
     var searchBar: some View {
         HStack(spacing:8) {
             Image(systemName:"magnifyingglass").foregroundStyle(.secondary)
-            TextField("Find",text:$session.searchQuery).onSubmit { session.find() }.frame(maxWidth:180)
-            Button { session.find(next:false) } label: { Image(systemName:"chevron.up") }
-            Button { session.find() } label: { Image(systemName:"chevron.down") }
+            TextField("Find",text:$session.searchQuery).focused($searchFocused).onAppear { searchFocused = true }.onSubmit { session.find() }.onExitCommand { session.hideSearch() }.frame(maxWidth:180)
+            Button { session.find(next:false) } label: { Image(systemName:"chevron.up") }.help("Previous match").accessibilityLabel("Previous match")
+            Button { session.find() } label: { Image(systemName:"chevron.down") }.help("Next match").accessibilityLabel("Next match")
             Toggle("Aa",isOn:$session.caseSensitive).toggleStyle(.button).help("Match case")
             Toggle("Project",isOn:$session.projectSearch).toggleStyle(.button).help("Search included files")
             Divider().frame(height:18)
-            TextField("Replace",text:$session.replaceText).frame(maxWidth:170)
+            TextField("Replace",text:$session.replaceText).onExitCommand { session.hideSearch() }.frame(maxWidth:170)
             Button("Replace") { session.replace() }; Button("All") { session.replace(all:true) }
             Spacer()
-            Button { session.searchVisible = false; session.window?.makeFirstResponder(session.editor) } label: { Image(systemName:"xmark") }
+            Button { session.hideSearch() } label: { Image(systemName:"xmark").frame(width:24,height:24).contentShape(Rectangle()) }.buttonStyle(.plain).help("Close search · Esc").accessibilityLabel("Close search")
         }.font(.system(size:11)).controlSize(.small).padding(.horizontal,24).padding(.vertical,9).background(chrome)
     }
     var visibleHeadings: [(Int,ProjectedBlock)] {
@@ -253,7 +267,7 @@ struct EditorRoot: View {
                     ForEach(visibleHeadings,id:\.0) { index,b in
                         HStack(spacing:5) {
                             let hasChildren = session.headings.contains { $0.0 > index && $0.1.level > b.level && $0.0 < (session.headings.first { $0.0 > index && $0.1.level <= b.level }?.0 ?? Int.max) }
-                            Button { if contentsDrag.collapsed.contains(index) { contentsDrag.collapsed.remove(index) } else { contentsDrag.collapsed.insert(index) } } label: { Image(systemName:contentsDrag.collapsed.contains(index) ? "chevron.right" : "chevron.down").font(.system(size:8)).opacity(hasChildren ? 0.6 : 0) }.buttonStyle(.plain).frame(width:10).disabled(!hasChildren)
+                            Button { if contentsDrag.collapsed.contains(index) { contentsDrag.collapsed.remove(index) } else { contentsDrag.collapsed.insert(index) } } label: { Image(systemName:contentsDrag.collapsed.contains(index) ? "chevron.right" : "chevron.down").font(.system(size:8)).opacity(hasChildren ? 0.6 : 0).frame(width:20,height:28).contentShape(Rectangle()) }.buttonStyle(.plain).disabled(!hasChildren).accessibilityLabel((contentsDrag.collapsed.contains(index) ? "Expand " : "Collapse ")+b.text).accessibilityHidden(!hasChildren)
                             ContentsRow(session:session,drag:contentsDrag,item:.heading(index),title:b.text,activate:{ session.editor?.finishComposition(); session.buffer.selection = EditSelection(b.body.start,b.body.start); if session.mode == .preview { session.switchMode(.write) }; session.editor?.refresh(reveal:true) })
                         }.padding(.leading,CGFloat(max(0,b.level-(session.headings.filter { $0.1.level == 1 }.count == 1 ? 2 : 1)))*12).frame(height:28)
                     }
