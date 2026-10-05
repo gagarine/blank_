@@ -64,6 +64,8 @@ The build script guards SDK 27-only toolbar APIs at compile time and runtime, ta
 
 Run checks appropriate to the change. Editing/model changes warrant meaningful Unicode, selection, history, composition and clipboard regressions, not tests that merely mirror implementation. Visually inspect typography/layout/interaction changes using the actual app. Update the README when behavior, remaining work or evidence changes. Measure CPU/memory/latency and state measurement limits; do not promise resource use without evidence.
 
+For computer-use UI checks, reuse the already authorized `local.blank.resize-ui` identity at `/tmp/blank-resize-ui/blank_.app`, with disposable `BLANK_DATA_DIR` data. Do not create a new UI-test bundle identity or request additional app access just to run another check.
+
 GitHub Actions builds/checks macOS 26 and Xcode 27 and uploads app archives. Publishing a release (including a prerelease) builds its tagged commit, then attaches `blank_-macos-arm64.zip` and `SHA256SUMS` after both jobs pass. Use tags `vX.Y.Z` (optional prerelease/build suffix); `BLANK_VERSION` sets the app's numeric bundle version before signing. The distributed SDK 27 build runs on macOS 26+ and enables the tab role on macOS 27. Release upload is retryable and replaces assets of the same names without changing release notes. It does not create or publish a release itself. These apps are ad-hoc signed; notarization and Intel support are not verified. GitHub caches are branch-scoped, so the first build on a new/default branch can be slow.
 
 ## Remaining work and working style

@@ -684,12 +684,14 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     override func cursorUpdate(with event: NSEvent) {
         if updateSlashMenuCursor(for:event) { return }
+        if updateSidebarResizeCursor(for:event) { return }
         if session?.mode != .write { super.cursorUpdate(with:event) }
         else if grabbed != nil { NSCursor.closedHand.set() }
         else { mouseMoved(with:event) }
     }
     override func mouseMoved(with event: NSEvent) {
         if updateSlashMenuCursor(for:event) { return }
+        if updateSidebarResizeCursor(for:event) { return }
         guard session?.mode == .write, grabbed == nil else { return }
         let point = convert(event.locationInWindow,from:nil)
         if codeButtons.values.contains(where:{ $0.frame.contains(point) }) || tableButtons.contains(where:{ $0.trackingMenu || !$0.isHidden && $0.frame.insetBy(dx:-6,dy:-6).contains(point) }) { NSCursor.arrow.set(); return }
@@ -703,7 +705,14 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         else { (bounds.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set() }
     }
     override func mouseExited(with event: NSEvent) {
+        if updateSidebarResizeCursor(for:event) { return }
         if grabbed == nil { hoverBlock = nil; needsDisplay = true; NSCursor.arrow.set() }
+    }
+    private func updateSidebarResizeCursor(for event: NSEvent) -> Bool {
+        guard grabbed == nil, let split = window?.contentViewController as? DocumentSplitViewController,
+              split.updateResizeCursor(for:event) else { return false }
+        if hoverBlock != nil { hoverBlock = nil; needsDisplay = true }
+        return true
     }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow,from:nil)

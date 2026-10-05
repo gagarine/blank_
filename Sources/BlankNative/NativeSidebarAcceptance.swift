@@ -14,12 +14,14 @@ import BlankCore
         let menuItem = sidebar.menu.items.first { $0.title == "Thumbnails" }!
         controller.chooseSidebar(menuItem); RunLoop.main.run(until:Date().addingTimeInterval(0.25))
         check(session.sidebar && session.sidebarMode == .thumbnails && session.editor === editor,"Choosing Thumbnails opens the sidebar without replacing the editor")
+        resizeTarget(controller:controller)
         session.thumbnails.update()
         check(session.thumbnails.pages.count > 1 && session.thumbnails.image(0)?.tiffRepresentation != nil,"Write thumbnails render real native typography across multiple pages")
         let original = session.buffer.source
         session.thumbnails.navigate(1)
         check(editor.selectedRange().location > 0 && session.buffer.source == original,"Write thumbnail navigation changes position without editing source")
         session.switchMode(.source); RunLoop.main.run(until:Date().addingTimeInterval(0.1)); session.thumbnails.update()
+        resizeTarget(controller:controller)
         check(session.thumbnails.pages.count > 1 && session.thumbnails.image(0)?.tiffRepresentation != nil && editor.string == source,"Source thumbnails use styled native layout and retain exact source characters")
         let appearance = editor.appearance, systemColors = session.systemColors
         editor.appearance = NSAppearance(named:.darkAqua); session.systemColors = true; editor.refresh(); session.thumbnails.update()
@@ -74,6 +76,38 @@ import BlankCore
         while session.searchController.searching && Date() < deadline { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }
         guard !session.searchController.searching else { fatalError("Search did not finish") }
     }
+    static func resizeTarget(controller original: DocumentWindow) {
+        // Start with an expanded pane so geometry checks don't depend on the
+        // synchronous runner draining an in-flight collapse animation.
+        let session = DocumentSession(); session.sidebar = true; session.mode = original.session.mode
+        session.pdfData = original.session.pdfData; session.pdf = original.session.pdf
+        let controller = DocumentWindow(session:session)
+        controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
+        defer { controller.window?.close(); original.window?.makeKeyAndOrderFront(nil) }
+        let split = controller.splitController.splitView
+        split.layoutSubtreeIfNeeded()
+        let sidebar = controller.splitController.contentsItem.viewController.view
+        for width: CGFloat in [240,280,220] {
+            split.setPosition(width,ofDividerAt:0); split.layoutSubtreeIfNeeded()
+            guard abs(split.convert(sidebar.bounds,from:sidebar).width-width) < 2 else { fatalError("FAIL: Native sidebar width must follow resizing before testing the new hit area") }
+            let boundary = split.convert(sidebar.bounds,from:sidebar).maxX+split.dividerThickness/2
+            for offset: CGFloat in [-6,0,6] {
+                let point = NSPoint(x:boundary+offset,y:split.bounds.midY)
+                let root = controller.window!.contentView!
+                guard root.hitTest(split.convert(point,to:root.superview)) === split else { fatalError("FAIL: Widened sidebar resize target must route both margins to the native split view after resizing | width=\(width), offset=\(offset)") }
+                let event = NSEvent.mouseEvent(with:.mouseMoved,location:split.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:0,clickCount:0,pressure:0)!
+                for _ in 0..<3 {
+                    NSCursor.iBeam.set()
+                    if let editor = session.editor { editor.mouseMoved(with:event); editor.cursorUpdate(with:event); editor.mouseExited(with:event) }
+                    else { _ = controller.splitController.updateResizeCursor(for:event) }
+                    guard NSCursor.current == .resizeLeftRight else { fatalError("FAIL: Editor tracking must not replace the sidebar resize cursor") }
+                }
+            }
+            let outside = NSEvent.mouseEvent(with:.mouseMoved,location:split.convert(NSPoint(x:boundary+20,y:split.bounds.midY),to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:0,clickCount:0,pressure:0)!
+            guard !controller.splitController.updateResizeCursor(for:outside) else { fatalError("FAIL: Resize cursor must release outside its gutter") }
+        }
+        print("PASS: Native sidebar resize accepts both margins and retains its cursor through editor tracking in \(controller.session.mode)")
+    }
     static func contactSheet(controller: DocumentWindow) {
         let session = controller.session, source = session.buffer.source, originalMode = session.mode
         let editor = session.editor, pdfScale = session.pdfView?.scaleFactor
@@ -103,6 +137,7 @@ import BlankCore
         func check(_ condition: @autoclosure () -> Bool,_ label: String) { guard condition() else { fatalError("FAIL: \(label) | sidebar=\(session.sidebar), visible=\(session.searchVisible), query=\(session.searchQuery), matches=\(session.searchController.matches.count)") }; print("PASS: \(label)") }
         session.sidebar = false; session.showSearch(); session.searchQuery = "Native"; wait(session)
         check(session.sidebar && session.searchController.matches.count >= 2 && session.pdfView?.highlightedSelections?.allSatisfy { $0.color == NSColor.systemYellow } == true,"Live Preview search maps worker PDF ranges to yellow selections on the live document")
+        RunLoop.main.run(until:Date().addingTimeInterval(0.25)); resizeTarget(controller:controller)
         check(session.searchController.groups.count <= session.pdf!.pageCount && session.searchController.groups.flatMap(\.matches).count == session.searchController.matches.count,"Preview sidebar groups every match by page without losing navigation targets")
         session.find()
         check(session.pdfView?.currentSelection?.string?.localizedCaseInsensitiveContains("native") == true,"Return-style Preview navigation selects a real PDF text result")

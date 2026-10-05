@@ -63,6 +63,31 @@ import Combine
             }
         }.store(in:&subscriptions)
     }
+    override func splitView(_ splitView: NSSplitView,additionalEffectiveRectOfDividerAt dividerIndex: Int) -> NSRect {
+        let native = super.splitView(splitView,additionalEffectiveRectOfDividerAt:dividerIndex)
+        guard dividerIndex == 0, let target = sidebarResizeRect else { return native }
+        // Extend AppKit's own divider target without drawing another divider
+        // or replacing its drag tracking and sidebar size constraints.
+        return native.isEmpty ? target : native.union(target)
+    }
+    override func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
+        // Changing a pane's width doesn't change the split view's own frame.
+        // Rebuild its native cursor/drag regions at the new divider position.
+        splitView.window?.invalidateCursorRects(for:splitView)
+    }
+    private var sidebarResizeRect: NSRect? {
+        guard splitView.isVertical, contentsItem?.isCollapsed == false else { return nil }
+        let sidebar = contentsItem.viewController.view
+        let pane = splitView.convert(sidebar.bounds,from:sidebar)
+        guard pane.maxX > splitView.bounds.minX else { return nil }
+        return NSRect(x:pane.maxX+splitView.dividerThickness/2-7,y:splitView.bounds.minY,width:14,height:splitView.bounds.height).intersection(splitView.bounds)
+    }
+    func updateResizeCursor(for event: NSEvent) -> Bool {
+        guard activeTransitions == 0, event.window === splitView.window,
+              let target = sidebarResizeRect, target.contains(splitView.convert(event.locationInWindow,from:nil)) else { return false }
+        NSCursor.resizeLeftRight.set(); return true
+    }
     private func updateAccessory(mode: EditorMode,search: Bool,contact: Bool) {
         let height: CGFloat = contact ? 38 : (search ? 38 : 0)+(mode == .preview ? 35 : 0)
         if height == 0 { detailItem.topAlignedAccessoryViewControllers = []; accessory = nil; return }
