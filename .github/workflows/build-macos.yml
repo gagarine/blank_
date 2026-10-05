@@ -44,17 +44,16 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            helper/target
-            typst-syntax-bridge/target
-          key: native-${{ matrix.runner }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.lock') }}
-          restore-keys: native-${{ matrix.runner }}-${{ runner.arch }}-
+            target
+          key: native-workspace-${{ matrix.runner }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.toml', 'Cargo.lock', 'typst-compiler/Cargo.toml', 'typst-syntax-bridge/Cargo.toml') }}
+          restore-keys: native-workspace-${{ matrix.runner }}-${{ runner.arch }}-
       - name: Build release and run checks
         run: bash scripts/check.sh release
       - name: Verify portable bundle and archive
         run: |
           app=build/blank_.app
           codesign --verify --deep --strict "$app"
-          for binary in blank_ libblank_syntax.dylib writer-helper; do
+          for binary in blank_ libblank_syntax.dylib typst-compiler; do
             lipo "$app/Contents/MacOS/$binary" -verify_arch arm64
           done
           # The editor must resolve its parser from the bundle, not this checkout.

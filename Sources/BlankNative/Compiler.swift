@@ -27,8 +27,8 @@ final class TypstCompiler {
     }
     private func call(_ method: String, params: [String:Any]) throws -> [String:Any] {
         if process == nil {
-            let helper = Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("writer-helper")
-            let candidate = FileManager.default.isExecutableFile(atPath: helper.path) ? helper : URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("helper/target/release/writer-helper")
+            let compiler = Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("typst-compiler")
+            let candidate = FileManager.default.isExecutableFile(atPath: compiler.path) ? compiler : URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("target/release/typst-compiler")
             let p = Process(); p.executableURL = candidate
             let i = Pipe(), o = Pipe(); p.standardInput = i; p.standardOutput = o; p.standardError = FileHandle.standardError
             try p.run(); process = p; input = i.fileHandleForWriting; output = o.fileHandleForReading; buffer.removeAll()

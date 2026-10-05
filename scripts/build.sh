@@ -10,13 +10,14 @@ if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; the
 fi
 app_version=${app_version%%[-+]*}
 export MACOSX_DEPLOYMENT_TARGET=26.0
+# Swift linking and app packaging use this shared workspace output directory.
+export CARGO_TARGET_DIR="$PWD/target"
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/module-cache"
 mkdir -p "$CLANG_MODULE_CACHE_PATH" .build/cache
 cargo_options=(--locked)
 if [[ "${BLANK_OFFLINE:-0}" == 1 ]]; then cargo_options+=(--offline); fi
-cargo build --release "${cargo_options[@]}" --manifest-path typst-syntax-bridge/Cargo.toml
-cargo build --release "${cargo_options[@]}" --manifest-path helper/Cargo.toml
+cargo build --workspace --release "${cargo_options[@]}"
 sdk_path=${BLANK_SDK_PATH:-$(xcrun --sdk macosx --show-sdk-path)}
 sdk_version=$(/usr/libexec/PlistBuddy -c 'Print :Version' "$sdk_path/SDKSettings.plist")
 swift_options=(--sdk "$sdk_path")
@@ -31,8 +32,10 @@ install_binary() {
 # Replacing an inode keeps a running editor's signed executable pages intact.
 # Writing over its executable can make macOS terminate the running process.
 install_binary ".build/$configuration/blank_" "$app/Contents/MacOS/blank_"
-install_binary typst-syntax-bridge/target/release/libblank_syntax.dylib "$app/Contents/MacOS/libblank_syntax.dylib"
-install_binary helper/target/release/writer-helper "$app/Contents/MacOS/writer-helper"
+install_binary target/release/libblank_syntax.dylib "$app/Contents/MacOS/libblank_syntax.dylib"
+install_binary target/release/typst-compiler "$app/Contents/MacOS/typst-compiler"
+# Remove the previous compiler name when rebuilding an existing bundle.
+rm -f "$app/Contents/MacOS/writer-helper"
 cp examples/Tutorial.typ Resources/AppIcon.icns "$app/Contents/Resources/"
 install_name_tool -id @rpath/libblank_syntax.dylib "$app/Contents/MacOS/libblank_syntax.dylib"
 parser_dependency=$(otool -L "$app/Contents/MacOS/blank_" | sed -n 's/^[[:space:]]*\(.*libblank_syntax\.dylib\) (compatibility.*$/\1/p')

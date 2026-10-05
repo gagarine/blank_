@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Protocol/integration checks against the actual bundled official compiler."""
+import argparse
 import base64
 import json
 import pathlib
@@ -9,10 +10,13 @@ import tempfile
 import time
 
 repo = pathlib.Path(__file__).resolve().parent.parent
-helper = repo / 'build/blank_.app/Contents/MacOS/writer-helper'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('app', nargs='?', type=pathlib.Path, default=repo/'build/blank_.app')
+app = parser.parse_args().app.resolve()
+compiler = app / 'Contents/MacOS/typst-compiler'
 with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
     root = pathlib.Path(temp)
-    process = subprocess.Popen([str(helper)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=root)
+    process = subprocess.Popen([str(compiler)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=root)
     seq = 0
     def call(method, params):
         global seq
@@ -24,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
         return reply['result']
     try:
         assert call('initialize', {})['typstVersion'] == '0.15.1'
-        tutorial = (repo/'examples/Tutorial.typ').read_text()
+        tutorial = (app/'Contents/Resources/Tutorial.typ').read_text()
         start = time.monotonic()
         result = call('compile', {'root':str(root),'entry':'Tutorial.typ','files':{'Tutorial.typ':tutorial},'revision':1})
         assert not result['diagnostics'], result

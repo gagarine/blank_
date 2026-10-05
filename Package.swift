@@ -7,7 +7,7 @@ let package = Package(
     targets: [
         .systemLibrary(name: "CTypst", path: "Sources/CTypst"),
         .target(name: "BlankCore", dependencies: ["CTypst"], linkerSettings: [
-            .unsafeFlags(["-Ltypst-syntax-bridge/target/release", "-lblank_syntax", "-Xlinker", "-rpath", "-Xlinker", "@executable_path"])
+            .unsafeFlags(["-Ltarget/release", "-lblank_syntax", "-Xlinker", "-rpath", "-Xlinker", "@executable_path"])
         ]),
         .executableTarget(name: "BlankNative", dependencies: ["BlankCore"]),
         .executableTarget(name: "BlankCoreChecks", dependencies: ["BlankCore"], path: "Tests/BlankCoreTests")

@@ -24,7 +24,9 @@ open build/blank_.app
 bash scripts/check.sh
 ```
 
-Both configurations update `build/blank_.app`; quit and reopen after rebuilding. Checks cover the document model, official compiler and native editing/file behavior. Native checks require a logged-in desktop session. See [AGENTS.md](AGENTS.md) for architecture and development conventions.
+The root Cargo workspace shares `Cargo.lock` and `target/` between the in-process `typst-syntax-bridge` library and the separate `typst-compiler` executable; Typst is pinned to 0.15.1.
+
+Both configurations update `build/blank_.app`; quit and reopen after rebuilding. Checks cover the document model, official compiler, native editing/file behavior and a relocated app bundle. Native checks require a logged-in desktop session. See [AGENTS.md](AGENTS.md) for architecture and development conventions.
 
 [GitHub Actions](.github/workflows/build-macos.yml) tests pull requests and pushes on macOS 26 and 27. Publishing a release tagged `vX.Y.Z` (prerelease suffixes supported) builds that commit and attaches `blank_-macos-arm64.zip` and `SHA256SUMS` after both jobs pass. Builds are ad-hoc signed and not notarized; Intel support remains unverified.
 

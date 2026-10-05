@@ -1,0 +1,17 @@
+[workspace]
+members = ["typst-compiler", "typst-syntax-bridge"]
+resolver = "3"
+
+[workspace.dependencies]
+typst = "=0.15.1"
+typst-syntax = "=0.15.1"
+typst-pdf = "=0.15.1"
+typst-layout = "=0.15.1"
+typst-kit = "=0.15.1"
+
+[profile.release]
+opt-level = 2
+debug = 0
+
+[profile.release.package.blank-syntax]
+strip = true
