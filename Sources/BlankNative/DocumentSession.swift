@@ -518,8 +518,11 @@ struct Recovery: Codable {
             let options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
             // A search can fail or the user can select unrelated text between
             // matches. Replace must never overwrite an arbitrary selection.
-            guard selection.length > 0, NSMaxRange(selection) <= text.length,
-                  (text.substring(with:selection) as NSString).compare(searchQuery,options:options) == .orderedSame else { find(); return }
+            guard selection.length > 0, NSMaxRange(selection) <= text.length else { find(); return }
+            let exact = (text.substring(with:selection) as NSString).compare(searchQuery,options:options) == .orderedSame
+            let match = text.range(of:searchQuery,options:options,range:selection)
+            let atomicMatch = mode == .write && match.location != NSNotFound && buffer.projection.atomicRange(match) == selection
+            guard exact || atomicMatch else { find(); return }
             editor.insertText(replaceText,replacementRange:selection); find(); return
         }
         let paths = projectSearch ? includes : [active]
