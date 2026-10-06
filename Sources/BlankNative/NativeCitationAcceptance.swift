@@ -101,6 +101,24 @@ private final class CitationAcceptanceProtocol: URLProtocol {
         let attributed = renderer.rendered()
         let bookTitle = (attributed.string as NSString).range(of:"Citation acceptance reference")
         check(bookTitle.location != NSNotFound && NSFontManager.shared.traits(of:attributed.attribute(.font,at:bookTitle.location,effectiveRange:nil) as! NSFont).contains(.italicFontMask),"Native bibliography typography retains the official style’s italic title")
+        writing.editor = renderer; renderer.refresh()
+        writing.buffer.setReferencePresentations([]); renderer.refresh()
+        writing.searchVisible = true; writing.searchQuery = "Example"
+        writing.searchController.update(revealFirst:false)
+        writing.revision += 1 // Force a new result instead of reusing the cached PDF.
+        writing.compile()
+        let searchDeadline = Date().addingTimeInterval(20)
+        while (writing.compiling || writing.searchController.searching || writing.searchController.matches.count != 2) && Date() < searchDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }
+        check(writing.searchController.matches.count == 2,"Async reference formatting refreshes Find’s placeholder snapshot (\(writing.searchController.matches.count) matches; \(writing.error ?? "no compile error"))")
+        check(writing.searchController.matches.allSatisfy { (writing.buffer.projection.text as NSString).substring(with:$0.range) == "Example" },"Refreshed Find ranges address the displayed citation and bibliography")
+        let replacementSource = "Before #cite(<smith>) target target."
+        writing.buffer.loadExternal(replacementSource); writing.revision += 1
+        writing.buffer.setReferencePresentations([ReferencePresentation(source:ByteSpan(7,21),text:"(Smith Smith, 2020)")]); renderer.refresh()
+        writing.searchQuery = "target"; writing.replaceText = "日本"; writing.replace(all:true)
+        check(writing.buffer.source == "Before #cite(<smith>) 日本 日本.","Replace All after a rendered citation preserves source offsets")
+        writing.undo(); renderer.refresh(); writing.searchQuery = "Smith"; writing.replaceText = "Author"; writing.replace(all:true)
+        check(writing.buffer.source == "Before Author target target.","Replace All merges repeated matches within one atomic citation")
+        writing.undo(); check(writing.buffer.source == replacementSource,"Atomic Replace All uses exact-source undo")
         writing.saveWork?.cancel(); writing.recoveryQueue.sync {}
         session.sheet = nil
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
