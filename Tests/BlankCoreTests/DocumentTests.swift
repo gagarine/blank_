@@ -325,6 +325,27 @@ final class DocumentTests {
         table.editWrite(NSRange(location:displayed.location,length:0),text:"日本 ",group:"")
         XCTAssertTrue(table.source.contains("[Before 日本 #cite(<smith>) after]"))
         table.undo(); XCTAssertEqual(table.source,"#table(columns: 1, [Before #cite(<smith>) after])")
+        for original in ["#emph[#cite(<smith>)] #cite(<doe>).", "*#cite(<smith>)* #cite(<doe>).", "#cite(<smith>) *#cite(<doe>)*.", "#emph[日本 before #cite(<smith>)] #cite(<doe>).", "#cite(<smith>) *#cite(<doe>) after*."] {
+            let grouped = DocumentBuffer(original)
+            let first = original.range(of:"#cite")!.lowerBound, last = original.range(of:")",options:.backwards)!.upperBound
+            grouped.setReferencePresentations([ReferencePresentation(source:ByteSpan(original[..<first].utf8.count,original[..<last].utf8.count),text:"(Doe, 2021; Smith, 2020)")])
+            XCTAssertTrue(grouped.projection.text.contains("(Doe, 2021; Smith, 2020)")); XCTAssertFalse(grouped.projection.text.contains("Citation"))
+            if original.contains("before") { XCTAssertTrue(grouped.projection.text.hasPrefix("日本 before ")) }
+            if original.contains("after") { XCTAssertTrue(grouped.projection.text.hasSuffix(" after.")) }
+            let range = grouped.projection.atomicRanges.first!
+            let fragment = grouped.copy(range)
+            XCTAssertEqual(fragment.source,String(original.dropLast()))
+            let pasted = DocumentBuffer(); pasted.paste(fragment,range:NSRange(location:0,length:0)); XCTAssertFalse(pasted.parsed.erroneous)
+            grouped.editWrite(range,text:""); XCTAssertFalse(grouped.parsed.erroneous); XCTAssertEqual(grouped.source,".")
+            grouped.undo(); XCTAssertEqual(grouped.source,original)
+        }
+        let overlapSource = "#cite(<a>) *#cite(<b>) middle #cite(<c>)* #cite(<d>)."
+        let overlap = DocumentBuffer(overlapSource)
+        let bEnd = overlapSource.range(of:"#cite(<b>)")!.upperBound, cStart = overlapSource.range(of:"#cite(<c>)")!.lowerBound
+        overlap.setReferencePresentations([ReferencePresentation(source:ByteSpan(0,overlapSource[..<bEnd].utf8.count),text:"(A; B)"),ReferencePresentation(source:ByteSpan(overlapSource[..<cStart].utf8.count,overlapSource.utf8.count-1),text:"(C; D)")])
+        XCTAssertEqual(overlap.projection.text,"(A; B) middle (C; D).")
+        XCTAssertEqual(overlap.copy(overlap.projection.atomicRanges.first!).source,String(overlapSource.dropLast()))
+        XCTAssertEqual(overlap.renderedReferences.count,1)
     }
     func testExplicitFormattingInsideWords() {
         let b = DocumentBuffer("word")

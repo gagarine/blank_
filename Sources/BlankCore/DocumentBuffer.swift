@@ -542,6 +542,77 @@ extension DocumentBuffer {
         return Projection(blocks:blocks)
     }
     public func setReferencePresentations(_ references: [ReferencePresentation]) {
+        guard !references.isEmpty || !referencePresentations.isEmpty else { return }
+        let originals = references
+        let ordinary = Projection(source:source,parsed:parsed)
+        func shifted(_ node: SyntaxNode,by delta: Int) -> SyntaxNode {
+            SyntaxNode(kind:node.kind,start:node.start+delta,end:node.end+delta,children:node.children.map { shifted($0,by:delta) })
+        }
+        // Literal table cells use independent local syntax projections.
+        let markups = parsed.tree.descendants("Markup") + ordinary.blocks.flatMap(\.tableCells).flatMap { cell in
+            ParsedSource.parse(source.bytes(cell)).tree.descendants("Markup").map { shifted($0,by:cell.start) }
+        }
+        let balancedReferences = references.map { reference -> ReferencePresentation in
+            guard reference.kind == "citation",
+                  let markup = markups.filter({ $0.start <= reference.source.start && $0.end >= reference.source.end }).min(by:{ $0.span.count < $1.span.count }),
+                  let first = markup.children.firstIndex(where:{ $0.end > reference.source.start }),
+                  let last = markup.children.lastIndex(where:{ $0.start < reference.source.end }) else { return reference }
+            let start = first > 0 && markup.children[first-1].kind == "Hash" ? first-1 : first
+            let balanced = ByteSpan(markup.children[start].start,markup.children[last].end)
+            guard balanced != reference.source else { return reference }
+            // CSL can group citations across emphasis/link wrappers. Keep whole
+            // syntax nodes in the atomic object, including any visible prose
+            // around those citations, so copy/paste and deletion stay balanced.
+            let a = ordinary.displayOffset(at:balanced.start), x = ordinary.displayOffset(at:reference.source.start)
+            let y = ordinary.displayOffset(at:reference.source.end), z = ordinary.displayOffset(at:balanced.end)
+            guard a <= x, x <= y, y <= z, z <= ordinary.text.utf16.count else { return reference }
+            let text = ordinary.text as NSString
+            let prefix = text.substring(with:NSRange(location:a,length:x-a)), suffix = text.substring(with:NSRange(location:y,length:z-y))
+            var formats = reference.formats.map { ReferenceFormat(range:NSRange(location:$0.range.location+prefix.utf16.count,length:$0.range.length),bold:$0.bold,italic:$0.italic) }
+            for block in ordinary.blocks {
+                var at = block.display.location
+                for run in block.inlines.flatMap(\.runs) {
+                    defer { at += run.text.utf16.count }
+                    guard run.style.bold || run.style.italic else { continue }
+                    for (range,offset) in [(NSRange(location:a,length:x-a),-a),(NSRange(location:y,length:z-y),prefix.utf16.count+reference.text.utf16.count-y)] {
+                        let part = NSIntersectionRange(NSRange(location:at,length:run.text.utf16.count),range)
+                        if part.length > 0 { formats.append(ReferenceFormat(range:NSRange(location:part.location+offset,length:part.length),bold:run.style.bold,italic:run.style.italic)) }
+                    }
+                }
+            }
+            return ReferencePresentation(source:balanced,text:prefix+reference.text+suffix,kind:reference.kind,formats:formats)
+        }
+        var references: [ReferencePresentation] = []
+        for reference in balancedReferences.sorted(by:{ $0.source.start < $1.source.start }) {
+            guard reference.kind == "citation", let previous = references.last, previous.kind == "citation", reference.source.start < previous.source.end else { references.append(reference); continue }
+            // Two CSL groups can share a surrounding mark wrapper. Represent
+            // their union once, preserving prose between the formatted groups.
+            let span = ByteSpan(previous.source.start,max(previous.source.end,reference.source.end))
+            let members = originals.filter { $0.kind == "citation" && $0.source.start >= span.start && $0.source.end <= span.end }.sorted { $0.source.start < $1.source.start }
+            var text = "", formats: [ReferenceFormat] = [], cursor = ordinary.displayOffset(at:span.start)
+            func appendLiteral(until end: Int) {
+                guard end > cursor else { return }
+                let offset = text.utf16.count-cursor, range = NSRange(location:cursor,length:end-cursor)
+                text += (ordinary.text as NSString).substring(with:range)
+                for block in ordinary.blocks {
+                    var at = block.display.location
+                    for run in block.inlines.flatMap(\.runs) {
+                        defer { at += run.text.utf16.count }
+                        let part = NSIntersectionRange(NSRange(location:at,length:run.text.utf16.count),range)
+                        if part.length > 0 && (run.style.bold || run.style.italic) { formats.append(ReferenceFormat(range:NSRange(location:part.location+offset,length:part.length),bold:run.style.bold,italic:run.style.italic)) }
+                    }
+                }
+                cursor = end
+            }
+            for member in members {
+                appendLiteral(until:ordinary.displayOffset(at:member.source.start))
+                let offset = text.utf16.count
+                formats += member.formats.map { ReferenceFormat(range:NSRange(location:$0.range.location+offset,length:$0.range.length),bold:$0.bold,italic:$0.italic) }
+                text += member.text; cursor = ordinary.displayOffset(at:member.source.end)
+            }
+            appendLiteral(until:ordinary.displayOffset(at:span.end))
+            references[references.count-1] = ReferencePresentation(source:span,text:text,formats:formats)
+        }
         guard referencePresentations != references else { return }
         referencePresentations = references
         projection = folded(Projection(source:source,parsed:parsed,references:references))

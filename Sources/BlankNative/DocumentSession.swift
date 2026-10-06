@@ -389,6 +389,7 @@ struct Recovery: Codable {
     }
     private func applyReferencePresentations(_ records: [[String:Any]]) {
         guard editor?.composing != true, editor?.hasMarkedText() != true else { referenceScheduledRevision = -1; return }
+        var changedPresentation = false
         for (path,buffer) in buffers where path.hasSuffix(".typ") {
             let references = records.compactMap { record -> ReferencePresentation? in
                 guard record["path"] as? String == path, let start = record["start"] as? Int, let end = record["end"] as? Int,
@@ -400,9 +401,12 @@ struct Recovery: Codable {
                 }
                 return ReferencePresentation(source:ByteSpan(start,end),text:text,kind:kind,formats:formats)
             }
+            let before = buffer.presentationRevision
             buffer.setReferencePresentations(references)
+            changedPresentation = changedPresentation || buffer.presentationRevision != before
         }
         editor?.refresh()
+        if changedPresentation { searchController.update(revealFirst:false) }
     }
     func compile(export: URL? = nil) {
         guard !compiling else {
@@ -521,11 +525,15 @@ struct Recovery: Codable {
         let paths = projectSearch ? includes : [active]
         let options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
         for path in paths {
-            let model = buffers[path]!, copy = DocumentBuffer(model.source), original = (mode == .source ? model.source : model.projection.text) as NSString
+            let model = buffers[path]!, copy = model.editingCopy(), original = (mode == .source ? model.source : model.projection.text) as NSString
             var matches: [NSRange] = [], at = 0
             while at < original.length {
                 let m = original.range(of:searchQuery,options:options,range:NSRange(location:at,length:original.length-at))
-                if m.location == NSNotFound { break }; matches.append(m); at = NSMaxRange(m)
+                if m.location == NSNotFound { break }
+                let range = mode == .source ? m : model.projection.atomicRange(m)
+                if let previous = matches.last, NSIntersectionRange(previous,range).length > 0 { matches[matches.count-1] = NSUnionRange(previous,range) }
+                else { matches.append(range) }
+                at = NSMaxRange(m)
             }
             for m in matches.reversed() { if mode == .source { copy.editSource(m,text:replaceText) } else { copy.editWrite(m,text:replaceText) } }
             model.breakUndoGroup(); model.commit(copy.source,selection:model.selection)
