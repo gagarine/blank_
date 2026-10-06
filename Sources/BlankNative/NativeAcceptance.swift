@@ -347,6 +347,32 @@ import BlankCore
         check(NSCursor.current == NSCursor.iBeam,"Dropping over text restores the text cursor")
         check(session.buffer.projection.blocks.map(\.text) == ["Second block","First block","Third block"],"Dropping a block moves its source")
         session.undo(); check(session.buffer.projection.blocks.first?.text == "First block","Block drag undo restores order")
+        let shortDragSource = session.buffer.source
+        let longDragSource = (0..<100).map { "Block \($0) café 👩🏽‍💻" }.joined(separator:"\n\n")
+        session.buffer.loadExternal(longDragSource); session.revision += 1; editor.refresh()
+        editor.scroll(.zero); editor.ensureNativeLayout()
+        let longHandle = NSPoint(x:editor.textContainerInset.width-23,y:editor.blockRect(0).minY+12)
+        editor.mouseDown(with:pointer(.leftMouseDown,longHandle))
+        // Cross many viewports with the original block still grabbed. Geometry
+        // must stay in document coordinates after its glyphs leave the screen.
+        for target in [20,40,60,80] {
+            let rect = editor.blockRect(target)
+            editor.scroll(NSPoint(x:0,y:rect.minY-150)); editor.ensureNativeLayout()
+            let drop = NSPoint(x:longHandle.x+50,y:editor.blockRect(target).minY-7)
+            editor.mouseDragged(with:pointer(.leftMouseDragged,drop))
+            check(editor.grabbed == 0 && editor.dragTarget == target,"Long block drag reaches block \(target) without jumping to the document start")
+            check(editor.blockRect(0).maxY < editor.visibleRect.minY,"Offscreen block geometry stays above the viewport during dragging")
+        }
+        let heldDrop = NSPoint(x:longHandle.x+50,y:editor.visibleRect.maxY+12)
+        editor.mouseDragged(with:pointer(.leftMouseDragged,heldDrop))
+        let beforeAutoscroll = editor.visibleRect.minY
+        RunLoop.main.run(until:Date().addingTimeInterval(0.25))
+        check(editor.visibleRect.minY > beforeAutoscroll && editor.dragTarget > 80,"Holding a block below the viewport continues autoscrolling without new mouse events")
+        let finalTarget = editor.dragTarget
+        editor.mouseUp(with:pointer(.leftMouseUp,NSPoint(x:longHandle.x+50,y:editor.visibleRect.maxY)))
+        check(session.buffer.projection.blocks[finalTarget-1].text == "Block 0 café 👩🏽‍💻" && editor.blockDragTimer == nil,"Long-distance drop preserves the block and stops autoscrolling")
+        session.undo(); check(session.buffer.source == longDragSource,"Long-distance block move undoes to exact Unicode source")
+        session.buffer.loadExternal(shortDragSource); session.revision += 1; editor.refresh(); editor.scroll(.zero); editor.ensureNativeLayout()
         let menuSource = session.buffer.source
         editor.showBlockMenu(0,event:pointer(.leftMouseUp,handle))
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
@@ -647,6 +673,17 @@ import BlankCore
         session.revision += 1; editor.refresh(); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(editor.objectViews[0] is FigureBlockView && loadImage("assets/test.png",session:session) != nil,"Figure renders through native AppKit image view")
         check(editor.textLayoutManager == nil,"TextKit 1 retained with native figure")
+        let figureSource = session.buffer.source
+        session.buffer.loadExternal(figureSource+"\n\n"+(0..<60).map { "Paragraph \($0) after the figure" }.joined(separator:"\n\n"))
+        session.revision += 1; editor.refresh(); editor.scroll(.zero); editor.ensureNativeLayout(); editor.positionObjects()
+        let figureOrigin = editor.objectViews[0]!.frame.origin
+        editor.scroll(NSPoint(x:0,y:180)); editor.ensureNativeLayout(); editor.positionObjects()
+        check(editor.objectViews[0]?.frame.origin == figureOrigin && figureOrigin.y < editor.visibleRect.minY,"Partially scrolled figure keeps its document position instead of sticking to the viewport top")
+        editor.scroll(NSPoint(x:0,y:editor.blockRect(30).minY)); editor.ensureNativeLayout(); editor.positionObjects()
+        check(editor.objectViews[0] == nil && editor.blockRect(0).maxY < editor.visibleRect.minY,"Fully scrolled figure leaves the viewport and releases its overlay")
+        editor.scroll(.zero); editor.ensureNativeLayout(); editor.positionObjects()
+        check(editor.objectViews[0]?.frame.origin == figureOrigin,"Scrolling back restores the figure at its original document position")
+        session.buffer.loadExternal(figureSource); session.revision += 1; editor.refresh()
         session.switchMode(.source); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let source = session.editor!
         source.setSelectedRange(NSRange(location:source.string.utf16.count,length:0)); source.insertText("(",replacementRange:source.selectedRange())
