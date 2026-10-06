@@ -7,6 +7,14 @@ public struct EditSelection: Codable, Equatable {
     public var focus: Int
     public init(_ anchor: Int, _ focus: Int) { self.anchor = anchor; self.focus = focus }
     public var span: ByteSpan { ByteSpan(min(anchor, focus), max(anchor, focus)) }
+    public func mapped(through patch: SourcePatch) -> EditSelection {
+        func mapped(_ point: Int) -> Int {
+            if point <= patch.start { return point }
+            if point >= patch.oldSpan.end { return point+patch.inserted.utf8.count-patch.removed.utf8.count }
+            return patch.newSpan.end
+        }
+        return EditSelection(mapped(anchor),mapped(focus))
+    }
 }
 public struct SourcePatch: Codable, Equatable {
     public var start: Int
@@ -28,6 +36,7 @@ public struct SourcePatch: Codable, Equatable {
     }
 }
 private struct HistoryStep {
+    let id = UUID()
     var patches: [SourcePatch]
     var before: EditSelection
     var after: EditSelection
@@ -72,6 +81,9 @@ public final class DocumentBuffer {
     public private(set) var revision: Int = 0
     public var selection = EditSelection(0, 0)
     private var undoSteps: [HistoryStep] = [], redoSteps: [HistoryStep] = []
+    public var historyIDs: Set<UUID> { Set((undoSteps+redoSteps).map(\.id)) }
+    public var undoID: UUID? { undoSteps.last?.id }
+    public var redoID: UUID? { redoSteps.last?.id }
     public var canUndo: Bool { !undoSteps.isEmpty }
     public var canRedo: Bool { !redoSteps.isEmpty }
     public var historyBytes: Int { (undoSteps + redoSteps).reduce(0) { $0+$1.bytes } }

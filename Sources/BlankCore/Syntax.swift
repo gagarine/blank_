@@ -12,6 +12,8 @@ public struct SyntaxNode: Codable {
     public var start: Int
     public var end: Int
     public var children: [SyntaxNode]
+    public var stringValue: String? = nil
+    public var rawText: String? = nil
     public var span: ByteSpan { ByteSpan(start, end) }
     public var markup: SyntaxNode? { children.first { $0.kind == "Markup" } }
     public func descendants(_ kind: String) -> [SyntaxNode] {

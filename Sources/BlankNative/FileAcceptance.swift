@@ -37,10 +37,12 @@ import BlankCore
             session.buffers["main.typ"]!.undo(); session.changed()
             check(session.includes.count == 2 && session.buffers["chapters/two.typ"] != nil,"Removing an include hides the chapter and retains its source history")
             session.buffer.editSource(NSRange(location:session.buffer.source.utf16.count,length:0),text:"\n\n#include \"chapters/later.typ\""); session.changed()
+            try session.saveToDisk()
+            check(try String(contentsOf:root.appendingPathComponent("chapters/later.typ"),encoding:.utf8) == "","New chapter includes save an empty .typ file automatically")
             try "= Arrived later".write(to:root.appendingPathComponent("chapters/later.typ"),atomically:true,encoding:.utf8)
             let watchDeadline = Date().addingTimeInterval(2)
-            while session.buffers["chapters/later.typ"] == nil && Date() < watchDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
-            check(session.buffers["chapters/later.typ"] != nil,"Directory events load newly created included chapters without polling")
+            while session.buffers["chapters/later.typ"]?.source != "= Arrived later" && Date() < watchDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
+            check(session.buffers["chapters/later.typ"] != nil,"Edited includes create empty chapter files automatically")
             session.buffer.undo(); session.changed()
             session.buffer.editSource(NSRange(location:session.buffer.source.utf16.count,length:0),text:" café"); session.dirty = true
             try session.saveToDisk()
@@ -72,7 +74,6 @@ import BlankCore
             session.buffer.undo(); check(!session.buffer.source.hasSuffix("LOCAL"),"Rename retains undo history")
             session.buffer.redo(); try session.saveToDisk()
             try session.saveCopy(to:copy.appendingPathComponent("Copy.typ"))
-            try "{\"entry\":\"Copy.typ\",\"schemaVersion\":1}".write(to:copy.appendingPathComponent("writer.json"),atomically:true,encoding:.utf8)
             let reopened = DocumentSession(); sessions.append(reopened); try reopened.open(copy)
             check(reopened.entry == "Copy.typ" && reopened.includes.count == 2,"Save As copies chapters and updates project entry")
             check(reopened.buffers["tools.typ"] != nil,"Save As preserves local imports and ignores commented asset examples")
@@ -102,12 +103,11 @@ import BlankCore
             try fm.createDirectory(at:nestedRoot.appendingPathComponent("chapters"),withIntermediateDirectories:true)
             try fm.createDirectory(at:nestedRoot.appendingPathComponent("assets"),withIntermediateDirectories:true)
             try fm.createDirectory(at:nestedCopy,withIntermediateDirectories:true)
-            try "{\"entry\":\"chapters/main.typ\"}".write(to:nestedRoot.appendingPathComponent("writer.json"),atomically:true,encoding:.utf8)
             let nestedSource = "// #include \"untouched.typ\"\n#include \"one.typ\"\n#read(\"../assets/note.txt\")\n"
             try nestedSource.write(to:nestedRoot.appendingPathComponent("chapters/main.typ"),atomically:true,encoding:.utf8)
             try "= Nested chapter".write(to:nestedRoot.appendingPathComponent("chapters/one.typ"),atomically:true,encoding:.utf8)
             try "Asset contents".write(to:nestedRoot.appendingPathComponent("assets/note.txt"),atomically:true,encoding:.utf8)
-            let nested = DocumentSession(); sessions.append(nested); try nested.open(nestedRoot)
+            let nested = DocumentSession(); sessions.append(nested); try nested.open(nestedRoot,selectedEntry:"chapters/main.typ")
             try nested.saveCopy(to:nestedCopy.appendingPathComponent("Copy.typ"))
             check(nested.buffer.source == "// #include \"untouched.typ\"\n#include \"chapters/one.typ\"\n#read(\"assets/note.txt\")\n","Nested-entry Save As rebases literal include/asset paths and preserves comments")
             let nestedReopened = DocumentSession(); sessions.append(nestedReopened); try nestedReopened.open(nestedCopy)

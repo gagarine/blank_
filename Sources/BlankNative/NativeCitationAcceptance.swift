@@ -3,7 +3,7 @@ import Foundation
 import BlankCore
 
 // Intercept only Zotero's loopback endpoint; acceptance never needs a live library.
-private final class CitationAcceptanceProtocol: URLProtocol {
+final class CitationAcceptanceProtocol: URLProtocol {
     private static let lock = NSLock()
     private static var urls: [URL] = []
     static var requests: [URL] { lock.lock(); defer { lock.unlock() }; return urls }
@@ -130,6 +130,8 @@ private final class CitationAcceptanceProtocol: URLProtocol {
         check(writing.buffer.source == "Before Author target target.","Single Replace accepts Find’s expanded atomic citation selection")
         writing.undo(); check(writing.buffer.source == replacementSource,"Single citation replacement preserves exact-source undo")
         writing.saveWork?.cancel(); writing.recoveryQueue.sync {}
+        ProjectAcceptance.run()
+        BibliographyConversionAcceptance.run()
         session.sheet = nil
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
     }

@@ -142,6 +142,39 @@ final class DocumentTests {
             XCTAssertFalse(ParsedSource.parse("#let value = "+literal).erroneous)
         }
     }
+    func testBibliographyPreservation() {
+        let original = "% Keep café 日本\n@string{press = \"Press\"}\n@comment{Do not parse @book{fake,title={Fake}}}\n@book(other, title = {Unrelated}, year = 1999)\n@book{linked,\n  % Keep this comment\n  title = {Old {nested} title},\n  note = {Custom 👩🏽‍💻},\n  x-blank-zotero-key = {ABCD1234},\n  x-blank-zotero-library = {groups/123},\n}\n"
+        let export = "@book{linked, title={New \"quoted\" 日本}, year={2026},}"
+        let annotated = try! BibLaTeX.annotate(export,key:"ABCD1234",library:"groups/123")
+        let updated = try! BibLaTeX.merge(original,key:"linked",exported:annotated)
+        XCTAssertEqual(BibLaTeX.entries(original).map(\.key),["other","linked"])
+        XCTAssertTrue(updated.hasPrefix(original.components(separatedBy:"@book{linked")[0]))
+        XCTAssertTrue(updated.contains("% Keep this comment\n")); XCTAssertTrue(updated.contains("note = {Custom 👩🏽‍💻}"))
+        XCTAssertEqual(BibLaTeX.linked(updated).first?.0.key,"linked")
+        XCTAssertEqual(BibLaTeX.entries(updated).last?.value("title",in:updated),"New \"quoted\" 日本")
+        let removed = try! BibLaTeX.merge(annotated,key:"linked",exported:BibLaTeX.annotate("@article{linked, title={New},}",key:"ABCD1234",library:"groups/123"))
+        XCTAssertTrue(removed.hasPrefix("@article")); XCTAssertFalse(BibLaTeX.entries(removed).first!.fields.keys.contains("year"))
+        let source = "// untouched\n#bibliography((\"works.bib\", \"/refs/二.yaml\"), style: \"styles/apa.csl\")\n"
+        XCTAssertEqual(literalAssetPaths(source,ParsedSource.parse(source)),["works.bib","/refs/二.yaml","styles/apa.csl"])
+        XCTAssertEqual(bibliographyCalls(source,ParsedSource.parse(source)).first?.inputs.count,2)
+        let embedded = "#bibliography(bytes(\n```bib\n@book{key, title={A Book}}\n```.text\n), style: \"apa\")"
+        XCTAssertEqual(bibliographyCalls(embedded,ParsedSource.parse(embedded)).first?.inputs.first?.embedded,"@book{key, title={A Book}}")
+        let variable = "#let works = \"refs/works.bib\"\n#bibliography(works, style: \"apa\")"
+        XCTAssertEqual(bibliographyCalls(variable,ParsedSource.parse(variable)).first?.inputs.first?.path,"refs/works.bib")
+        let escape = "#include \"chapters/\\u{65e5}.typ\""
+        XCTAssertEqual(DocumentBuffer(escape).includes.first?.path,"chapters/日.typ")
+        let yaml = "# Comment\nmanual:\n  type: Book\n  title: Unrelated\n\nlinked:\n  type: Book\n  title: Old\n  # Keep custom notes\n  note: Custom\n  x-blank-zotero-key: \"ABCD1234\"\n  x-blank-zotero-library: \"personal\"\n"
+        let revised = try! Hayagriva.merge(yaml,key:"linked",exported:"linked:\n  type: Book\n  title: New\n",itemKey:"ABCD1234",library:"personal")
+        XCTAssertTrue(revised.hasPrefix(yaml.components(separatedBy:"linked:")[0])); XCTAssertTrue(revised.contains("  # Keep custom notes\n  note: Custom\n"))
+        XCTAssertEqual(try! Hayagriva.linked(revised).first?.0,"linked")
+        let indented = "linked: # preserve header\n    type: Book\n    title: Old\n    x-blank-zotero-key: ABCD1234\n    x-blank-zotero-library: users/0"
+        let noNewline = try! Hayagriva.merge(indented,key:"linked",exported:"linked:\n  type: Book\n  title: New\n  date: 2026\n",itemKey:"ABCD1234",library:"users/0")
+        XCTAssertTrue(noNewline.contains("linked: # preserve header\n    type: Book\n    title: New\n")); XCTAssertTrue(noNewline.contains("\n    date: 2026\n"))
+        XCTAssertEqual(try! Hayagriva.linked(noNewline).first?.0,"linked")
+        let model = DocumentBuffer(embedded); model.selection = EditSelection(0,0)
+        model.commit(embedded+"\n日本",selection:EditSelection(embedded.utf8.count+7,embedded.utf8.count+7))
+        model.undo(); XCTAssertEqual(model.source,embedded); XCTAssertEqual(model.selection,EditSelection(0,0))
+    }
     func testHistoryGroupingAndSelections() {
         let b = DocumentBuffer()
         b.commit("a",selection:EditSelection(1,1),group:"typing",now:1)
@@ -555,6 +588,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Structured clipboard",t.testClipboardHeadingAndList),
             ("Structured paste at caret",t.testStructuredPasteAtCaret),
             ("Typst string literals",t.testTypstStringLiterals),
+            ("Bibliography preservation",t.testBibliographyPreservation),
             ("Grouped history and selections",t.testHistoryGroupingAndSelections),
             ("Cross-mark deletion",t.testCrossMarkupDeletionRemainsValid),
             ("Consecutive code",t.testConsecutiveCodeBlocksStayTogether),
