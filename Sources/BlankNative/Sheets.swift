@@ -169,13 +169,13 @@ struct InsertionSheet: View {
     @NativeState var imageWidth = 85
     @NativeState var columns = 2
     @NativeState var rows = 3
-    @NativeState var refs: [ZoteroReference] = []
+    @StateObject private var citationSearch = CitationSearch()
+    @NativeState private var chosenReferences: [String:ZoteroReference] = [:]
     @NativeState var finding = false
     @NativeState var failure = ""
     @NativeState var library = "personal"
     @NativeState var locator = ""
     @NativeState var form = "normal"
-    @NativeState var selected = Set<String>()
     @NativeState private var loadedInitialReferences = false
     @FocusState var focus: Bool
     var title: String { session.insertionKind == "bibliography" ? "Bibliography style" : SlashCommand.all.first { $0.kind == session.insertionKind }?.label ?? "Insert" }
@@ -213,34 +213,32 @@ struct InsertionSheet: View {
                 loadedInitialReferences = true
                 searchZotero()
             }
-        }
+        }.onDisappear { citationSearch.cancel() }
     }
     var citation: some View {
         VStack(alignment:.leading,spacing:12) {
-            HStack {
-                TextField("Title, author or year",text:$text).textFieldStyle(.roundedBorder).focused($focus).onSubmit { searchZotero() }
-                Button("Search") { searchZotero() }.disabled(finding)
-            }
+            TextField("Title, author or year",text:$text).textFieldStyle(.roundedBorder).focused($focus)
+                .onChange(of:text) { _,_ in searchZotero() }
             TextField("Library: personal or groups/123",text:$library).textFieldStyle(.roundedBorder)
-            if finding { ProgressView().controlSize(.small) }
+                .onChange(of:library) { _,_ in chosenReferences.removeAll(); searchZotero() }
+            if citationSearch.finding { ProgressView().controlSize(.small) }
+            if !citationSearch.error.isEmpty { Text(citationSearch.error).font(.system(size:11)).foregroundStyle(.red) }
             ScrollView {
                 VStack(alignment:.leading,spacing:12) {
-                    ForEach(refs) { ref in
-                        Toggle(isOn:Binding(get:{ selected.contains(ref.key) },set:{ if $0 { selected.insert(ref.key) } else { selected.remove(ref.key) } })) {
+                    ForEach(citationSearch.references) { ref in
+                        Toggle(isOn:Binding(get:{ chosenReferences[ref.id] != nil },set:{ if $0 { chosenReferences[ref.id] = ref } else { chosenReferences.removeValue(forKey:ref.id) } })) {
                             VStack(alignment:.leading,spacing:3) { Text(ref.title).font(.system(size:12)); Text(ref.author+" · "+ref.year).font(.system(size:10)).foregroundStyle(.secondary) }
                         }
                     }
                 }.padding(4)
             }.frame(height:220)
-            HStack { TextField("Page / locator",text:$locator).textFieldStyle(.roundedBorder); Picker("Form",selection:$form) { Text("Normal").tag("normal"); Text("Prose").tag("prose"); Text("Author").tag("author"); Text("Year").tag("year") }.frame(width:210) }
+            HStack { TextField("Page / locator",text:$locator).textFieldStyle(.roundedBorder); Picker("Citation display",selection:$form) { Text("Standard citation").tag("normal"); Text("In a sentence").tag("prose"); Text("Author only").tag("author"); Text("Year only").tag("year") }.frame(width:250) }
+            Text("The document’s style controls formatting; this choice controls how the citation is used.").font(.system(size:11)).foregroundStyle(.secondary)
+            Text(form == "prose" ? "For example in APA: Smith (2020) found…" : form == "author" ? "For example: Smith" : form == "year" ? "For example: 2020" : "Uses the document’s citation style, for example (Smith, 2020) in APA or [1] in IEEE.").font(.system(size:11)).foregroundStyle(.secondary)
             Text("Keep Zotero open with Settings → Advanced → Allow other applications on this computer to communicate with Zotero enabled.").font(.system(size:11)).foregroundStyle(.secondary)
         }
     }
-    func searchZotero() {
-        guard !finding else { return }
-        finding = true; failure = ""
-        ZoteroIntegration.search(query:text,library:library) { result in finding = false; switch result { case let .success(items): refs = items; case let .failure(error): failure = error.localizedDescription } }
-    }
+    func searchZotero() { citationSearch.search(query:text,library:library,delay:loadedInitialReferences && text.isEmpty ? 0 : 0.18) }
     func insert() {
         guard session.requestEditing() else { return }
         switch session.insertionKind {
@@ -255,7 +253,7 @@ struct InsertionSheet: View {
         case "reference": session.insertSource("@\(safeLabel(text))")
         case "citation":
             finding = true
-            ZoteroIntegration.insert(refs.filter { selected.contains($0.key) },session:session,anchor:session.insertionAnchor,locator:locator,form:form) { error in finding = false; if let error { failure = error.localizedDescription } else { session.sheet = nil } }
+            ZoteroIntegration.insert(chosenReferences.values.sorted { $0.id < $1.id },session:session,anchor:session.insertionAnchor,locator:locator,form:form) { error in finding = false; if let error { failure = error.localizedDescription } else { session.sheet = nil } }
         case "bibliography":
             let buffer = session.buffers[session.entry]!, original = buffer.source
             let regex = try! NSRegularExpression(pattern:"(#bibliography\\([^\\n]*style:\\s*)\"[^\"]*\"")

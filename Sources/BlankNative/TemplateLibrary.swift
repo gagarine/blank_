@@ -16,7 +16,7 @@ struct DocumentTemplate: Identifiable, Equatable {
 // Templates are ordinary, self-contained Typst projects. writer.json is the
 // same entry manifest already maintained by native rename/save operations.
 @MainActor final class TemplateLibrary: ObservableObject {
-    static let starterNames = ["Standard","Thesis","Paper","Letter A4","Book"]
+    static let starterNames = ["Standard","Thesis","Paper","Letter A4","Book","Slides"]
     let root: URL
     @Published private(set) var templates: [DocumentTemplate] = []
     @Published var selection: String?
@@ -48,6 +48,18 @@ struct DocumentTemplate: Identifiable, Equatable {
                 try install(session,name:name,id:id)
             }
             try Data().write(to:initialized,options:.atomic)
+        }
+        // Add this new starter once to existing libraries without restoring
+        // any starter the user has deleted or overwriting edited templates.
+        let slidesSeeded = root.appendingPathComponent(".slides-initialized")
+        if !FileManager.default.fileExists(atPath:slidesSeeded.path) {
+            let id = "00000000-0000-4000-8000-000000000006"
+            if !FileManager.default.fileExists(atPath:folder(id).path) {
+                guard let url = Bundle.main.resourceURL?.appendingPathComponent("Templates/Slides.typ") else { throw CocoaError(.fileReadNoSuchFile) }
+                let session = DocumentSession(); session.buffer.loadExternal(try String(contentsOf:url,encoding:.utf8))
+                try install(session,name:"Slides",id:id)
+            }
+            try Data().write(to:slidesSeeded,options:.atomic)
         }
         try reload()
         savedObserver = NotificationCenter.default.addObserver(forName:.blankDocumentSaved,object:nil,queue:.main) { [weak self] notification in

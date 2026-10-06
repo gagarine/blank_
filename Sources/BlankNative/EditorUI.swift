@@ -78,9 +78,10 @@ struct SlashMenu: View {
 struct MenuRowButton<Content: View>: View {
     var label: String
     var action: ()->Void
+    var hover: (Bool)->Void = { _ in }
     @ViewBuilder var content: Content
     var body: some View {
-        MenuButtonTarget(label:label,action:action)
+        MenuButtonTarget(label:label,action:action,hover:hover)
             .frame(maxWidth:.infinity)
             .overlay { content.allowsHitTesting(false).accessibilityHidden(true) }
             .frame(height:44)
@@ -89,6 +90,7 @@ struct MenuRowButton<Content: View>: View {
 struct MenuButtonTarget: NSViewRepresentable {
     var label: String
     var action: ()->Void
+    var hover: (Bool)->Void = { _ in }
     func makeNSView(context: Context) -> MenuActionButton {
         let button = MenuActionButton()
         button.title = ""; button.isBordered = false; button.isTransparent = true
@@ -99,11 +101,28 @@ struct MenuButtonTarget: NSViewRepresentable {
         CGSize(width:proposal.width ?? 200,height:44)
     }
     func updateNSView(_ button: MenuActionButton,context: Context) {
-        button.setAccessibilityLabel(label); button.perform = action
+        button.setAccessibilityLabel(label); button.perform = action; button.hover = hover
     }
 }
 final class MenuActionButton: NSButton {
     var perform: ()->Void = {}
+    var hover: (Bool)->Void = { _ in }
+    private var hoverTracking: NSTrackingArea?
+    private(set) var isHovered = false
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let area = NSTrackingArea(rect:.zero,options:[.mouseEnteredAndExited,.mouseMoved,.activeInActiveApp,.inVisibleRect],owner:self,userInfo:nil)
+        addTrackingArea(area); hoverTracking = area
+    }
+    override func mouseEntered(with event: NSEvent) { setHovered(true) }
+    override func mouseMoved(with event: NSEvent) { if isEnabled { isHovered = true; hover(true) } }
+    override func mouseExited(with event: NSEvent) { setHovered(false) }
+    private func setHovered(_ value: Bool) {
+        let value = value && isEnabled
+        guard value != isHovered else { return }
+        isHovered = value; hover(value)
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func resetCursorRects() {
         super.resetCursorRects()

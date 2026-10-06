@@ -5,12 +5,14 @@ A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI a
 ![blank_ with a heading outline, formatted writing and a native table](Resources/Screenshots/editor.png)
 
 - **Write, Source and Preview** — native rich text, exact source editing and typeset PDFs; shared undo and formatted clipboard.
-- **Structured writing** — headings, lists, tables, figures, links, footnotes, citations and collapsible code blocks.
+- **Structured writing** — headings, lists, tables, figures, links, footnotes, formatted citations/bibliographies and collapsible code blocks.
 - **Navigation** — a movable outline, thumbnails, contact sheet and live search across project files.
-- **Templates** — Standard, Thesis, Paper, Letter A4 and Book; preview, create, duplicate, edit or delete your own.
+- **Templates** — Standard, Thesis, Paper, Letter A4, Book and Slides (16:9 projector); preview, create, duplicate, edit or delete your own.
 - **Native document tools** — PDF export/sharing, Zotero integration, statistics, recovery and macOS save/move controls.
 
-New Document opens an empty editor. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
+Citation search filters while you type. The document’s style controls formatting; Citation display chooses a standard citation, one within a sentence, author only or year only. Write shows Typst’s formatted citations and bibliography, while Source retains their exact expressions. New insertions consistently use `#cite`.
+
+New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table selects it; a second Delete removes it, and Undo restores it. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
 ## Download
 
@@ -37,7 +39,7 @@ The Cargo workspace shares a lockfile/cache for the in-process parser and separa
 ## Remaining work
 
 - Rich controls for editing existing links, footnotes, citations and figures; PDF-page selection and broader image-format validation.
-- Zotero group discovery, citation-picker keyboard navigation and custom CSL styles.
+- Zotero group discovery, citation-picker keyboard navigation and custom CSL style selection. Custom citation show rules and note-style footnote presentation in Write remain unverified.
 - Continuous editing across included files and repeated includes.
 - Settings synchronization, disjoint external-change merging and broader recovery checks.
 - Large-table and Source performance; long-document memory/latency measurements.
