@@ -684,6 +684,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     override func cursorUpdate(with event: NSEvent) {
         if updateSlashMenuCursor(for:event) { return }
+        if updateToolbarCursor(for:event) { return }
         if updateSidebarResizeCursor(for:event) { return }
         if session?.mode != .write { super.cursorUpdate(with:event) }
         else if grabbed != nil { NSCursor.closedHand.set() }
@@ -691,6 +692,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     override func mouseMoved(with event: NSEvent) {
         if updateSlashMenuCursor(for:event) { return }
+        if updateToolbarCursor(for:event) { return }
         if updateSidebarResizeCursor(for:event) { return }
         guard session?.mode == .write, grabbed == nil else { return }
         let point = convert(event.locationInWindow,from:nil)
@@ -705,8 +707,18 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         else { (bounds.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set() }
     }
     override func mouseExited(with event: NSEvent) {
+        if updateToolbarCursor(for:event) { return }
         if updateSidebarResizeCursor(for:event) { return }
         if grabbed == nil { hoverBlock = nil; needsDisplay = true; NSCursor.arrow.set() }
+    }
+    private func updateToolbarCursor(for event: NSEvent) -> Bool {
+        // Full-size scrolling deliberately extends text beneath the native
+        // toolbar. Its tracking area can still contain that covered text;
+        // window layout geometry, rather than document bounds, owns the cursor.
+        guard grabbed == nil, let window, event.window === window,
+              event.locationInWindow.y >= window.contentLayoutRect.maxY else { return false }
+        if hoverBlock != nil { hoverBlock = nil; needsDisplay = true }
+        NSCursor.arrow.set(); return true
     }
     private func updateSidebarResizeCursor(for event: NSEvent) -> Bool {
         guard grabbed == nil, let split = window?.contentViewController as? DocumentSplitViewController,

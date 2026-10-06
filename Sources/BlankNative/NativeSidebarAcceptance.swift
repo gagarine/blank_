@@ -8,6 +8,7 @@ import BlankCore
         func check(_ condition: @autoclosure () -> Bool,_ label: String) { guard condition() else { fatalError("FAIL: \(label) | sidebar=\(session.sidebar), visible=\(session.searchVisible), query=\(session.searchQuery), matches=\(session.searchController.matches.count)") }; print("PASS: \(label)") }
         let source = "= First\n\nCafé 👩🏽‍💻 alpha\n\n== Child\n\nsecond ALPHA\n\n#let literal = \"needle\"\n\n#table(columns: 2, [alpha], [keep])\n\n= Last\n\n"+(0..<65).map { "Paragraph \($0). "+String(repeating:"A long native editing sample. ",count:8) }.joined(separator:"\n\n")
         session.buffer.loadExternal(source); session.revision += 1; editor.refresh()
+        toolbarCursor(controller:controller)
         guard let sidebar = controller.sidebarItem as? NSMenuToolbarItem else { fatalError("Sidebar must use the native split menu control") }
         controller.menuNeedsUpdate(sidebar.menu)
         check(sidebar.menu.items.filter { !$0.isSeparatorItem }.map(\.title) == ["Show Sidebar","Thumbnails","Table of Contents","Contact Sheet"],"Sidebar exposes native view choices without unsupported annotation modes")
@@ -76,6 +77,32 @@ import BlankCore
         while session.searchController.searching && Date() < deadline { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }
         guard !session.searchController.searching else { fatalError("Search did not finish") }
     }
+    static func toolbarCursor(controller: DocumentWindow) {
+        let session = controller.session, originalMode = session.mode
+        guard let window = controller.window, let editor = session.editor,
+              let scroll = editor.enclosingScrollView else { fatalError("No native editor window") }
+        for mode: EditorMode in [.write,.source] {
+            session.switchMode(mode); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+            editor.ensureNativeLayout()
+            let savedOrigin = scroll.contentView.bounds.origin
+            scroll.contentView.scroll(to:NSPoint(x:0,y:240)); scroll.reflectScrolledClipView(scroll.contentView)
+            let point = NSPoint(x:window.contentLayoutRect.midX,y:window.contentLayoutRect.maxY+12)
+            guard editor.bounds.contains(editor.convert(point,from:nil)) else { fatalError("Cursor regression must include text scrolled beneath the toolbar") }
+            let event = NSEvent.mouseEvent(with:.mouseMoved,location:point,modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,clickCount:0,pressure:0)!
+            for callback in [editor.mouseMoved(with:),editor.cursorUpdate(with:),editor.mouseExited(with:)] {
+                editor.hoverBlock = 0; NSCursor.iBeam.set(); callback(event)
+                guard NSCursor.current == .arrow && editor.hoverBlock == nil else { fatalError("Text tracking must leave the native toolbar's arrow cursor intact in \(mode)") }
+            }
+            let textPoint = NSPoint(x:window.contentLayoutRect.midX,y:window.contentLayoutRect.midY)
+            let textEvent = NSEvent.enterExitEvent(with:.cursorUpdate,location:textPoint,modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,trackingNumber:0,userData:nil)!
+            NSCursor.arrow.set(); editor.cursorUpdate(with:textEvent)
+            guard NSCursor.current == .iBeam else { fatalError("Uncovered native text must retain its editing cursor in \(mode)") }
+            print("PASS: Native toolbar and text cursor ownership in \(mode)")
+            scroll.contentView.scroll(to:savedOrigin); scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        session.switchMode(originalMode); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        print("PASS: Scrolled Write and Source text cannot replace the native toolbar cursor")
+    }
     static func resizeTarget(controller original: DocumentWindow) {
         // Start with an expanded pane so geometry checks don't depend on the
         // synchronous runner draining an in-flight collapse animation.
@@ -85,11 +112,18 @@ import BlankCore
         controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
         defer { controller.window?.close(); original.window?.makeKeyAndOrderFront(nil) }
         let split = controller.splitController.splitView
+        // Let native window constraints settle before positioning the divider;
+        // observe each requested size after AppKit has completed its layout.
+        RunLoop.main.run(until:Date().addingTimeInterval(0.25))
         split.layoutSubtreeIfNeeded()
         let sidebar = controller.splitController.contentsItem.viewController.view
         for width: CGFloat in [240,280,220] {
             split.setPosition(width,ofDividerAt:0); split.layoutSubtreeIfNeeded()
-            guard abs(split.convert(sidebar.bounds,from:sidebar).width-width) < 2 else { fatalError("FAIL: Native sidebar width must follow resizing before testing the new hit area") }
+            let deadline = Date().addingTimeInterval(1)
+            while abs(split.convert(sidebar.bounds,from:sidebar).width-width) >= 2 && Date() < deadline {
+                RunLoop.main.run(until:Date().addingTimeInterval(0.02)); split.layoutSubtreeIfNeeded()
+            }
+            guard abs(split.convert(sidebar.bounds,from:sidebar).width-width) < 2 else { fatalError("FAIL: Native sidebar width must follow resizing before testing the new hit area | requested=\(width), actual=\(sidebar.bounds.width)") }
             let boundary = split.convert(sidebar.bounds,from:sidebar).maxX+split.dividerThickness/2
             for offset: CGFloat in [-6,0,6] {
                 let point = NSPoint(x:boundary+offset,y:split.bounds.midY)
