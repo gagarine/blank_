@@ -13,8 +13,7 @@ struct DocumentTemplate: Identifiable, Equatable {
     var cacheKey: NSString { (id+"/"+version) as NSString }
 }
 
-// Templates are ordinary, self-contained Typst projects. writer.json is the
-// same entry manifest already maintained by native rename/save operations.
+// Templates are ordinary folders. Entry selection lives in app-owned state.
 @MainActor final class TemplateLibrary: ObservableObject {
     static let starterNames = ["Standard","Thesis","Paper","Letter A4","Book","Slides"]
     let root: URL
@@ -79,14 +78,10 @@ struct DocumentTemplate: Identifiable, Equatable {
         for directory in try fm.contentsOfDirectory(at:root,includingPropertiesForKeys:[.isDirectoryKey],options:.skipsHiddenFiles) {
             guard UUID(uuidString:directory.lastPathComponent) != nil,
                   try directory.resourceValues(forKeys:[.isDirectoryKey]).isDirectory == true else { continue }
-            let manifest = try Data(contentsOf:directory.appendingPathComponent("writer.json"))
-            guard let config = try JSONSerialization.jsonObject(with:manifest) as? [String:Any], let entry = config["entry"] as? String,
-                  (entry as NSString).lastPathComponent == entry, entry.lowercased().hasSuffix(".typ") else { throw Self.failure("A template has an invalid entry file.") }
+            guard let entry = try? ProjectSelection.entry(in:directory) else { continue }
             let entryURL = try DocumentSession.dependencyTarget(entry,root:directory)
-            // A native Move To may relocate an entry out of its gallery folder.
-            // Keep the rest of the library available; the retained package can be restored.
             guard fm.fileExists(atPath:entryURL.path) else { continue }
-            var hash = SHA256(); hash.update(data:manifest)
+            var hash = SHA256(); hash.update(data:Data(entry.utf8))
             let contents = fm.enumerator(at:directory,includingPropertiesForKeys:[.isRegularFileKey,.fileSizeKey,.contentModificationDateKey])?.allObjects as? [URL] ?? []
             for file in contents.sorted(by:{ $0.path < $1.path }) {
                 let values = try file.resourceValues(forKeys:[.isRegularFileKey,.fileSizeKey,.contentModificationDateKey])
@@ -117,8 +112,8 @@ struct DocumentTemplate: Identifiable, Equatable {
         try FileManager.default.createDirectory(at:staging,withIntermediateDirectories:true)
         defer { try? FileManager.default.removeItem(at:staging) }
         try session.saveCopy(to:staging.appendingPathComponent(name+".typ"),adopt:false)
-        try JSONSerialization.data(withJSONObject:["entry":name+".typ","schemaVersion":1],options:[.prettyPrinted,.sortedKeys]).write(to:staging.appendingPathComponent("writer.json"),options:.atomic)
         try FileManager.default.moveItem(at:staging,to:destination)
+        ProjectSelection.remember(root:destination,entry:name+".typ",project:true)
         return id
     }
     @discardableResult func add(_ session: DocumentSession,name: String) throws -> DocumentTemplate {

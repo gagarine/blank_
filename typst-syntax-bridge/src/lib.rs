@@ -13,7 +13,19 @@ fn node(n: &SyntaxNode, start: usize) -> Value {
             result
         })
         .collect();
-    json!({"kind":format!("{:?}", n.kind()),"start":start,"end":start+n.len(),"children":children})
+    let mut value = json!({"kind":format!("{:?}", n.kind()),"start":start,"end":start+n.len(),"children":children});
+    if let Some(string) = n.cast::<typst_syntax::ast::Str>() {
+        value["stringValue"] = json!(string.get());
+    }
+    if let Some(raw) = n.cast::<typst_syntax::ast::Raw>() {
+        value["rawText"] = json!(
+            raw.lines()
+                .map(|line| line.get().as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    value
 }
 fn styles(n: LinkedNode<'_>, out: &mut Vec<Value>) {
     if let Some(tag) = typst_syntax::highlight(&n) {
