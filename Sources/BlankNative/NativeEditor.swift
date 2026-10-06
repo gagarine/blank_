@@ -718,6 +718,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard grabbed == nil, let window, event.window === window,
               event.locationInWindow.y >= window.contentLayoutRect.maxY else { return false }
         if hoverBlock != nil { hoverBlock = nil; needsDisplay = true }
+        if let field = (window.windowController as? DocumentWindow)?.searchItem?.searchField,
+           field.window === window, !field.isHidden,
+           field.cell?.titleRect(forBounds:field.bounds).contains(field.convert(event.locationInWindow,from:nil)) == true {
+            NSCursor.iBeam.set(); return true
+        }
         NSCursor.arrow.set(); return true
     }
     private func updateSidebarResizeCursor(for event: NSEvent) -> Bool {
