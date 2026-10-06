@@ -30,6 +30,7 @@ import BlankCore
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
         NativeGoAcceptance.text(original:controller)
+        NativeCitationAcceptance.run(controller:controller)
         NativeTemplateAcceptance.run(original:controller)
         AppController.shared.commands(nil)
         for character in "fast café" {
