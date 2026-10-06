@@ -66,6 +66,7 @@ struct CommandsSheet: View {
             ("Tutorial","",{ session.sheet = nil; AppController.shared.tutorial(nil) }),
             ("Export PDF","⌘⇧E",{ session.sheet = nil; session.exportPDF() }),
             ("Refresh preview","",{ session.sheet = nil; session.compileRevision = -1; session.compile() }),
+            ("Convert bibliography…","",{ session.showBibliographyConversion() }),
             ("Bibliography style","",{ session.insertionKind = "bibliography"; session.sheet = .insertion }),
             ("Refresh Zotero references","",{ session.sheet = nil; ZoteroIntegration.refresh(session) }),
             ("Open recovery copy","",{ session.sheet = nil; AppController.shared.recover(nil) })
@@ -93,6 +94,7 @@ struct CommandsSheet: View {
         case "Tutorial": return "book"
         case "Export PDF": return "square.and.arrow.up"
         case "Refresh preview": return "arrow.clockwise"
+        case "Convert bibliography…": return "arrow.triangle.2.circlepath"
         case "Bibliography style": return "books.vertical"
         case "Refresh Zotero references": return "arrow.triangle.2.circlepath"
         case "Open recovery copy": return "clock.arrow.circlepath"

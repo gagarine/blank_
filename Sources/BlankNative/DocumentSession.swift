@@ -4,7 +4,7 @@ import PDFKit
 import BlankCore
 
 enum EditorMode: String, CaseIterable { case write = "Write", source = "Source", preview = "Preview" }
-enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict, page; var id: String { rawValue } }
+enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict, page, bibliographyConversion; var id: String { rawValue } }
 struct Recovery: Codable {
     var id: String
     var entry: String

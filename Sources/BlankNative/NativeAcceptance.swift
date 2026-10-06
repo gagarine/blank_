@@ -448,6 +448,8 @@ import BlankCore
         check(EditorPreferences.installedEditorFamilies.contains(session.fontFamily),"Editor font selection is an installed family")
         check(EditorPreferences.installedEditorFamilies.contains(EditorPreferences.installedEditorFamily("Missing-font-XYZ")),"Missing saved font falls back to an installed family")
         let commands = CommandsSheet(session:session)
+        check(commands.actions.contains { $0.0 == "Convert bibliography…" },"Cmd-K exposes bibliography storage conversion")
+        check(NSApp.mainMenu?.items.first(where:{ $0.title == "File" })?.submenu?.items.contains(where:{ $0.title == "Convert Bibliography…" }) == true,"The native File menu exposes bibliography storage conversion")
         check(commands.actions.filter { $0.0.hasPrefix("New ") }.map { $0.0 } == ["New project","New document"],"Cmd-K offers an empty New Document and a separate New Project")
         check(commands.actions.allSatisfy { NSImage(systemSymbolName:commands.symbol($0.0),accessibilityDescription:nil) != nil },"Cmd-K commands have available native symbols")
         let foldingSource = (0..<20).map { "#let value\($0) = \($0)" }.joined(separator:"\n")+"\n\nAfter 日本😀"

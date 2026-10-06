@@ -1,3 +1,5 @@
+mod conversion;
+
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -284,6 +286,7 @@ fn main() {
                 if source.text()!=text {source.replace(text);}
                 respond(&output,id,Ok(json!({"revision":params["revision"],"tree":project(source.root(),0)})));
             },
+            "convertBibliography" => respond(&output,id,conversion::convert(params)),
             "bibToHayagriva" => {
                 let result = hayagriva::io::from_biblatex_str(params["bib"].as_str().unwrap_or(""))
                     .map_err(|e|format!("{e:?}"))
