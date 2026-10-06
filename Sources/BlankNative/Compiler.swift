@@ -7,6 +7,8 @@ struct CompileResult {
     var map: [[String: Any]]
     var revision: Int
     var references: [[String:Any]] = []
+    var dependencies: [String] = []
+    var bibliographies: [[String:Any]] = []
 }
 final class TypstCompiler {
     private let queue = DispatchQueue(label: "blank.typst.compiler", qos: .userInitiated)
@@ -21,9 +23,24 @@ final class TypstCompiler {
             do {
                 let reply = try self.call("compile", params: ["root": root.path, "entry": entry, "files": files, "revision": revision])
                 let diagnostics = (reply["diagnostics"] as? [[String:Any]] ?? []).map { ($0["message"] as? String ?? "Compilation failed") }
-                let result = CompileResult(data: (reply["pdf"] as? String).flatMap { Data(base64Encoded: $0) }, diagnostics: diagnostics, map: reply["sourceMap"] as? [[String:Any]] ?? [], revision: revision, references: reply["citations"] as? [[String:Any]] ?? [])
+                let result = CompileResult(data: (reply["pdf"] as? String).flatMap { Data(base64Encoded: $0) }, diagnostics: diagnostics, map: reply["sourceMap"] as? [[String:Any]] ?? [], revision: revision, references: reply["citations"] as? [[String:Any]] ?? [], dependencies: reply["dependencies"] as? [String] ?? [], bibliographies: reply["bibliographies"] as? [[String:Any]] ?? [])
                 DispatchQueue.main.async { completion(.success(result)) }
             } catch { self.process?.terminate(); self.process = nil; DispatchQueue.main.async { completion(.failure(error)) } }
+        }
+    }
+    func hayagriva(_ bib: String,completion: @escaping (Result<String,Error>) -> Void) {
+        queue.async {
+            let result = Result { try self.call("bibToHayagriva",params:["bib":bib])["yaml"] as? String ?? "" }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+    func convertBibliography(_ text: String,from: String,to: String,completion: @escaping (Result<String,Error>) -> Void) {
+        queue.async {
+            let result = Result { () throws -> String in
+                guard let text = try self.call("convertBibliography",params:["text":text,"from":from,"to":to])["text"] as? String else { throw NSError(domain:"Typst",code:1,userInfo:[NSLocalizedDescriptionKey:"The compiler returned no converted bibliography."]) }
+                return text
+            }
+            DispatchQueue.main.async { completion(result) }
         }
     }
     private func call(_ method: String, params: [String:Any]) throws -> [String:Any] {

@@ -134,7 +134,7 @@ import BlankCore
             let editedCopy = try library.newDocument(from:edited); sessions.append(editedCopy)
             check(editedCopy.buffer.source == edit.buffer.source && draft.buffer.source == source,"New copies use saved edits while existing documents stay independent")
             try edit.renameEntry("Renamed")
-            check(library.templates.first { $0.id == item.id }?.name == "Renamed","Native rename keeps the template entry manifest and gallery synchronized")
+            check(library.templates.first { $0.id == item.id }?.name == "Renamed","Native rename keeps app-owned template entry selection and gallery synchronized")
             var rejected = false
             do { try library.moveToTrash(edited,using:{ try fm.removeItem(at:$0) }) } catch { rejected = true }
             check(rejected && fm.fileExists(atPath:library.folder(item.id).path),"Trash rejects an open template editor")

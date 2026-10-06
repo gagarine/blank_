@@ -4,7 +4,7 @@ import PDFKit
 import BlankCore
 
 enum EditorMode: String, CaseIterable { case write = "Write", source = "Source", preview = "Preview" }
-enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict, page; var id: String { rawValue } }
+enum SheetKind: String, Identifiable { case commands, settings, statistics, insertion, object, conflict, page, bibliographyConversion; var id: String { rawValue } }
 struct Recovery: Codable {
     var id: String
     var entry: String
@@ -109,6 +109,10 @@ struct Recovery: Codable {
     weak var pdfView: PDFView?
     weak var window: NSWindow?
     let compiler = TypstCompiler()
+    var dependencyRevision = -1
+    var compiledDependencies = Set<String>()
+    var evaluatedBibliographies: [[String:Any]] = []
+    var bibliographyRevision = -1
     var compileRevision = -1
     var pdfData: Data?
     var pendingPDFRequests: [(Int,(Result<Data,any Error>) -> Void)] = []
@@ -145,9 +149,13 @@ struct Recovery: Codable {
     }
     func changed() {
         navigationBack.removeAll(); navigationForward.removeAll()
-        projectUndoPath = nil
-        if !buffer.lastEditWasLocal { refreshIncludes() }
-        revision += 1; dirty = true; error = nil; editor?.refresh(); onTitle?()
+        if !referenceTransactions.isEmpty {
+            let liveHistory = Set(buffers.values.flatMap { $0.historyIDs })
+            referenceTransactions = referenceTransactions.filter { liveHistory.contains($0.key) }
+        }
+        projectUndoPath = nil; error = nil
+        if !buffer.lastEditWasLocal { refreshIncludes(createMissing:true); loadBibliographies() }
+        revision += 1; dirty = true; editor?.refresh(); onTitle?()
         saveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.autosave() }
         saveWork = work; DispatchQueue.main.asyncAfter(deadline:.now()+0.65,execute:work)
@@ -170,46 +178,37 @@ struct Recovery: Codable {
     }
     func switchFile(_ path: String) {
         guard buffers[path] != nil, path != active else { return }
-        editor?.finishComposition(); synchronizeSelection(); buffer.breakUndoGroup(); active = path; revision += 1
+        editor?.finishComposition(); synchronizeSelection(); buffer.breakUndoGroup(); projectUndoPath = nil; active = path; revision += 1
         editor?.refresh(reveal:true)
     }
+    var referenceTransactions: [UUID:[String:UUID]] = [:]
     func undo(_ redo: Bool = false) {
         guard requestEditing() else { return }
         let projectPath = projectUndoPath, model = projectPath.flatMap { buffers[$0] } ?? buffer
-        editor?.finishComposition(); if redo { model.redo() } else { model.undo() }; changed(); projectUndoPath = projectPath; editor?.refresh(reveal:true)
+        editor?.finishComposition()
+        let token = redo ? model.redoID : model.undoID
+        if let token, let transaction = referenceTransactions[token] {
+            guard transaction.allSatisfy({ path,id in (redo ? buffers[path]?.redoID : buffers[path]?.undoID) == id }) else { error = "Undo the more recent edits in the other reference file first."; return }
+            for path in transaction.keys { if redo { buffers[path]?.redo() } else { buffers[path]?.undo() } }
+        } else { if redo { model.redo() } else { model.undo() } }
+        changed(); projectUndoPath = projectPath; editor?.refresh(reveal:true)
     }
 
     func format(italic: Bool) {
         guard mode == .write, requestEditing() else { return }; synchronizeSelection()
         if let editor { buffer.format(editor.selectedRange(),italic:italic); changed() }
     }
-    func open(_ url: URL) throws {
+    func open(_ url: URL, selectedEntry: String? = nil) throws {
         let fm = FileManager.default
         var directory: ObjCBool = false
         guard fm.fileExists(atPath:url.path,isDirectory:&directory) else { throw CocoaError(.fileNoSuchFile) }
-        let project = directory.boolValue ? url : url.deletingLastPathComponent()
-        var file = directory.boolValue ? "main.typ" : url.lastPathComponent
-        if directory.boolValue, let data = try? Data(contentsOf:project.appendingPathComponent("writer.json")), let json = try? JSONSerialization.jsonObject(with:data) as? [String:Any], let configured = json["entry"] as? String { file = configured }
-        var loaded: [String:DocumentBuffer] = [:]
-        var seen = Set<String>()
-        func visit(_ path: String) throws {
-            guard !seen.contains(path) else { return }; seen.insert(path)
-            let target = project.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
-            guard target.path.hasPrefix(project.resolvingSymlinksInPath().path+"/") else { throw CocoaError(.fileReadNoPermission) }
-            let text = try String(contentsOf:target,encoding:.utf8); loaded[path] = DocumentBuffer(text)
-            for include in loaded[path]!.includes+loaded[path]!.imports where !include.path.hasPrefix("@") {
-                let child = include.path
-                let absolute = target.deletingLastPathComponent().appendingPathComponent(child).standardizedFileURL
-                guard absolute.path.hasPrefix(project.standardizedFileURL.path+"/") else { continue }
-                let relative = String(absolute.path.dropFirst(project.standardizedFileURL.path.count+1))
-                if fm.fileExists(atPath:absolute.path) { try visit(relative) }
-            }
-        }
-        try visit(file)
-        for name in ["writer-zotero.bib","writer-references.json"] {
-            if let text = try? String(contentsOf:project.appendingPathComponent(name),encoding:.utf8) { loaded[name] = DocumentBuffer(text) }
-        }
-        root = project; entry = file; active = file; buffers = loaded; bases = loaded.mapValues(\.source); dirty = false
+        let project = directory.boolValue ? url.standardizedFileURL : ProjectSelection.root(for:url)
+        let file = try directory.boolValue ? (selectedEntry ?? ProjectSelection.entry(in:project)) : ProjectSelection.relative(url,root:project)
+        let target = try Self.dependencyTarget(file,root:project)
+        let source = try String(contentsOf:target,encoding:.utf8)
+        root = project; entry = file; active = file; buffers = [file:DocumentBuffer(source)]; bases = [file:source]; assets = [:]; dirty = false
+        refreshIncludes(); loadBibliographies()
+        ProjectSelection.remember(root:project,entry:file,project:directory.boolValue)
         revision += 1; installWatchers(); onTitle?()
     }
     func installWatchers() {
@@ -305,9 +304,10 @@ struct Recovery: Codable {
         guard let window else { completion?(false); return }
         panel.beginSheetModal(for:window) { [weak self] result in
             guard let self, result == .OK, let url = panel.url else { completion?(false); return }
-            do {
-                try self.saveCopy(to:url); completion?(true)
-            } catch { self.error = error.localizedDescription; completion?(false) }
+            self.prepareProjectCopy { error in
+                if let error { self.error = error.localizedDescription; completion?(false); return }
+                do { try self.saveCopy(to:url); completion?(true) } catch { self.error = error.localizedDescription; completion?(false) }
+            }
         }
     }
     static func writeDependency(_ data: Data,path: String,root: URL) throws {
@@ -332,6 +332,7 @@ struct Recovery: Codable {
                 if let path = projectAssetPath(literal,file:file) { result.insert(path) }
             }
         }
+        if dependencyRevision == revision { result.formUnion(compiledDependencies.filter { buffers[$0] == nil }) }
         return result
     }
     func saveToDisk() throws {
@@ -435,7 +436,9 @@ struct Recovery: Codable {
             switch response {
             case let .success(result):
                 if result.revision != self.revision { self.finishPDFRequests(.failure(NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"Document changed while preparing the PDF. Try again."])),revision:current); if export != nil { self.error = "Document changed during export. Try again." }; if self.mode == .preview { self.compile() }; return }
+                self.dependencyRevision = current; self.compiledDependencies = Set(result.dependencies)
                 if let data = result.data, let document = PDFDocument(data:data) {
+                    self.evaluatedBibliographies = result.bibliographies; self.bibliographyRevision = current; self.loadBibliographies(); self.installWatchers()
                     self.pdfData = data; self.pdf = document; self.compileRevision = current; self.sourceMap = result.map; self.error = nil
                     self.applyReferencePresentations(result.references)
                     self.finishPDFRequests(.success(data),revision:current)

@@ -59,12 +59,14 @@ struct CommandsSheet: View {
             ("Preview mode","⌘3",{ session.sheet = nil; session.switchMode(.preview) }),
             ("Find in document","⌘F",{ session.sheet = nil; session.showSearch() }),
             ("Templates…","",{ session.pendingDocumentAction = { AppController.shared.templates(nil) }; session.sheet = nil }),
+            ("New project","",{ session.sheet = nil; AppController.shared.newProject(nil) }),
             ("New document","⌘N",{ session.sheet = nil; AppController.shared.newDocument(nil) }),
             ("Rename document","",{ session.performDocumentAction { $0.rename(nil) } }),
             ("Move document","",{ session.performDocumentAction { $0.move(nil) } }),
             ("Tutorial","",{ session.sheet = nil; AppController.shared.tutorial(nil) }),
             ("Export PDF","⌘⇧E",{ session.sheet = nil; session.exportPDF() }),
             ("Refresh preview","",{ session.sheet = nil; session.compileRevision = -1; session.compile() }),
+            ("Convert bibliography…","",{ session.showBibliographyConversion() }),
             ("Bibliography style","",{ session.insertionKind = "bibliography"; session.sheet = .insertion }),
             ("Refresh Zotero references","",{ session.sheet = nil; ZoteroIntegration.refresh(session) }),
             ("Open recovery copy","",{ session.sheet = nil; AppController.shared.recover(nil) })
@@ -92,6 +94,7 @@ struct CommandsSheet: View {
         case "Tutorial": return "book"
         case "Export PDF": return "square.and.arrow.up"
         case "Refresh preview": return "arrow.clockwise"
+        case "Convert bibliography…": return "arrow.triangle.2.circlepath"
         case "Bibliography style": return "books.vertical"
         case "Refresh Zotero references": return "arrow.triangle.2.circlepath"
         case "Open recovery copy": return "clock.arrow.circlepath"
@@ -178,6 +181,8 @@ struct InsertionSheet: View {
     @NativeState var form = "normal"
     @NativeState private var loadedInitialReferences = false
     @FocusState var focus: Bool
+    @NativeState var bibliographyDestination = ""
+    @NativeState var bibliographyLocation = ""
     var title: String { session.insertionKind == "bibliography" ? "Bibliography style" : SlashCommand.all.first { $0.kind == session.insertionKind }?.label ?? "Insert" }
     var body: some View {
         SheetFrame(title:title,width:session.insertionKind == "citation" ? 620 : 500,dismiss:{ session.sheet = nil }) {
@@ -199,7 +204,26 @@ struct InsertionSheet: View {
                     TextField("https://…",text:$text).textFieldStyle(.roundedBorder).focused($focus)
                     TextField("Link text",text:$extra).textFieldStyle(.roundedBorder)
                 } else if session.insertionKind == "bibliography" {
-                    Picker("Style",selection:$text) { ForEach(["apa","ieee","chicago-author-date","mla","vancouver"],id:\.self) { Text($0).tag($0) } }
+                    if session.bibliographyLocations.count > 1 {
+                        Picker("Bibliography",selection:$bibliographyLocation) {
+                            Text("Choose a bibliography…").tag("")
+                            ForEach(session.bibliographyLocations) { Text($0.label).tag($0.id) }
+                        }
+                    }
+                    TextField("Style name or CSL path",text:$text).textFieldStyle(.roundedBorder)
+                    HStack {
+                        Menu("Standard styles") { ForEach(["apa","ieee","chicago-author-date","mla","vancouver"],id:\.self) { style in Button(style) { text = style } } }
+                        Button("Choose CSL…") {
+                            let panel = NSOpenPanel(); panel.allowedContentTypes = [.init(filenameExtension:"csl")!]
+                            if panel.runModal() == .OK, let url = panel.url {
+                                do {
+                                    let relative = try session.importImage(url)
+                                    if let path = session.projectAssetPath(relative), let location = session.bibliographyLocations.first(where:{ $0.id == bibliographyLocation }) { text = session.relativeAssetPath(path,file:location.file) }
+                                    else { text = relative }
+                                } catch { failure = error.localizedDescription }
+                            }
+                        }.disabled(bibliographyLocation.isEmpty)
+                    }
                 } else {
                     TextField(session.insertionKind == "equation" ? "Typst mathematics" : session.insertionKind == "label" || session.insertionKind == "reference" ? "Label name" : "Text",text:$text,axis:.vertical).lineLimit(3...7).textFieldStyle(.roundedBorder).focused($focus)
                 }
@@ -208,9 +232,16 @@ struct InsertionSheet: View {
             HStack { Spacer(); Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction); Button("Insert") { insert() }.keyboardShortcut(.defaultAction).disabled(finding) }
         }.onAppear {
             focus = true
-            if session.insertionKind == "bibliography" { text = "apa" }
+            if session.insertionKind == "bibliography" {
+                text = "apa"
+                if session.bibliographyLocations.count == 1 { bibliographyLocation = session.bibliographyLocations[0].id }
+            }
             if session.insertionKind == "citation" && !loadedInitialReferences {
                 loadedInitialReferences = true
+                session.prepareProjectCopy { error in
+                    if let error { failure = error.localizedDescription }
+                    else { session.loadBibliographies(); session.objectWillChange.send() }
+                }
                 searchZotero()
             }
         }.onDisappear { citationSearch.cancel() }
@@ -233,6 +264,12 @@ struct InsertionSheet: View {
                 }.padding(4)
             }.frame(height:220)
             HStack { TextField("Page / locator",text:$locator).textFieldStyle(.roundedBorder); Picker("Citation display",selection:$form) { Text("Standard citation").tag("normal"); Text("In a sentence").tag("prose"); Text("Author only").tag("author"); Text("Year only").tag("year") }.frame(width:250) }
+            if let destinations = try? session.referenceDestinations(), destinations.count > 1 {
+                Picker("Bibliography",selection:$bibliographyDestination) {
+                    Text("Choose a destination…").tag("")
+                    ForEach(destinations) { Text($0.label).tag($0.id) }
+                }
+            }
             Text("The document’s style controls formatting; this choice controls how the citation is used.").font(.system(size:11)).foregroundStyle(.secondary)
             Text(form == "prose" ? "For example in APA: Smith (2020) found…" : form == "author" ? "For example: Smith" : form == "year" ? "For example: 2020" : "Uses the document’s citation style, for example (Smith, 2020) in APA or [1] in IEEE.").font(.system(size:11)).foregroundStyle(.secondary)
             Text("Keep Zotero open with Settings → Advanced → Allow other applications on this computer to communicate with Zotero enabled.").font(.system(size:11)).foregroundStyle(.secondary)
@@ -253,13 +290,10 @@ struct InsertionSheet: View {
         case "reference": session.insertSource("@\(safeLabel(text))")
         case "citation":
             finding = true
-            ZoteroIntegration.insert(chosenReferences.values.sorted { $0.id < $1.id },session:session,anchor:session.insertionAnchor,locator:locator,form:form) { error in finding = false; if let error { failure = error.localizedDescription } else { session.sheet = nil } }
+            ZoteroIntegration.insert(chosenReferences.values.sorted { $0.id < $1.id },session:session,anchor:session.insertionAnchor,locator:locator,form:form,destinationID:bibliographyDestination.isEmpty ? nil : bibliographyDestination) { error in finding = false; if let error { failure = error.localizedDescription } else { session.sheet = nil } }
         case "bibliography":
-            let buffer = session.buffers[session.entry]!, original = buffer.source
-            let regex = try! NSRegularExpression(pattern:"(#bibliography\\([^\\n]*style:\\s*)\"[^\"]*\"")
-            let replaced = regex.stringByReplacingMatches(in:original,range:NSRange(location:0,length:original.utf16.count),withTemplate:"$1\"\(text)\"")
-            if replaced != original { buffer.commit(replaced,selection:buffer.selection); session.changed(); session.sheet = nil }
-            else { failure = "No bibliography style was found. Add #bibliography in Source first." }
+            do { try session.setBibliographyStyle(text,locationID:bibliographyLocation); session.sheet = nil }
+            catch { failure = error.localizedDescription }
         default: break
         }
     }
