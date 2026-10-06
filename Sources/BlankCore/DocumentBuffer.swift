@@ -545,13 +545,10 @@ extension DocumentBuffer {
         guard !references.isEmpty || !referencePresentations.isEmpty else { return }
         let originals = references
         let ordinary = Projection(source:source,parsed:parsed)
-        func shifted(_ node: SyntaxNode,by delta: Int) -> SyntaxNode {
-            SyntaxNode(kind:node.kind,start:node.start+delta,end:node.end+delta,children:node.children.map { shifted($0,by:delta) })
+        func allMarkup(_ node: SyntaxNode) -> [SyntaxNode] {
+            (node.kind == "Markup" ? [node] : []) + node.children.flatMap(allMarkup)
         }
-        // Literal table cells use independent local syntax projections.
-        let markups = parsed.tree.descendants("Markup") + ordinary.blocks.flatMap(\.tableCells).flatMap { cell in
-            ParsedSource.parse(source.bytes(cell)).tree.descendants("Markup").map { shifted($0,by:cell.start) }
-        }
+        let markups = allMarkup(parsed.tree)
         let balancedReferences = references.map { reference -> ReferencePresentation in
             guard reference.kind == "citation",
                   let markup = markups.filter({ $0.start <= reference.source.start && $0.end >= reference.source.end }).min(by:{ $0.span.count < $1.span.count }),

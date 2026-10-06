@@ -325,7 +325,7 @@ final class DocumentTests {
         table.editWrite(NSRange(location:displayed.location,length:0),text:"日本 ",group:"")
         XCTAssertTrue(table.source.contains("[Before 日本 #cite(<smith>) after]"))
         table.undo(); XCTAssertEqual(table.source,"#table(columns: 1, [Before #cite(<smith>) after])")
-        for original in ["#emph[#cite(<smith>)] #cite(<doe>).", "*#cite(<smith>)* #cite(<doe>).", "#cite(<smith>) *#cite(<doe>)*.", "#emph[日本 before #cite(<smith>)] #cite(<doe>).", "#cite(<smith>) *#cite(<doe>) after*."] {
+        for original in ["#emph[#cite(<smith>)] #cite(<doe>).", "*#cite(<smith>)* #cite(<doe>).", "#cite(<smith>) *#cite(<doe>)*.", "#emph[日本 before #cite(<smith>)] #cite(<doe>).", "#cite(<smith>) *#cite(<doe>) after*.", "#cite(<smith>) /* keep */ #cite(<doe>).", "#cite(<smith>) // café keep\n#cite(<doe>)."] {
             let grouped = DocumentBuffer(original)
             let first = original.range(of:"#cite")!.lowerBound, last = original.range(of:")",options:.backwards)!.upperBound
             grouped.setReferencePresentations([ReferencePresentation(source:ByteSpan(original[..<first].utf8.count,original[..<last].utf8.count),text:"(Doe, 2021; Smith, 2020)")])
@@ -346,6 +346,15 @@ final class DocumentTests {
         XCTAssertEqual(overlap.projection.text,"(A; B) middle (C; D).")
         XCTAssertEqual(overlap.copy(overlap.projection.atomicRanges.first!).source,String(overlapSource.dropLast()))
         XCTAssertEqual(overlap.renderedReferences.count,1)
+        for original in ["*Before #cite(<smith>) after*.", "#emph[日本 Before #cite(<smith>) after].", "#table(columns: 1, [*Before #cite(<smith>) after*])"] {
+            let single = DocumentBuffer(original), raw = original.range(of:"#cite(<smith>)")!
+            single.setReferencePresentations([ReferencePresentation(source:ByteSpan(original[..<raw.lowerBound].utf8.count,original[..<raw.upperBound].utf8.count),text:"(Smith, 2020)")])
+            let before = (single.projection.text as NSString).range(of:"Before")
+            XCTAssertFalse(single.copy(before).source.contains("#cite"))
+            single.editWrite(before,text:"Updated")
+            XCTAssertTrue(single.source.contains("#cite(<smith>)")); XCTAssertTrue(single.source.contains("after")); XCTAssertFalse(single.parsed.erroneous)
+            single.undo(); XCTAssertEqual(single.source,original)
+        }
     }
     func testExplicitFormattingInsideWords() {
         let b = DocumentBuffer("word")

@@ -98,6 +98,7 @@ private final class CitationAcceptanceProtocol: URLProtocol {
         check(writing.buffer.projection.text.contains("Example, J. (2026). Citation acceptance reference. Press.") && !writing.buffer.projection.text.contains("#bibliography"),"Write renders the bibliography rather than its Typst call")
         check(writing.buffer.source == exact,"Rendering citations and bibliography preserves exact canonical source")
         let renderer = NativeTextView(usingTextLayoutManager:false); renderer.session = writing
+        renderer.delegate = renderer; renderer.allowsUndo = false
         let attributed = renderer.rendered()
         let bookTitle = (attributed.string as NSString).range(of:"Citation acceptance reference")
         check(bookTitle.location != NSNotFound && NSFontManager.shared.traits(of:attributed.attribute(.font,at:bookTitle.location,effectiveRange:nil) as! NSFont).contains(.italicFontMask),"Native bibliography typography retains the official style’s italic title")
@@ -119,6 +120,15 @@ private final class CitationAcceptanceProtocol: URLProtocol {
         writing.undo(); renderer.refresh(); writing.searchQuery = "Smith"; writing.replaceText = "Author"; writing.replace(all:true)
         check(writing.buffer.source == "Before Author target target.","Replace All merges repeated matches within one atomic citation")
         writing.undo(); check(writing.buffer.source == replacementSource,"Atomic Replace All uses exact-source undo")
+        writing.buffer.setReferencePresentations([ReferencePresentation(source:ByteSpan(7,21),text:"(Smith Smith, 2020)")]); renderer.refresh()
+        writing.searchController.update(revealFirst:false)
+        let findDeadline = Date().addingTimeInterval(3)
+        while writing.searchController.searching && Date() < findDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }
+        writing.find()
+        check(renderer.selectedRange() == writing.buffer.projection.atomicRanges.first,"Find selects a rendered citation as one source object")
+        writing.replace()
+        check(writing.buffer.source == "Before Author target target.","Single Replace accepts Find’s expanded atomic citation selection")
+        writing.undo(); check(writing.buffer.source == replacementSource,"Single citation replacement preserves exact-source undo")
         writing.saveWork?.cancel(); writing.recoveryQueue.sync {}
         session.sheet = nil
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))

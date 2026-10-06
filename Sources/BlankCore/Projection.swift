@@ -198,6 +198,9 @@ public struct Projection {
                 i += 1; continue
             }
             if ["LineComment", "BlockComment"].contains(n.kind) {
+                if references.contains(where:{ $0.kind == "citation" && $0.source.start <= n.start && $0.source.end >= n.end }) {
+                    pending.append(n); i += 1; continue
+                }
                 flush(); result.append(ProjectedBlock(kind: "source", source: n.span, body: n.span,
                     inlines: [.text(source.bytes(n.span), n.span, TextStyle(), true)])); i += 1; continue
             }
