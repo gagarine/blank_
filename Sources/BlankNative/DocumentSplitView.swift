@@ -77,9 +77,11 @@ import Combine
         splitView.window?.invalidateCursorRects(for:splitView)
     }
     private var sidebarResizeRect: NSRect? {
-        guard splitView.isVertical, contentsItem?.isCollapsed == false else { return nil }
-        let sidebar = contentsItem.viewController.view
-        let pane = splitView.convert(sidebar.bounds,from:sidebar)
+        guard splitView.isVertical, contentsItem?.isCollapsed == false,
+              let sidebarPane = splitView.arrangedSubviews.first else { return nil }
+        // AppKit can inset the hosted content inside its native pane. The
+        // divider belongs to the outer pane, independently of that content.
+        let pane = sidebarPane.frame
         guard pane.maxX > splitView.bounds.minX else { return nil }
         return NSRect(x:pane.maxX+splitView.dividerThickness/2-7,y:splitView.bounds.minY,width:14,height:splitView.bounds.height).intersection(splitView.bounds)
     }
