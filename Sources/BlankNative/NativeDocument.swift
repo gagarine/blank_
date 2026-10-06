@@ -55,6 +55,13 @@ import BlankCore
         windowControllers.forEach { $0.synchronizeWindowTitleWithDocumentName() }
     }
     override func save(to url: URL,ofType typeName: String,for saveOperation: NSDocument.SaveOperationType,completionHandler: @escaping ((any Error)?) -> Void) {
+        if session.root != nil, url.standardizedFileURL != session.root?.appendingPathComponent(session.entry).standardizedFileURL, session.dependencyRevision != session.revision {
+            session.prepareProjectCopy { [weak self] error in
+                if let error { completionHandler(error); return }
+                self?.save(to:url,ofType:typeName,for:saveOperation,completionHandler:completionHandler)
+            }
+            return
+        }
         nativeSaveDepth += 1
         super.save(to:url,ofType:typeName,for:saveOperation) { [weak self] error in
             if let self { self.nativeSaveDepth -= 1; self.synchronize() }
@@ -117,6 +124,13 @@ import BlankCore
         super.lock(completionHandler:completionHandler)
     }
     override func move(to url: URL,completionHandler: (((any Error)?) -> Void)? = nil) {
+        if session.root != nil, session.dependencyRevision != session.revision, url.deletingLastPathComponent().standardizedFileURL != session.root?.appendingPathComponent(session.entry).deletingLastPathComponent().standardizedFileURL {
+            session.prepareProjectCopy { [weak self] error in
+                if let error { completionHandler?(error); return }
+                self?.move(to:url,completionHandler:completionHandler)
+            }
+            return
+        }
         guard session.requestEditing() else { completionHandler?(CocoaError(.userCancelled)); return }
         do {
             if session.root == nil, let draftURL, draftURL.deletingLastPathComponent() == url.deletingLastPathComponent() {

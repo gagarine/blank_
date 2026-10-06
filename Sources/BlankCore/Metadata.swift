@@ -23,7 +23,7 @@ func literalIncludes(_ source: String,_ parsed: ParsedSource,kind: String = "Mod
     // Expand unconditional top-level statements only. Includes inside functions,
     // conditionals or content blocks belong to Typst's evaluation, not our editor.
     parsed.tree.children.filter { $0.kind == kind }.compactMap { node in
-        guard let argument = node.children.first(where:{ $0.kind == "Str" }), let path = try? JSONDecoder().decode(String.self,from:Data(source.bytes(argument.span).utf8)) else { return nil }
+        guard let argument = node.children.first(where:{ $0.kind == "Str" }), let path = argument.stringValue else { return nil }
         let hash = node.start > 0 && source.bytes(ByteSpan(node.start-1,node.start)) == "#"
         return LiteralInclude(path:path,source:ByteSpan(node.start-(hash ? 1 : 0),node.end))
     }
@@ -35,22 +35,22 @@ public func literalFileReferences(_ source: String,_ parsed: ParsedSource) -> [L
     var paths = literalAssetReferences(source,parsed)
     for kind in ["ModuleInclude","ModuleImport"] {
         for node in parsed.tree.descendants(kind) {
-            if let argument = node.children.first(where:{ $0.kind == "Str" }), let path = try? JSONDecoder().decode(String.self,from:Data(source.bytes(argument.span).utf8)) { paths.append(LiteralFileReference(path:path,source:argument.span)) }
+            if let argument = node.children.first(where:{ $0.kind == "Str" }), let path = argument.stringValue { paths.append(LiteralFileReference(path:path,source:argument.span)) }
         }
     }
-    return paths
+    var seen = Set<String>()
+    return paths.filter { seen.insert("\($0.source.start):\($0.source.end)").inserted }
 }
 private func literalAssetReferences(_ source: String,_ parsed: ParsedSource) -> [LiteralFileReference] {
     var paths: [LiteralFileReference] = []
-    func string(_ node: SyntaxNode) -> String? { try? JSONDecoder().decode(String.self,from:Data(source.bytes(node.span).utf8)) }
+    func string(_ node: SyntaxNode) -> String? { node.stringValue }
     for call in parsed.tree.descendants("FuncCall") {
-        guard let name = call.children.first, ["image","read","bibliography"].contains(source.bytes(name.span)), let args = call.children.first(where:{ $0.kind == "Args" }) else { continue }
+        guard let name = call.children.first, ["image","read","csv","json","yaml","xml","cbor"].contains(source.bytes(name.span)), let args = call.children.first(where:{ $0.kind == "Args" }) else { continue }
         if let literal = args.children.first(where:{ $0.kind == "Str" }), let path = string(literal) { paths.append(LiteralFileReference(path:path,source:literal.span)) }
-        if source.bytes(name.span) == "bibliography" {
-            for named in args.children where named.kind == "Named" {
-                if let key = named.children.first, source.bytes(key.span) == "style", let value = named.children.first(where:{ $0.kind == "Str" }), let path = string(value), path.lowercased().hasSuffix(".csl") { paths.append(LiteralFileReference(path:path,source:value.span)) }
-            }
-        }
+    }
+    for call in bibliographyCalls(source,parsed) {
+        for input in call.inputs { if let path = input.path { paths.append(LiteralFileReference(path:path,source:input.span)) } }
+        if let span = call.style, let value = parsed.tree.descendants("Str").first(where:{ $0.span == span })?.stringValue, value.lowercased().hasSuffix(".csl") { paths.append(LiteralFileReference(path:value,source:span)) }
     }
     return paths
 }

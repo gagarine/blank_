@@ -72,6 +72,13 @@ import Combine
         controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
     }
     @objc func newDocument(_ sender: Any?) { show(DocumentSession()) }
+    @objc func newProject(_ sender: Any?) {
+        let panel = NSSavePanel(); panel.title = "New Project"; panel.nameFieldStringValue = "Untitled Project"; panel.prompt = "Create Project"; panel.canCreateDirectories = true
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            do { self?.show(try ProjectSelection.create(at:url)) } catch { NSAlert(error:error).runModal() }
+        }
+    }
     @objc func renameDocument(_ sender: Any?) { current?.performDocumentAction { $0.rename(sender) } }
     @objc func moveDocument(_ sender: Any?) { current?.performDocumentAction { $0.move(sender) } }
     @objc func openRecent(_ sender: NSMenuItem) { if let url = sender.representedObject as? URL { openURL(url) } }
@@ -95,6 +102,18 @@ import Combine
             try session.open(url)
             if let entry = session.root?.appendingPathComponent(session.entry), let document = NSDocumentController.shared.document(for:entry) { document.showWindows(); return }
             show(session); NSDocumentController.shared.noteNewRecentDocumentURL(url)
+        }
+        catch let choice as ProjectEntryChoice {
+            let panel = NSOpenPanel(); panel.directoryURL = choice.root; panel.allowedContentTypes = [.init(filenameExtension:"typ")!]; panel.title = "Choose the main Typst document"; panel.prompt = "Open Project"
+            panel.begin { [weak self] response in
+                guard response == .OK, let selected = panel.url else { return }
+                do {
+                    let path = try ProjectSelection.relative(selected,root:choice.root)
+                    let session = DocumentSession(); try session.open(choice.root,selectedEntry:path)
+                    if let document = NSDocumentController.shared.document(for:selected) { document.showWindows(); return }
+                    self?.show(session); NSDocumentController.shared.noteNewRecentDocumentURL(choice.root)
+                } catch { NSAlert(error:error).runModal() }
+            }
         }
         catch { NSAlert(error:error).runModal() }
     }
@@ -178,7 +197,7 @@ import Combine
         app.addItem(.separator()); add(app,"Hide blank_",#selector(NSApplication.hide(_:)),"h",target:NSApp); add(app,"Hide Others",#selector(NSApplication.hideOtherApplications(_:)),"h",[.command,.option],target:NSApp)
         app.addItem(.separator()); add(app,"Quit blank_",#selector(quit(_:)),"q",target:self)
         let file = menu("File")
-        add(file,"New Document",#selector(newDocument(_:)),"n",target:self); add(file,"Templates…",#selector(templates(_:)),target:self); add(file,"Open…",#selector(openDocument(_:)),"o",target:self)
+        add(file,"New Document",#selector(newDocument(_:)),"n",target:self); add(file,"New Project…",#selector(newProject(_:)),target:self); add(file,"Templates…",#selector(templates(_:)),target:self); add(file,"Open…",#selector(openDocument(_:)),"o",target:self)
         let recent = NSMenuItem(title:"Open Recent",action:nil,keyEquivalent:""); recent.submenu = NSMenu(title:"Open Recent"); recent.submenu?.delegate = self; file.addItem(recent)
         add(file,"Open Recovery Copy…",#selector(recover(_:)),target:self); file.addItem(.separator())
         add(file,"Close Window",#selector(NSWindow.performClose(_:)),"w"); add(file,"Save",#selector(save(_:)),"s",target:self); add(file,"Save As…",#selector(saveAs(_:)),"s",[.command,.shift],target:self)

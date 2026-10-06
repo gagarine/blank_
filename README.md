@@ -14,6 +14,20 @@ Citation search filters while you type. The document’s style controls formatti
 
 New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table selects it; a second Delete removes it, and Undo restores it. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
+## Projects and references
+
+**New Document** stays empty. **File → New Project…** creates a dedicated folder containing only an empty `main.typ`. Projects are ordinary Typst folders, with no entry manifest. Opening a `.typ` selects it for compilation; opening a folder uses its remembered entry or a single document that is not included/imported by another file, otherwise a native panel lets you choose. Selections are stored in the app’s data directory. A directly opened file uses its parent as the root unless it belongs to a folder previously opened as a project.
+
+Includes and imports keep their names and structure. Relative paths resolve from the referring file; `/…` resolves from the project root. Adding a literal chapter include creates its empty `.typ` automatically. Existing missing/unreadable files are reported rather than overwritten. Packages must already be cached or vendored in `packages/`.
+
+Zotero insertion uses the document’s declared bibliography, including external BibLaTeX `.bib` and Hayagriva `.yaml`/`.yml`. Multiple inputs offer a destination choice. The app never attaches bibliographies merely because they share a folder. Without a bibliography, the first import embeds readable BibLaTeX in the document using Typst’s `bibliography(bytes(...))` input; independent documents can share a folder without generated reference-file collisions. There is no `writer-references.json` or beta-storage migration.
+
+Zotero item keys, library identifiers (`users/…` or `groups/…`) and the exported field list live in `x-blank-zotero-*` metadata alongside each entry. **Refresh Zotero References** is manual: it retains citation keys, changes only linked entries and keeps unrelated entries, comments, macros and custom fields. Citation insertion and refresh use canonical range history; cross-file insertion undoes the citation and bibliography together. Write uses Typst’s formatted citations/bibliographies; Source keeps the complete editable expressions. **Bibliography style** accepts standard style names or a custom CSL file.
+
+Save As preflights dependency collisions and copies literal dependencies plus files read by a background Typst evaluation. A nested entry’s literal paths are rebased; when computed paths require their original location, an ordinary `.typ` include wrapper keeps the original entry and folder structure intact. Unreached computed dependencies cannot be discovered automatically. Computed raw-byte bibliography data and package-owned bibliographies remain editable in Source but are not rewritten by Zotero. Hayagriva Zotero edits require block mappings; flow mappings/aliases still compile and remain source-editable.
+
+Checks cover external projects, nested/root paths, embedded/external references, Zotero refresh with isolated responses, custom CSL, assets, Unicode, selection/clipboard, Undo and Save As. Compiler checks compare reference presentation with and without the metadata fields. These checks do not establish live Zotero coverage.
+
 ## Download
 
 Download the last release from https://github.com/gagarine/blank_/releases (no auto-update yet)
@@ -39,7 +53,7 @@ The Cargo workspace shares a lockfile/cache for the in-process parser and separa
 ## Remaining work
 
 - Rich controls for editing existing links, footnotes, citations and figures; PDF-page selection and broader image-format validation.
-- Zotero group discovery, citation-picker keyboard navigation and custom CSL style selection. Custom citation show rules and note-style footnote presentation in Write remain unverified.
+- Zotero group discovery and citation-picker keyboard navigation. Custom citation show rules and note-style footnote presentation in Write remain unverified.
 - Continuous editing across included files and repeated includes.
 - Settings synchronization, disjoint external-change merging and broader recovery checks.
 - Large-table and Source performance; long-document memory/latency measurements.

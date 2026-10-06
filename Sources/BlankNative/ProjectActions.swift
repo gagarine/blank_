@@ -2,7 +2,7 @@ import AppKit
 import BlankCore
 
 @MainActor extension DocumentSession {
-    func refreshIncludes() {
+    func refreshIncludes(createMissing: Bool = false) {
         var seen = Set<String>(), added = false
         func visit(_ path: String) {
             guard !seen.contains(path) else { return }; seen.insert(path)
@@ -16,7 +16,15 @@ import BlankCore
                 } catch { self.error = "Could not open included chapter \(path): "+error.localizedDescription }
             }
             guard let model = buffers[path] else { return }
-            for include in model.includes+model.imports where !include.path.hasPrefix("@") { if let child = projectAssetPath(include.path,file:path) { visit(child) } }
+            for reference in literalFileReferences(model.source,model.parsed) where reference.path.lowercased().hasSuffix(".typ") && !reference.path.hasPrefix("@") {
+                if let child = projectAssetPath(reference.path,file:path) {
+                    if createMissing, !model.parsed.erroneous, model.includes.contains(where:{ $0.path == reference.path }), buffers[child] == nil,
+                       root == nil || root.flatMap({ try? Self.dependencyTarget(child,root:$0) }).map({ !FileManager.default.fileExists(atPath:$0.path) }) == true {
+                        buffers[child] = DocumentBuffer(); added = true
+                    }
+                    visit(child)
+                }
+            }
         }
         visit(entry)
         if added { revision += 1; installWatchers() }
@@ -35,13 +43,14 @@ import BlankCore
         return false
     }
     func projectAssetPath(_ literal: String, file: String? = nil) -> String? {
-        let base = URL(fileURLWithPath:"/project").appendingPathComponent(((file ?? active) as NSString).deletingLastPathComponent)
-        let target = base.appendingPathComponent(literal).standardizedFileURL
-        guard !literal.hasPrefix("/"), target.path.hasPrefix("/project/") else { return nil }
+        guard !literal.hasPrefix("@"), !literal.contains("\\") else { return nil }
+        let base = URL(fileURLWithPath:"/project").appendingPathComponent(literal.hasPrefix("/") ? "" : ((file ?? active) as NSString).deletingLastPathComponent)
+        let target = base.appendingPathComponent(literal.hasPrefix("/") ? String(literal.dropFirst()) : literal).standardizedFileURL
+        guard target.path.hasPrefix("/project/") else { return nil }
         return String(target.path.dropFirst("/project/".count))
     }
-    func relativeAssetPath(_ path: String) -> String {
-        let from = (active as NSString).deletingLastPathComponent.split(separator:"/").map(String.init), to = path.split(separator:"/").map(String.init)
+    func relativeAssetPath(_ path: String,file: String? = nil) -> String {
+        let from = ((file ?? active) as NSString).deletingLastPathComponent.split(separator:"/").map(String.init), to = path.split(separator:"/").map(String.init)
         var common = 0; while common < min(from.count,to.count) && from[common] == to[common] { common += 1 }
         return (Array(repeating:"..",count:from.count-common)+to.dropFirst(common)).joined(separator:"/")
     }
@@ -51,11 +60,22 @@ import BlankCore
         guard newEntry == entry || buffers[newEntry] == nil else { throw CocoaError(.fileWriteFileExists) }
         let entryModel = buffers[entry]!
         var entrySource = entryModel.source, entrySelection = entryModel.selection
-        if !(entry as NSString).deletingLastPathComponent.isEmpty {
+        let nested = !(entry as NSString).deletingLastPathComponent.isEmpty
+        let consumers = Set(["image","read","csv","json","yaml","xml","cbor"])
+        let computed = entryModel.parsed.tree.descendants("FuncCall").contains { call in
+            guard let name = call.children.first, consumers.contains(entryModel.source.bytes(name.span)), let args = call.children.first(where:{ $0.kind == "Args" }), let argument = args.children.first(where:{ !["Space","LeftParen","RightParen","Comma","LineComment","BlockComment","Named"].contains($0.kind) }) else { return false }
+            return argument.kind != "Str"
+        } || ["ModuleInclude","ModuleImport"].contains { kind in entryModel.parsed.tree.descendants(kind).contains { !$0.children.contains(where:{ $0.kind == "Str" }) } } || bibliographyCalls(entryModel.source,entryModel.parsed).contains { $0.inputs.contains { $0.format == "computed" } }
+        let retainNestedEntry = nested && computed
+        if retainNestedEntry {
+            // An ordinary include wrapper keeps computed relative paths rooted
+            // at their original source file, without rewriting custom code.
+            entrySource = "#include \(typstStringLiteral(entry))\n"; entrySelection = EditSelection(0,0)
+        } else if nested {
             // Save As relocates the entry to the chosen filename. Rebase only
             // literal file arguments; preserve comments and custom expressions.
             for reference in literalFileReferences(entryModel.source,entryModel.parsed).sorted(by:{ $0.source.start > $1.source.start }) {
-                guard !reference.path.hasPrefix("@"), let path = projectAssetPath(reference.path,file:entry), path != reference.path else { continue }
+                guard !reference.path.hasPrefix("@"), !reference.path.hasPrefix("/"), let path = projectAssetPath(reference.path,file:entry), path != reference.path else { continue }
                 let replacement = typstStringLiteral(path)
                 func mapped(_ position: Int) -> Int {
                     if position <= reference.source.start { return position }
@@ -73,10 +93,7 @@ import BlankCore
             }
         }
         for (path,model) in buffers where path != entry { dependencies[path] = Data(model.source.utf8) }
-        if includes.count > 1 || root.map({ FileManager.default.fileExists(atPath:$0.appendingPathComponent("writer.json").path) }) == true {
-            var config = root.flatMap { try? Data(contentsOf:$0.appendingPathComponent("writer.json")) }.flatMap { try? JSONSerialization.jsonObject(with:$0) as? [String:Any] } ?? [:]
-            config["entry"] = newEntry; dependencies["writer.json"] = try JSONSerialization.data(withJSONObject:config,options:[.prettyPrinted,.sortedKeys])
-        }
+        if retainNestedEntry { dependencies[entry] = Data(entryModel.source.utf8) }
         // All collisions are checked before creating any destination files.
         for (path,data) in dependencies {
             let target = try Self.dependencyTarget(path,root:destination)
@@ -100,10 +117,17 @@ import BlankCore
             try FileManager.default.removeItem(at:original)
         }
         guard adopt else { return }
+        let wasProject = root.map { ProjectSelection.isProject($0) } ?? false
         let identityChanged = entry != newEntry || root?.path != destination.path || entryModel.source != entrySource
-        entryModel.commit(entrySource,selection:entrySelection)
-        let old = entry; buffers[newEntry] = buffers.removeValue(forKey:old)
-        if active == old { active = newEntry }; entry = newEntry; root = destination; bases = buffers.mapValues(\.source); dirty = false
+        let old = entry
+        if retainNestedEntry { buffers[newEntry] = DocumentBuffer(entrySource) }
+        else {
+            entryModel.commit(entrySource,selection:entrySelection)
+            buffers[newEntry] = buffers.removeValue(forKey:old); remapReferenceHistory(from:old,to:newEntry)
+            if active == old { active = newEntry }
+        }
+        entry = newEntry; root = destination; bases = buffers.mapValues(\.source); dirty = false
+        ProjectSelection.remember(root:destination,entry:newEntry,project:wasProject)
         if identityChanged { revision += 1 }
         installWatchers(); onTitle?(); persistRecovery(); NSDocumentController.shared.noteNewRecentDocumentURL(url)
         NotificationCenter.default.post(name:.blankDocumentSaved,object:self)
@@ -137,22 +161,14 @@ import BlankCore
             try saveToDisk()
             let from = try Self.dependencyTarget(entry,root:root), to = try Self.dependencyTarget(next,root:root)
             try FileManager.default.linkItem(at:from,to:to)
-            let configURL = root.appendingPathComponent("writer.json"), config = try? Data(contentsOf:configURL)
-            do {
-                if let config, var object = try JSONSerialization.jsonObject(with:config) as? [String:Any], object["entry"] as? String == entry {
-                    object["entry"] = next
-                    try JSONSerialization.data(withJSONObject:object,options:[.prettyPrinted,.sortedKeys]).write(to:configURL,options:.atomic)
-                }
-                try FileManager.default.removeItem(at:from)
-            } catch {
-                try? FileManager.default.removeItem(at:to)
-                if let config { try? config.write(to:configURL,options:.atomic) }
-                throw error
-            }
+            do { try FileManager.default.removeItem(at:from) }
+            catch { try? FileManager.default.removeItem(at:to); throw error }
             NSDocumentController.shared.noteNewRecentDocumentURL(to)
         }
         let old = entry; buffers[next] = buffers.removeValue(forKey:old); bases[next] = bases.removeValue(forKey:old)
+        remapReferenceHistory(from:old,to:next)
         if active == old { active = next }; entry = next; revision += 1; installWatchers(); persistRecovery(); onTitle?()
+        if let root { ProjectSelection.remember(root:root,entry:next) }
         NotificationCenter.default.post(name:.blankDocumentSaved,object:self)
     }
 

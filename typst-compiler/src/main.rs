@@ -66,7 +66,10 @@ impl Environment {
         let path = self.path(id)?;
         if matches!(id.root(),VirtualRoot::Project) {
             let relative = path.strip_prefix(&self.root).map_err(|_| FileError::AccessDenied)?.to_string_lossy();
-            if let Some(text) = self.files.get(relative.as_ref()) { return Ok(Bytes::new(text.as_bytes().to_vec())); }
+            if let Some(text) = self.files.get(relative.as_ref()) {
+                let bytes = Bytes::new(text.as_bytes().to_vec());
+                self.binary.lock().unwrap().insert(id,bytes.clone()); return Ok(bytes);
+            }
         }
         let bytes=std::fs::read(&path).map(Bytes::new).map_err(|e| FileError::from_io(e, &path))?;
         self.binary.lock().unwrap().insert(id,bytes.clone());Ok(bytes)
@@ -200,6 +203,27 @@ fn citation_presentation(world: &Environment, document: &typst_layout::PagedDocu
     out
 }
 
+fn bibliography_inputs(world: &Environment, document: &typst_layout::PagedDocument) -> Vec<Value> {
+    use typst::foundations::NativeElement;
+    use typst::loading::DataSource;
+    use typst::introspection::Introspector;
+    use typst::model::BibliographyElem;
+    document.introspector().query(&BibliographyElem::ELEM.select()).iter().filter_map(|content| {
+        let bib = content.to_packed::<BibliographyElem>()?;
+        let span = content.span();
+        let id = span.id()?;
+        let range = world.range(span)?;
+        let inputs: Vec<_> = bib.sources.source.0.iter().map(|source| match source {
+            DataSource::Path(path) => match path.resolve(id) {
+                Ok(path) if matches!(path.root(),VirtualRoot::Project) => json!({"path":path.vpath().get_without_slash()}),
+                _ => json!({"unsupported":true}),
+            },
+            DataSource::Bytes(_) => json!({"embedded":true}),
+        }).collect();
+        Some(json!({"file":id.vpath().get_without_slash(),"start":range.start,"end":range.end,"inputs":inputs}))
+    }).collect()
+}
+
 fn compile(params: Value) -> Result<Value,String> {
     let p: CompileRequest = serde_json::from_value(params).map_err(|e| e.to_string())?;
     let root = Path::new(&p.root).canonicalize().map_err(|e|e.to_string())?;
@@ -218,7 +242,7 @@ fn compile(params: Value) -> Result<Value,String> {
                 page_ratios.push(size.y.to_pt()/size.x.to_pt());
                 reading_map(&world, &page.frame, typst::layout::Transform::identity(), index + 1, size.y.to_pt(), &mut source_map);
             }
-            Ok(json!({"revision":p.revision,"pdf":base64::engine::general_purpose::STANDARD.encode(pdf),"pages":document.pages().len(),"sourceMap":source_map,"citations":citation_presentation(&world, &document),"pageRatios":page_ratios,"diagnostics":[]}))
+            Ok(json!({"revision":p.revision,"pdf":base64::engine::general_purpose::STANDARD.encode(pdf),"pages":document.pages().len(),"sourceMap":source_map,"citations":citation_presentation(&world, &document),"pageRatios":page_ratios,"bibliographies":bibliography_inputs(&world,&document),"diagnostics":[]}))
         },
         Err(errors) => {
             let diagnostics: Vec<Value> = errors.iter().map(|e| {
@@ -229,6 +253,10 @@ fn compile(params: Value) -> Result<Value,String> {
             Ok(json!({"revision":p.revision,"diagnostics":diagnostics}))
         }
     };
+    let result = result.map(|mut value| {
+        let files: Vec<_> = world.binary.lock().unwrap().keys().filter(|id|matches!(id.root(),VirtualRoot::Project)).map(|id|id.vpath().get_without_slash().to_owned()).collect();
+        value["dependencies"] = json!(files); value
+    });
     comemo::evict(10);
     result
 }
@@ -255,6 +283,13 @@ fn main() {
                 let source=cache.entry(path).or_insert_with(||Source::detached(text));
                 if source.text()!=text {source.replace(text);}
                 respond(&output,id,Ok(json!({"revision":params["revision"],"tree":project(source.root(),0)})));
+            },
+            "bibToHayagriva" => {
+                let result = hayagriva::io::from_biblatex_str(params["bib"].as_str().unwrap_or(""))
+                    .map_err(|e|format!("{e:?}"))
+                    .and_then(|library|hayagriva::io::to_yaml_str(&library).map_err(|e|e.to_string()))
+                    .map(|yaml|json!({"yaml":yaml}));
+                respond(&output,id,result);
             },
             "compile"=>{let output=output.clone();std::thread::spawn(move||respond(&output,id,compile(params)));},
             _=>respond(&output,id,Err("unknown method".into()))
@@ -304,4 +339,40 @@ mod tests {
         let bib = records.iter().find(|r|r["kind"] == "bibliography").unwrap();
         assert!(bib["text"].as_str().unwrap().contains("[1]"));
     }
+    #[test]
+    fn embedded_metadata_does_not_change_rendering() {
+        let plain = "@book{smith, author={Smith, Jane}, title={A Book}, year={2020}, publisher={Press}}";
+        let linked = "@book{smith, author={Smith, Jane}, title={A Book}, year={2020}, publisher={Press}, x-blank-zotero-key={ABCD1234}, x-blank-zotero-library={groups/123}, x-blank-zotero-fields={author,publisher,title,year}}";
+        let source = |bib: &str| format!("#cite(<smith>)\n\n#bibliography(bytes(\n```bib\n{bib}\n```.text\n), style: \"apa\")");
+        let a = rendered(&source(plain));
+        let b = rendered(&source(linked));
+        let texts = |value: &Value| value["citations"].as_array().unwrap().iter().map(|v|v["text"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        assert_eq!(texts(&a),texts(&b));
+        assert_eq!(a["pages"],b["pages"]);
+    }
+    #[test]
+    fn external_projects_hayagriva_custom_csl_and_root_paths() {
+        let root = std::env::temp_dir().join(format!("blank-external-project-{}",std::process::id()));
+        std::fs::create_dir_all(root.join("chapters/deep")).unwrap();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        let csl = r#"<style xmlns="http://purl.org/net/xbiblio/csl" version="1.0" class="in-text"><info><title>Custom</title><id>https://example.org/custom</id><updated>2026-01-01T00:00:00+00:00</updated></info><citation><layout prefix="[" suffix="]"><text variable="title"/></layout></citation><bibliography><layout><text variable="title"/></layout></bibliography></style>"#;
+        std::fs::write(root.join("assets/custom.csl"),csl).unwrap();
+        std::fs::write(root.join("assets/picture.svg"),r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="blue"/></svg>"#).unwrap();
+        std::fs::write(root.join("assets/works.yaml"),"smith:\n  type: Book\n  title: Café 日本\n  date: 2020\n  x-blank-zotero-key: ABCD1234\n  x-blank-zotero-library: groups/123\n  x-blank-zotero-fields: title,date,type\n").unwrap();
+        std::fs::write(root.join("chapters/deep/two.typ"),"#cite(<smith>)\n#image(\"/assets/picture.svg\")").unwrap();
+        std::fs::write(root.join("chapters/one.typ"),"#include \"deep/two.typ\"").unwrap();
+        let source = "// from another editor\n#let asset = \"assets/works.yaml\"\n#include \"chapters/one.typ\"\n#bibliography(asset, style: \"assets/custom.csl\")";
+        let result = compile(json!({"root":root,"entry":"paper.typ","files":{"paper.typ":source},"revision":1})).unwrap();
+        let plain = std::fs::read_to_string(root.join("assets/works.yaml")).unwrap().lines().filter(|line|!line.contains("x-blank-")).collect::<Vec<_>>().join("\n");
+        std::fs::write(root.join("assets/works.yaml"),plain).unwrap();
+        let without_metadata = compile(json!({"root":root,"entry":"paper.typ","files":{"paper.typ":source},"revision":2})).unwrap();
+        let texts = |value: &Value| value["citations"].as_array().unwrap().iter().map(|v|v["text"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        assert_eq!(texts(&result),texts(&without_metadata));
+        assert!(result["dependencies"].as_array().unwrap().iter().any(|path|path == "assets/works.yaml"));
+        assert_eq!(result["bibliographies"][0]["inputs"][0]["path"],"assets/works.yaml");
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(result["pdf"].is_string(),"{result}");
+        assert!(result["citations"].as_array().unwrap().iter().any(|v|v["text"].as_str().unwrap().contains("Café 日本")));
+    }
+
 }
