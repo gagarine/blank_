@@ -70,6 +70,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var dragTarget = 0
     var draggingBlock = false
     var dragImage: NSImage?
+    var blockDragTimer: Timer?
+    var blockDragEvent: NSEvent?
     var track: NSTrackingArea?
     var lastPresentationRevision = -1
     var codeButtons: [Int:CodeDisclosureButton] = [:]
@@ -394,7 +396,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         var visible = Set<Int>()
         for (index,block) in session.buffer.projection.blocks.enumerated() where block.text == "\u{FFFC}" {
             guard let attachment = textStorage?.attribute(.attachment,at:block.display.location,effectiveRange:nil) as? ObjectAttachment else { continue }
-            let rect = rectFor(block.display.location)
+            let rect = documentGlyphRect(block.display)
             let frame = NSRect(x:textContainerInset.width,y:rect.minY,width:attachment.width,height:attachment.height)
             guard frame.intersects(visibleRect.insetBy(dx:0,dy:-120)) else { continue }
             visible.insert(index)
@@ -717,19 +719,37 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     @objc func blankBold(_ sender: Any?) { formatNative(false) }
     @objc func blankItalic(_ sender: Any?) { formatNative(true) }
     func rectFor(_ offset: Int) -> NSRect {
-        guard window != nil else { return .zero }
+        guard let window else { return .zero }
         var actual = NSRange()
         let screen = firstRect(forCharacterRange:NSRange(location:min(max(0,offset),(string as NSString).length),length:0),actualRange:&actual)
-        let windowRect = window!.convertFromScreen(screen)
-        var rect = convert(windowRect,from:nil)
-        // A zero-width native caret is an empty NSRect. Give popover positioning
-        // a nonempty anchor at the same insertion location.
+        var rect = convert(window.convertFromScreen(screen),from:nil)
         rect.size.width = max(1,rect.width)
         return rect
     }
+    func documentLineRect(_ offset: Int) -> NSRect {
+        guard let layoutManager, let textContainer else { return .zero }
+        let length = textStorage?.length ?? 0, at = min(max(0,offset),length)
+        // firstRect(forCharacterRange:) is an input-method screen anchor. AppKit
+        // can clamp it to the viewport; overlays and block drops need document
+        // geometry, including characters many screens away from the caret.
+        let range = NSRange(location:at == length && at > 0 ? at-1 : at,length:at < length || at > 0 ? 1 : 0)
+        layoutManager.ensureLayout(forCharacterRange:range)
+        if at == length, layoutManager.extraLineFragmentTextContainer === textContainer {
+            return layoutManager.extraLineFragmentRect.offsetBy(dx:textContainerOrigin.x,dy:textContainerOrigin.y)
+        }
+        guard length > 0 else { return rectFor(at) }
+        let glyphs = layoutManager.glyphRange(forCharacterRange:range,actualCharacterRange:nil)
+        return layoutManager.lineFragmentRect(forGlyphAt:glyphs.location,effectiveRange:nil).offsetBy(dx:textContainerOrigin.x,dy:textContainerOrigin.y)
+    }
+    func documentGlyphRect(_ range: NSRange) -> NSRect {
+        guard range.length > 0, let layoutManager, let textContainer else { return documentLineRect(range.location) }
+        layoutManager.ensureLayout(forCharacterRange:range)
+        let glyphs = layoutManager.glyphRange(forCharacterRange:range,actualCharacterRange:nil)
+        return layoutManager.boundingRect(forGlyphRange:glyphs,in:textContainer).offsetBy(dx:textContainerOrigin.x,dy:textContainerOrigin.y)
+    }
     func blockRect(_ index: Int) -> NSRect {
         guard let b = session?.buffer.projection.blocks[index] else { return .zero }
-        let first = rectFor(b.display.location), last = rectFor(NSMaxRange(b.display))
+        let first = documentLineRect(b.display.location), last = documentLineRect(NSMaxRange(b.display))
         return NSRect(x:textContainerInset.width,y:first.minY,width:max(100,bounds.width-2*textContainerInset.width),height:max(first.height,last.maxY-first.minY))
     }
     func hoveredBlock(at point: NSPoint) -> Int? {
@@ -824,17 +844,33 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         blockPopover?.close(); dismissSlash(); super.mouseDown(with:event)
     }
     override func mouseDragged(with event: NSEvent) {
-        guard grabbed != nil, let session else { super.mouseDragged(with:event); return }
+        guard grabbed != nil, session != nil else { super.mouseDragged(with:event); return }
         dragPoint = convert(event.locationInWindow,from:nil)
         if hypot(dragPoint.x-pressPoint.x,dragPoint.y-pressPoint.y) > 4 { draggingBlock = true }
-        dragTarget = session.buffer.projection.blocks.count
-        for i in session.buffer.projection.blocks.indices {
-            if dragPoint.y < blockRect(i).midY { dragTarget = i; break }
+        blockDragEvent = event
+        if draggingBlock && blockDragTimer == nil {
+            let timer = Timer(timeInterval:1.0/30,repeats:true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }
+                MainActor.assumeIsolated { self.updateBlockDrag() }
+            }
+            blockDragTimer = timer; RunLoop.main.add(timer,forMode:.common)
         }
-        autoscroll(with:event); needsDisplay = true
+        updateBlockDrag()
+    }
+    func updateBlockDrag() {
+        guard grabbed != nil, draggingBlock, let event = blockDragEvent, let session else { return }
+        autoscroll(with:event)
+        // Reconvert after scrolling: the mouse stays in the window while its
+        // document position changes. Hit-test near it instead of laying out
+        // every block on each drag tick.
+        dragPoint = convert(event.locationInWindow,from:nil)
+        let index = session.buffer.projection.blockIndex(at:characterIndexForInsertion(at:dragPoint))
+        dragTarget = dragPoint.y < blockRect(index).midY ? index : index+1
+        needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) {
         guard let index = grabbed else { super.mouseUp(with:event); return }
+        blockDragTimer?.invalidate(); blockDragTimer = nil; blockDragEvent = nil
         NSCursor.pop(); grabbed = nil; needsDisplay = true
         if draggingBlock { if session?.requestEditing() == true { session?.buffer.moveBlock(index,before:dragTarget); session?.changed() } }
         else { showBlockMenu(index,event:event) }

@@ -48,6 +48,8 @@ bash scripts/check.sh
 
 Both builds update the same app; quit and reopen after rebuilding. Checks cover the document model, compiler, native editing/files and a relocated bundle; native checks need an unlocked desktop session.
 
+Write figures scroll with their text instead of sticking to the viewport. Block dragging keeps document-relative targets and continues scrolling while held beyond the viewport edge. Native regressions cover moves past 80 blocks, exact Unicode Undo and figure removal/restoration across scrolls; disposable app checks also verify image scrolling and block placement visually.
+
 The Cargo workspace shares a lockfile/cache for the in-process parser and separate PDF compiler, both using Typst 0.15.1. See [AGENTS.md](AGENTS.md) for architecture and build conventions.
 
 [CI](.github/workflows/build-macos.yml) checks pushes and pull requests on macOS 26/27. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after both builds pass. Apps are ad-hoc signed; Intel support is unverified.
