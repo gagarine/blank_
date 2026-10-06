@@ -97,7 +97,6 @@ enum ZoteroIntegration {
                     let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted,.sortedKeys]
                     session.buffers["writer-references.json"] = DocumentBuffer(String(data:try! encoder.encode(metadata),encoding:.utf8)!+"\n")
                     let cites = refs.map { ref -> String in
-                        if locator.isEmpty && form == "normal" { return "@"+ref.citeKey }
                         return "#cite(<\(ref.citeKey)>"+(locator.isEmpty ? "" : ", supplement: [\(escapeTypst(locator))]")+(form == "normal" ? "" : ", form: \(jsonString(form))")+")"
                     }.joined(separator:" ")
                     var text = session.buffer.source.replacingBytes(anchor.span,with:cites)

@@ -7,30 +7,48 @@ public struct TextStyle: Codable, Equatable {
     public var link: String? = nil
     public init() {}
 }
+public struct ReferenceFormat: Equatable {
+    public var range: NSRange
+    public var bold: Bool
+    public var italic: Bool
+    public init(range: NSRange, bold: Bool = false, italic: Bool = false) { self.range = range; self.bold = bold; self.italic = italic }
+}
+public struct ReferencePresentation: Equatable {
+    public var source: ByteSpan
+    public var text: String
+    public var kind: String
+    public var formats: [ReferenceFormat]
+    public init(source: ByteSpan, text: String, kind: String = "citation", formats: [ReferenceFormat] = []) { self.source = source; self.text = text; self.kind = kind; self.formats = formats }
+    public func shifted(by delta: Int) -> ReferencePresentation { ReferencePresentation(source:ByteSpan(source.start+delta,source.end+delta),text:text,kind:kind,formats:formats) }
+}
 public struct TextRun {
     public var text: String
     public var source: ByteSpan
     public var style: TextStyle
     public var literal: Bool
+    public var atomic: Bool = false
 }
 public indirect enum Inline {
     case text(String, ByteSpan, TextStyle, Bool)
+    case reference(String, ByteSpan, TextStyle)
     case group(ByteSpan, String, String, [Inline])
     public var length: Int {
         switch self {
-        case let .text(t, _, _, _): return t.utf16.count
+        case let .text(t, _, _, _), let .reference(t, _, _): return t.utf16.count
         case let .group(_, _, _, nodes): return nodes.reduce(0) { $0 + $1.length }
         }
     }
     public func shifted(by delta: Int) -> Inline {
         switch self {
         case let .text(t,s,style,literal): return .text(t,ByteSpan(s.start+delta,s.end+delta),style,literal)
+        case let .reference(t,s,style): return .reference(t,ByteSpan(s.start+delta,s.end+delta),style)
         case let .group(s,prefix,suffix,nodes): return .group(ByteSpan(s.start+delta,s.end+delta),prefix,suffix,nodes.map { $0.shifted(by:delta) })
         }
     }
     public var runs: [TextRun] {
         switch self {
         case let .text(t, s, style, literal): return [TextRun(text: t, source: s, style: style, literal: literal)]
+        case let .reference(t,s,style): return [TextRun(text:t,source:s,style:style,literal:false,atomic:true)]
         case let .group(_, _, _, nodes): return nodes.flatMap(\.runs)
         }
     }
@@ -45,6 +63,7 @@ public indirect enum Inline {
                 return source.bytes(ByteSpan(span.start + a, span.start + b))
             }
             return escapeTypst((t as NSString).substring(with: NSRange(location: start, length: end-start)))
+        case let .reference(_,span,_): return source.bytes(span)
         case let .group(span, prefix, suffix, nodes):
             if start == 0 && end == length && removingMark == nil && !explicitMarks { return source.bytes(span) }
             let body = sliceInlines(nodes, start, end, source: source, removingMark: removingMark,explicitMarks:explicitMarks)
@@ -87,7 +106,7 @@ public struct ProjectedBlock {
         copy.tableCells = tableCells.map { ByteSpan($0.start+delta,$0.end+delta) }
         return copy
     }
-    public var editable: Bool { !["source", "table", "image", "equation"].contains(kind) }
+    public var editable: Bool { !["source", "table", "image", "equation", "bibliography"].contains(kind) }
     public func sourceOffset(_ position: Int, endBias: Bool = false) -> Int {
         if let cell = cellRanges.lastIndex(where:{ $0.location <= position }) {
             return tableCells[cell].start + cellProjections[cell].sourceOffset(at:min(position-cellRanges[cell].location,cellRanges[cell].length),endBias:endBias)
@@ -118,12 +137,12 @@ public struct Projection {
         }
         self.blocks = blocks; self.text = text
     }
-    public init(source: String, parsed: ParsedSource) {
+    public init(source: String, parsed: ParsedSource, references: [ReferencePresentation] = []) {
         var result: [ProjectedBlock] = [], pending: [SyntaxNode] = []
         func block(_ n: SyntaxNode, kind: String, body: SyntaxNode? = nil, level: Int = 0) -> ProjectedBlock {
             let body = body ?? n
             return ProjectedBlock(kind: kind, level: level, source: n.span, body: body.span,
-                inlines: body.span.count == 0 ? [] : inline(body.children.isEmpty ? [body] : body.children, source: source))
+                inlines: body.span.count == 0 ? [] : inline(body.children.isEmpty ? [body] : body.children, source: source, references:references))
         }
         func flush() {
             if pending.allSatisfy({ source.bytes($0.span).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { pending.removeAll(); return }
@@ -131,7 +150,7 @@ public struct Projection {
             while let n = pending.last, ["Text", "Space"].contains(n.kind), source.bytes(n.span).contains("\n") && source.bytes(n.span).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { pending.removeLast() }
             guard let first = pending.first, let last = pending.last else { return }
             let span = ByteSpan(first.start, last.end)
-            result.append(ProjectedBlock(kind: "paragraph", source: span, body: span, inlines: inline(pending, source: source)))
+            result.append(ProjectedBlock(kind: "paragraph", source: span, body: span, inlines: inline(pending, source: source, references:references)))
             pending.removeAll()
         }
         let nodes = parsed.tree.children
@@ -185,7 +204,7 @@ public struct Projection {
             if n.kind == "Hash", i+1 < nodes.count {
                 let next = nodes[i+1]
                 let span = ByteSpan(n.start, next.end)
-                if next.kind == "FuncCall", let name = next.children.first, ["strong","emph","link","footnote"].contains(source.bytes(name.span)) {
+                if next.kind == "FuncCall", let name = next.children.first, ["strong","emph","link","footnote","cite"].contains(source.bytes(name.span)) {
                     pending += [n,next]; i += 2; continue
                 }
                 let before = source.bytes(ByteSpan(0, n.start)).components(separatedBy: "\n").last ?? ""
@@ -195,6 +214,10 @@ public struct Projection {
                     let raw = source.bytes(span)
                     var b = ProjectedBlock(kind: raw.hasPrefix("#table(") ? "table" : raw.hasPrefix("#image(") || raw.hasPrefix("#figure(") ? "image" : "source",
                         source: span, body: span, inlines: [.text(raw, span, TextStyle(), true)])
+                    if raw.hasPrefix("#bibliography(") {
+                        b.kind = "bibliography"
+                        b.inlines = [.reference(references.first { $0.source == span && $0.kind == "bibliography" }?.text ?? "Bibliography",span,TextStyle())]
+                    }
                     if raw.hasPrefix("#quote"), let content = next.descendants("ContentBlock").first?.markup {
                         b = block(n, kind: "quote", body: content)
                     }
@@ -206,7 +229,7 @@ public struct Projection {
                         b.inlines = []
                         var offset = 0
                         for span in b.tableCells {
-                            let raw = source.bytes(span), cell = Projection(source:raw,parsed:ParsedSource.parse(raw))
+                            let raw = source.bytes(span), cell = Projection(source:raw,parsed:ParsedSource.parse(raw),references:references.filter { $0.source.start >= span.start && $0.source.end <= span.end }.map { $0.shifted(by:-span.start) })
                             b.cellProjections.append(cell)
                             b.cellRanges.append(NSRange(location:offset,length:cell.text.utf16.count))
                             for (index,part) in cell.blocks.enumerated() {
@@ -252,6 +275,23 @@ public struct Projection {
         let b = blocks[blockIndex(at: utf16)]
         return b.sourceOffset(max(0, min(utf16-b.display.location, b.display.length)), endBias: endBias)
     }
+    public var atomicRanges: [NSRange] {
+        blocks.flatMap { block in
+            var at = block.display.location
+            return block.inlines.flatMap(\.runs).compactMap { run in
+                defer { at += run.text.utf16.count }
+                return run.atomic ? NSRange(location:at,length:run.text.utf16.count) : nil
+            }
+        }
+    }
+    public func atomicRange(_ proposed: NSRange) -> NSRange {
+        var range = proposed
+        for atomic in atomicRanges {
+            if range.length > 0 && NSIntersectionRange(range,atomic).length > 0 { range = NSUnionRange(range,atomic) }
+            else if range.length == 0 && range.location > atomic.location && range.location < NSMaxRange(atomic) { range.location = NSMaxRange(atomic) }
+        }
+        return range
+    }
     public func tableCell(at range: NSRange) -> (block: Int, cell: Int, source: ByteSpan, display: NSRange)? {
         let index = blockIndex(at:range.location), block = blocks[index]
         guard let cell = block.cellRanges.lastIndex(where:{ block.display.location+$0.location <= range.location }) else { return nil }
@@ -275,24 +315,31 @@ public struct Projection {
         return NSMaxRange(b.display)
     }
 }
-private func inline(_ nodes: [SyntaxNode], source: String, style: TextStyle = TextStyle()) -> [Inline] {
+private func inline(_ nodes: [SyntaxNode], source: String, style: TextStyle = TextStyle(), references: [ReferencePresentation] = []) -> [Inline] {
     var out: [Inline] = [], i = 0
     while i < nodes.count {
         let n = nodes[i], raw = source.bytes(n.span)
-        if ["Strong", "Emph"].contains(n.kind), let body = n.markup {
+        if let reference = references.first(where:{ $0.kind == "citation" && $0.source.start == n.start && $0.source.end <= (nodes.last?.end ?? n.end) }) {
+            out.append(.reference(reference.text,reference.source,style))
+            while i+1 < nodes.count && nodes[i+1].start < reference.source.end { i += 1 }
+        } else if n.kind == "Ref", raw.hasPrefix("@zotero-") {
+            out.append(.reference("Citation",n.span,style))
+        } else if ["Strong", "Emph"].contains(n.kind), let body = n.markup {
             var s = style
             if n.kind == "Strong" { s.bold = true } else { s.italic = true }
-            out.append(.group(n.span, source.bytes(ByteSpan(n.start, body.start)), source.bytes(ByteSpan(body.end, n.end)), inline(body.children, source: source, style: s)))
+            out.append(.group(n.span, source.bytes(ByteSpan(n.start, body.start)), source.bytes(ByteSpan(body.end, n.end)), inline(body.children, source: source, style: s, references:references)))
         } else if n.kind == "Hash", i+1 < nodes.count {
             let next = nodes[i+1], span = ByteSpan(n.start, nodes[i+1].end), raw = source.bytes(span)
             // Literal content of native link/footnote/strong/emphasis expressions.
-            if let content = next.descendants("ContentBlock").first?.markup,
+            if next.kind == "FuncCall", next.children.first.map({ source.bytes($0.span) }) == "cite" {
+                out.append(.reference("Citation",span,style))
+            } else if let content = next.descendants("ContentBlock").first?.markup,
                ["#link", "#footnote", "#strong", "#emph"].contains(where: { raw.hasPrefix($0) }) {
                 var s = style
                 if raw.hasPrefix("#strong") { s.bold = true }
                 if raw.hasPrefix("#emph") { s.italic = true }
                 if raw.hasPrefix("#link"), let a = raw.firstIndex(of: "\""), let b = raw[raw.index(after: a)...].firstIndex(of: "\"") { s.link = String(raw[raw.index(after: a)..<b]) }
-                out.append(.group(span, source.bytes(ByteSpan(span.start, content.start)), source.bytes(ByteSpan(content.end, span.end)), inline(content.children, source: source, style: s)))
+                out.append(.group(span, source.bytes(ByteSpan(span.start, content.start)), source.bytes(ByteSpan(content.end, span.end)), inline(content.children, source: source, style: s, references:references)))
             } else { out.append(.text(raw, span, style, true)) }
             i += 1
         } else if n.kind == "Escape" {

@@ -53,7 +53,7 @@ struct BlockActionMenu: View {
                 ScrollView {
                     VStack(spacing:2) {
                         ForEach(Array(choices.enumerated()),id:\.element.id) { index,entry in
-                            MenuRowButton(label:entry.item.title,action:{ activate(index) }) {
+                            MenuRowButton(label:entry.item.title,action:{ activate(index) },hover:{ if $0 { selection = index } }) {
                                 HStack(spacing:12) {
                                     Image(systemName:entry.symbol).font(.system(size:16)).frame(width:28)
                                     Text(entry.item.title).font(.system(size:12,weight:.medium))
