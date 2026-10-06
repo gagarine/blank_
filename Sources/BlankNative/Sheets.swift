@@ -176,6 +176,7 @@ struct InsertionSheet: View {
     @NativeState var locator = ""
     @NativeState var form = "normal"
     @NativeState var selected = Set<String>()
+    @NativeState private var loadedInitialReferences = false
     @FocusState var focus: Bool
     var title: String { session.insertionKind == "bibliography" ? "Bibliography style" : SlashCommand.all.first { $0.kind == session.insertionKind }?.label ?? "Insert" }
     var body: some View {
@@ -205,7 +206,14 @@ struct InsertionSheet: View {
             }
             if !failure.isEmpty { Text(failure).font(.system(size:11)).foregroundStyle(.red).textSelection(.enabled) }
             HStack { Spacer(); Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction); Button("Insert") { insert() }.keyboardShortcut(.defaultAction).disabled(finding) }
-        }.onAppear { focus = true; if session.insertionKind == "bibliography" { text = "apa" } }
+        }.onAppear {
+            focus = true
+            if session.insertionKind == "bibliography" { text = "apa" }
+            if session.insertionKind == "citation" && !loadedInitialReferences {
+                loadedInitialReferences = true
+                searchZotero()
+            }
+        }
     }
     var citation: some View {
         VStack(alignment:.leading,spacing:12) {
@@ -229,6 +237,7 @@ struct InsertionSheet: View {
         }
     }
     func searchZotero() {
+        guard !finding else { return }
         finding = true; failure = ""
         ZoteroIntegration.search(query:text,library:library) { result in finding = false; switch result { case let .success(items): refs = items; case let .failure(error): failure = error.localizedDescription } }
     }
