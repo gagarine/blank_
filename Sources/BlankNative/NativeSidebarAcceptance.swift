@@ -116,15 +116,15 @@ import BlankCore
         // observe each requested size after AppKit has completed its layout.
         RunLoop.main.run(until:Date().addingTimeInterval(0.25))
         split.layoutSubtreeIfNeeded()
-        let sidebar = controller.splitController.contentsItem.viewController.view
+        guard let sidebarPane = split.arrangedSubviews.first else { fatalError("No native sidebar pane") }
         for width: CGFloat in [240,280,220] {
             split.setPosition(width,ofDividerAt:0); split.layoutSubtreeIfNeeded()
             let deadline = Date().addingTimeInterval(1)
-            while abs(split.convert(sidebar.bounds,from:sidebar).width-width) >= 2 && Date() < deadline {
+            while abs(sidebarPane.frame.width-width) >= 2 && Date() < deadline {
                 RunLoop.main.run(until:Date().addingTimeInterval(0.02)); split.layoutSubtreeIfNeeded()
             }
-            guard abs(split.convert(sidebar.bounds,from:sidebar).width-width) < 2 else { fatalError("FAIL: Native sidebar width must follow resizing before testing the new hit area | requested=\(width), actual=\(sidebar.bounds.width)") }
-            let boundary = split.convert(sidebar.bounds,from:sidebar).maxX+split.dividerThickness/2
+            guard abs(sidebarPane.frame.width-width) < 2 else { fatalError("FAIL: Native sidebar width must follow resizing before testing the new hit area | requested=\(width), actual=\(sidebarPane.frame.width)") }
+            let boundary = sidebarPane.frame.maxX+split.dividerThickness/2
             for offset: CGFloat in [-6,0,6] {
                 let point = NSPoint(x:boundary+offset,y:split.bounds.midY)
                 let root = controller.window!.contentView!
