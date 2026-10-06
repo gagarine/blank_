@@ -131,6 +131,7 @@ final class CitationAcceptanceProtocol: URLProtocol {
         writing.undo(); check(writing.buffer.source == replacementSource,"Single citation replacement preserves exact-source undo")
         writing.saveWork?.cancel(); writing.recoveryQueue.sync {}
         ProjectAcceptance.run()
+        BibliographyConversionAcceptance.run()
         session.sheet = nil
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
     }

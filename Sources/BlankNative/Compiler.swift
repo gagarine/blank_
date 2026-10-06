@@ -34,6 +34,15 @@ final class TypstCompiler {
             DispatchQueue.main.async { completion(result) }
         }
     }
+    func convertBibliography(_ text: String,from: String,to: String,completion: @escaping (Result<String,Error>) -> Void) {
+        queue.async {
+            let result = Result { () throws -> String in
+                guard let text = try self.call("convertBibliography",params:["text":text,"from":from,"to":to])["text"] as? String else { throw NSError(domain:"Typst",code:1,userInfo:[NSLocalizedDescriptionKey:"The compiler returned no converted bibliography."]) }
+                return text
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
     private func call(_ method: String, params: [String:Any]) throws -> [String:Any] {
         if process == nil {
             let compiler = Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("typst-compiler")

@@ -155,12 +155,13 @@ import Combine
         if menuItem.action == #selector(go(_:)), let action = menuItem.representedObject as? GoAction {
             return (NSApp.keyWindow == nil || current?.window === NSApp.keyWindow) && current?.canNavigate(action) == true
         }
-        let documentActions: [Selector] = [#selector(save(_:)),#selector(saveAs(_:)),#selector(saveAsTemplate(_:)),#selector(export(_:)),#selector(renameDocument(_:)),#selector(moveDocument(_:)),#selector(commands(_:)),#selector(undo(_:)),#selector(redo(_:)),#selector(bold(_:)),#selector(italic(_:)),#selector(find(_:)),#selector(writeMode(_:)),#selector(sourceMode(_:)),#selector(previewMode(_:)),#selector(outline(_:)),#selector(settings(_:)),#selector(statistics(_:)),#selector(refresh(_:)),#selector(refreshReferences(_:))]
+        let documentActions: [Selector] = [#selector(save(_:)),#selector(saveAs(_:)),#selector(saveAsTemplate(_:)),#selector(export(_:)),#selector(renameDocument(_:)),#selector(moveDocument(_:)),#selector(commands(_:)),#selector(undo(_:)),#selector(redo(_:)),#selector(bold(_:)),#selector(italic(_:)),#selector(find(_:)),#selector(writeMode(_:)),#selector(sourceMode(_:)),#selector(previewMode(_:)),#selector(outline(_:)),#selector(settings(_:)),#selector(statistics(_:)),#selector(refresh(_:)),#selector(refreshReferences(_:)),#selector(convertBibliography(_:))]
         if documentActions.contains(where:{ $0 == menuItem.action }) { return current != nil }
         return true
     }
     @objc func fullscreen(_ sender: Any?) { NSApp.keyWindow?.toggleFullScreen(nil) }
     @objc func refresh(_ sender: Any?) { current?.compileRevision = -1; current?.compile() }
+    @objc func convertBibliography(_ sender: Any?) { current?.showBibliographyConversion() }
     @objc func refreshReferences(_ sender: Any?) { if let current { ZoteroIntegration.refresh(current) } }
     @objc func quit(_ sender: Any?) { NSApp.terminate(nil) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -202,6 +203,7 @@ import Combine
         add(file,"Open Recovery Copy…",#selector(recover(_:)),target:self); file.addItem(.separator())
         add(file,"Close Window",#selector(NSWindow.performClose(_:)),"w"); add(file,"Save",#selector(save(_:)),"s",target:self); add(file,"Save As…",#selector(saveAs(_:)),"s",[.command,.shift],target:self)
         add(file,"Save as Template…",#selector(saveAsTemplate(_:)),target:self)
+        add(file,"Convert Bibliography…",#selector(convertBibliography(_:)),target:self)
         add(file,"Export PDF…",#selector(export(_:)),"e",[.command,.shift],target:self)
         add(file,"Rename Document…",#selector(renameDocument(_:)),target:self)
         add(file,"Move To…",#selector(moveDocument(_:)),target:self)

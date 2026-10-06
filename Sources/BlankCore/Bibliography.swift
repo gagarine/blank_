@@ -2,11 +2,12 @@ import Foundation
 
 public struct BibliographyInput {
     public var span: ByteSpan
+    public var expression: ByteSpan
     public var path: String?
     public var embedded: String?
     public var format: String
-    public init(span: ByteSpan,path: String? = nil,embedded: String? = nil,format: String) {
-        self.span = span; self.path = path; self.embedded = embedded; self.format = format
+    public init(span: ByteSpan,path: String? = nil,embedded: String? = nil,format: String,expression: ByteSpan? = nil) {
+        self.span = span; self.expression = expression ?? span; self.path = path; self.embedded = embedded; self.format = format
     }
 }
 public struct BibliographyCall {
@@ -34,9 +35,9 @@ public func bibliographyCalls(_ source: String,_ parsed: ParsedSource) -> [Bibli
             while let node = valueNode, node.kind == "Ident", let value = bindings[source.bytes(node.span)], !visited.contains(source.bytes(node.span)) {
                 visited.insert(source.bytes(node.span)); valueNode = value
             }
-            if values.count == 1, let valueNode, let value = valueNode.stringValue { return BibliographyInput(span:valueNode.span,embedded:value,format:["@","%"].contains(where:{ value.trimmingCharacters(in:.whitespacesAndNewlines).hasPrefix($0) }) ? "bib" : "yaml") }
+            if values.count == 1, let valueNode, let value = valueNode.stringValue { return BibliographyInput(span:valueNode.span,embedded:value,format:["@","%"].contains(where:{ value.trimmingCharacters(in:.whitespacesAndNewlines).hasPrefix($0) }) ? "bib" : "yaml",expression:node.span) }
             if values.count == 1, let valueNode, valueNode.kind == "FieldAccess", source.bytes(valueNode.span).hasSuffix(".text"), let raw = valueNode.descendants("Raw").first, let text = raw.rawText {
-                return BibliographyInput(span:valueNode.span,embedded:text,format:raw.children.contains(where:{ $0.kind == "RawLang" && ["bib","bibtex","biblatex"].contains(source.bytes($0.span)) }) || ["@","%"].contains(where:{ text.trimmingCharacters(in:.whitespacesAndNewlines).hasPrefix($0) }) ? "bib" : "yaml")
+                return BibliographyInput(span:valueNode.span,embedded:text,format:raw.children.contains(where:{ $0.kind == "RawLang" && ["bib","bibtex","biblatex"].contains(source.bytes($0.span)) }) || ["@","%"].contains(where:{ text.trimmingCharacters(in:.whitespacesAndNewlines).hasPrefix($0) }) ? "bib" : "yaml",expression:node.span)
             }
         }
         return nil

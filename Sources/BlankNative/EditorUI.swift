@@ -183,6 +183,7 @@ struct EditorRoot: View {
             case .settings: SettingsSheet(session:session)
             case .statistics: StatisticsSheet(session:session)
             case .insertion: InsertionSheet(session:session)
+            case .bibliographyConversion: BibliographyConversionSheet(session:session)
             case .object: ObjectSheet(session:session)
             case .conflict: ConflictSheet(session:session)
             case .page: GoToPageSheet(session:session)

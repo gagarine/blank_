@@ -2414,10 +2414,12 @@ name = "typst-compiler"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "biblatex",
  "comemo",
  "hayagriva",
  "serde",
  "serde_json",
+ "serde_yaml",
  "typst",
  "typst-kit",
  "typst-layout",
