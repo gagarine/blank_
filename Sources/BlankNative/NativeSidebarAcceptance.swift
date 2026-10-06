@@ -101,6 +101,14 @@ import BlankCore
             scroll.contentView.scroll(to:savedOrigin); scroll.reflectScrolledClipView(scroll.contentView)
         }
         session.switchMode(originalMode); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        session.showSearch(); RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+        guard let field = controller.searchItem?.searchField, field.window === window,
+              let textRect = field.cell?.titleRect(forBounds:field.bounds), !textRect.isEmpty else { fatalError("No native toolbar search text area") }
+        let searchPoint = field.convert(NSPoint(x:textRect.midX,y:textRect.midY),to:nil)
+        let searchEvent = NSEvent.mouseEvent(with:.mouseMoved,location:searchPoint,modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,clickCount:0,pressure:0)!
+        NSCursor.arrow.set(); editor.mouseMoved(with:searchEvent)
+        guard NSCursor.current == .iBeam else { fatalError("Native toolbar search text must retain its editing cursor") }
+        session.hideSearch(); RunLoop.main.run(until:Date().addingTimeInterval(0.3))
         print("PASS: Scrolled Write and Source text cannot replace the native toolbar cursor")
     }
     static func resizeTarget(controller original: DocumentWindow) {
