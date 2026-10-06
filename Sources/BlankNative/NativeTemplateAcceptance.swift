@@ -25,7 +25,7 @@ import BlankCore
         }
         do {
             let library = try TemplateLibrary(root:folder.appendingPathComponent("library"))
-            check(library.templates.map(\.name) == TemplateLibrary.starterNames,"Template library seeds five packaged starters")
+            check(library.templates.map(\.name) == TemplateLibrary.starterNames,"Template library seeds six packaged starters")
             let menu = NSApp.mainMenu?.item(withTitle:"File")?.submenu
             check(menu?.item(withTitle:"Templates…") != nil && menu?.item(withTitle:"Save as Template…") != nil && CommandsSheet(session:original.session).actions.contains { $0.0 == "Templates…" },"File and Cmd-K expose the template library")
             check(original.session.buffer.source.isEmpty,"Adding templates keeps launch and New Document empty")
@@ -34,11 +34,26 @@ import BlankCore
             wait { starters.allSatisfy { library.pdf($0) != nil || library.renderErrors[$0.id] != nil } }
             for item in starters {
                 check(library.renderErrors[item.id] == nil && library.image(item) != nil && (library.pdf(item).flatMap { PDFDocument(data:$0) }?.pageCount ?? 0) > 0,"Packaged \(item.name) compiles to a real PDF and thumbnail: \(library.renderErrors[item.id] ?? "")")
+                if item.name == "Slides", let pdf = library.pdf(item).flatMap({ PDFDocument(data:$0) }) {
+                    check(pdf.pageCount == 3,"Slides includes three editable example slides")
+                    for index in 0..<pdf.pageCount {
+                        let bounds = pdf.page(at:index)!.bounds(for:.mediaBox)
+                        check(abs(bounds.width/bounds.height-16.0/9.0) < 0.001,"Every Slides page uses the HD projector aspect ratio")
+                    }
+                }
                 let stored = try library.read(item); sessions.append(stored)
                 let copy = try library.newDocument(from:item); sessions.append(copy)
                 check(copy.root == nil && copy.dirty && copy.buffer.source == stored.buffer.source && copy.entry == "Untitled.typ" && !copy.buffer.canUndo,"\(item.name) creates an independent exact-source draft with clean history")
                 check(copy.buffer.projection.blocks.filter { $0.kind == "source" }.allSatisfy(\.collapsed),"Template layout configuration folds without changing source")
             }
+            let legacyRoot = folder.appendingPathComponent("existing-library")
+            try fm.createDirectory(at:legacyRoot,withIntermediateDirectories:true)
+            try Data().write(to:legacyRoot.appendingPathComponent(".initialized"))
+            let upgraded = try TemplateLibrary(root:legacyRoot)
+            check(upgraded.templates.map(\.name) == ["Slides"],"Existing libraries receive Slides once without reseeding deleted older starters")
+            try upgraded.moveToTrash(upgraded.templates[0],using:{ try fm.removeItem(at:$0) })
+            let upgradedAgain = try TemplateLibrary(root:legacyRoot)
+            check(upgradedAgain.templates.isEmpty,"Deleting the new Slides starter remains permanent on reopening")
             let chooser = TemplateGalleryWindow(library:library); gallery = chooser
             chooser.showWindow(nil); chooser.window?.makeKeyAndOrderFront(nil)
             RunLoop.main.run(until:Date().addingTimeInterval(0.3))
@@ -47,10 +62,10 @@ import BlankCore
                 return view.subviews.lazy.compactMap { descendant($0,as:type) }.first
             }
             guard let grid = descendant(chooser.window?.contentView,as:TemplateGrid.self) else { fatalError("Missing native template grid") }
-            check(grid.numberOfItems(inSection:0) == 5 && grid.isSelectable && !grid.allowsMultipleSelection,"Gallery uses a native single-selection thumbnail collection")
+            check(grid.numberOfItems(inSection:0) == starters.count && grid.isSelectable && !grid.allowsMultipleSelection,"Gallery uses a native single-selection thumbnail collection")
             let firstFrame = grid.layoutAttributesForItem(at:IndexPath(item:0,section:0))!.frame
             let lastFrame = grid.layoutAttributesForItem(at:IndexPath(item:4,section:0))!.frame
-            check(firstFrame.minY == lastFrame.minY && lastFrame.maxX <= grid.bounds.maxX,"All five starter thumbnails fit in the gallery’s initial layout")
+            check(firstFrame.minY == lastFrame.minY && lastFrame.maxX <= grid.bounds.maxX,"First row of starter thumbnails fits in the gallery’s initial layout")
             check(chooser.window?.toolbar?.items.filter { $0.isBordered }.count == 4,"Template gallery uses native glass toolbar controls")
             grid.selectItems(at:[IndexPath(item:0,section:0)],scrollPosition:[]); library.selection = starters[0].id
             func key(_ code: UInt16,_ characters: String) -> NSEvent {

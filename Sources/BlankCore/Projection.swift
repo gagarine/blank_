@@ -157,7 +157,14 @@ public struct Projection {
                 flush()
                 let level = source.bytes(n.span).prefix { $0 == "=" }.count
                 var projected = block(n, kind: n.kind == "Heading" ? "heading" : n.kind == "ListItem" ? "bullet" : "number", body: body, level: level)
-                if i+1 < nodes.count, nodes[i+1].kind == "Space" {
+                // An empty marker's padding can belong to the following
+                // Parbreak (rather than Space). Include it in the block so the
+                // body insertion point maps here, not into the next paragraph.
+                if body.span.count == 0 {
+                    let padding = source.bytes(ByteSpan(n.end,source.utf8.count)).prefix { $0 == " " || $0 == "\t" }.utf8.count
+                    projected.source.end += padding
+                    projected.body = ByteSpan(body.start+padding,body.end+padding)
+                } else if i+1 < nodes.count, nodes[i+1].kind == "Space" {
                     let spaces = String(source.bytes(nodes[i+1].span).prefix { $0 == " " || $0 == "\t" }), padding = spaces.utf8.count
                     projected.source.end += padding
                     if body.span.count == 0 { projected.body = ByteSpan(body.start+padding,body.end+padding) }
