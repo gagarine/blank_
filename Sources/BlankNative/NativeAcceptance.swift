@@ -187,6 +187,33 @@ import BlankCore
         check(session.buffer.projection.blocks.map(\.kind) == ["bullet","bullet"],"Return continues a list")
         editor.insertNewline(nil); editor.insertText("After",replacementRange:editor.selectedRange())
         check(session.buffer.projection.blocks.map(\.kind) == ["bullet","paragraph"],"Return on an empty item exits the list")
+        for (kind,query,marker) in [("bullet","bullet","- "),("number","number","+ "),("heading","heading","= ")] {
+            for original in ["/", "Before\n\n/\n\nAfter", "Before\n\n/\n\n"] {
+                resetParagraphs(original.replacingOccurrences(of:"/",with:""))
+                let slashAt = original.hasPrefix("Before") ? 7 : 0
+                editor.setSelectedRange(NSRange(location:slashAt,length:0)); editor.captureSelection()
+                for character in "/"+query { editor.insertText(String(character),replacementRange:editor.selectedRange()) }
+                editor.slashIndex = editor.slashMatches.firstIndex { $0.kind == kind && ($0.kind != "heading" || $0.level == 1) }!
+                editor.chooseSlash()
+                let index = session.buffer.projection.blockIndex(at:slashAt), block = session.buffer.projection.blocks[index]
+                check(block.kind == kind && block.text.isEmpty && editor.selectedRange() == NSRange(location:block.display.location,length:0),"Slash creates an empty \(kind) with its caret on the same line")
+                check(session.buffer.source == original.replacingOccurrences(of:"/",with:marker),"Slash preserves surrounding source for \(kind)")
+                let font = editor.typingAttributes[.font] as! NSFont
+                let style = editor.typingAttributes[.paragraphStyle] as! NSParagraphStyle
+                check(kind == "heading" ? font.pointSize > CGFloat(session.fontSize) : style.firstLineHeadIndent == 25,"Empty \(kind) has its native font and indentation before typing")
+                check(editor.rectFor(block.display.location).minX >= editor.textContainerInset.width+(kind == "heading" ? 0 : 24),"Empty list caret follows its drawn marker")
+                editor.insertText("Café 👩🏽‍💻",replacementRange:editor.selectedRange())
+                check(session.buffer.projection.blocks[index].text == "Café 👩🏽‍💻","Typing fills the chosen \(kind), without a new paragraph")
+                editor.setSelectedRange(session.buffer.projection.blocks[index].display); editor.captureSelection()
+                editor.deleteBackward(nil)
+                check(session.buffer.projection.blocks[index].text.isEmpty,"Deleting Unicode content retains an empty \(kind)")
+                let beforeUnformat = session.buffer.source
+                editor.deleteBackward(nil)
+                check(session.buffer.projection.blocks[index].kind == "paragraph" && session.buffer.projection.blocks[index].text.isEmpty,"Backspace removes the empty \(kind) marker")
+                session.undo(); check(session.buffer.source == beforeUnformat,"Undo restores the empty \(kind) exactly")
+                editor.dismissSlash()
+            }
+        }
         resetParagraphs("Left selected right")
         editor.setSelectedRange(NSRange(location:5,length:8)); editor.captureSelection(); editor.insertNewline(nil)
         check(session.buffer.projection.blocks.map(\.text) == ["Left","right"],"Return replaces selection and splits its paragraph")
@@ -326,6 +353,21 @@ import BlankCore
         let handleMenu = (editor.blockPopover?.contentViewController as? NSHostingController<BlockActionMenu>)?.rootView
         check(editor.blockPopover?.isShown == true && handleMenu?.items.map { $0.item.title } == ["Turn into","Duplicate","Delete"],"Block handle uses the compact app popover without injected text-context actions")
         check(handleMenu?.items.first?.children.allSatisfy { ($0.item as? BlockMenuItem)?.command?.kind != "paragraph" } == true,"Turn into omits the current block type")
+        if let content = editor.blockPopover?.contentViewController?.view {
+            func menuButtons(_ view: NSView) -> [MenuActionButton] {
+                (view as? MenuActionButton).map { [$0] } ?? view.subviews.flatMap(menuButtons)
+            }
+            guard let duplicateButton = menuButtons(content).first(where:{ $0.accessibilityLabel() == "Duplicate" }) else { fatalError("Missing Duplicate menu row") }
+            var reportedHover = false
+            let hover = duplicateButton.hover
+            duplicateButton.hover = { value in hover(value); reportedHover = value }
+            let event = NSEvent.enterExitEvent(with:.mouseEntered,location:duplicateButton.convert(NSPoint(x:10,y:10),to:nil),modifierFlags:[],timestamp:0,windowNumber:content.window!.windowNumber,context:nil,eventNumber:1,trackingNumber:0,userData:nil)!
+            duplicateButton.mouseEntered(with:event)
+            RunLoop.main.run(until:Date().addingTimeInterval(0.05))
+            check(duplicateButton.isHovered && reportedHover,"Native block menu pointer entry updates the highlighted row")
+            duplicateButton.mouseExited(with:event)
+            check(!duplicateButton.isHovered,"Leaving a menu row resets its native hover state")
+        }
         if let duplicate = handleMenu?.items.first(where:{ $0.item.title == "Duplicate" }) { handleMenu?.choose(duplicate.item) }
         check(session.buffer.projection.blocks.count == 4 && controller.window?.firstResponder === editor,"Popover Duplicate uses the document transaction and restores editing focus")
         session.undo(); check(session.buffer.source == menuSource,"Popover block actions share exact-source undo")
@@ -432,6 +474,20 @@ import BlankCore
             if backward { editor.deleteBackward(nil) } else { editor.deleteForward(nil) }
             check(!session.buffer.source.contains("value0") && session.buffer.source.contains("After 日本😀"),"Folded code boundary delete is atomic (backward=\(backward))")
             session.undo(); check(session.buffer.source == foldingSource,"Folded block deletion undo restores every source byte")
+        }
+        let boundaryTable = "Before\n\n#table(columns: 2, inset: 8pt, [日本], [], [Café], [])\n\nAfter"
+        for backward in [false,true] {
+            resetParagraphs(boundaryTable)
+            let blocks = session.buffer.projection.blocks, table = blocks[1]
+            let at = backward ? blocks[2].display.location : NSMaxRange(blocks[0].display)
+            editor.setSelectedRange(NSRange(location:at,length:0)); editor.captureSelection()
+            if backward { editor.deleteBackward(nil) } else { editor.deleteForward(nil) }
+            check(editor.selectedRange() == table.display && session.buffer.source == boundaryTable,"Delete toward an adjacent table selects it without changing source")
+            editor.copy(nil)
+            check(NSPasteboard.general.string(forType:.string)?.contains("Café") == true,"Selected table retains structured clipboard content")
+            if backward { editor.deleteBackward(nil) } else { editor.deleteForward(nil) }
+            check(!session.buffer.source.contains("#table") && session.buffer.source.contains("Before") && session.buffer.source.contains("After"),"Second Delete removes the complete adjacent table")
+            session.undo(); check(session.buffer.source == boundaryTable,"Table boundary deletion Undo restores cells, options and surrounding source")
         }
         let tableSource = "#table(columns: 2, [Idea], [Step], [One], [Two])\n\nAfter"
         session.buffer.loadExternal(tableSource)

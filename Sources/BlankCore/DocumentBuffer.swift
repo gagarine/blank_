@@ -65,6 +65,8 @@ public final class DocumentBuffer {
     }
     public private(set) var lastEditWasLocal = false
     private var collapsedSourceStarts = Set<Int>()
+    private var referencePresentations: [ReferencePresentation] = []
+    public var renderedReferences: [ReferencePresentation] { referencePresentations }
     public private(set) var presentationRevision = 0
     public private(set) var projection: Projection
     public private(set) var revision: Int = 0
@@ -77,6 +79,12 @@ public final class DocumentBuffer {
         source = text; let parsed = ParsedSource.parse(text); parsedCache = parsed; hasSyntaxErrors = parsed.erroneous; projection = Projection(source: text, parsed: parsed)
         includes = literalIncludes(text,parsed)
         imports = literalIncludes(text,parsed,kind:"ModuleImport")
+    }
+    public func editingCopy() -> DocumentBuffer {
+        let copy = DocumentBuffer(source)
+        copy.referencePresentations = referencePresentations; copy.collapsedSourceStarts = collapsedSourceStarts
+        copy.projection = projection; copy.selection = selection
+        return copy
     }
     public func breakUndoGroup() { if !undoSteps.isEmpty { undoSteps[undoSteps.count-1].group = "" } }
     @discardableResult public func moveInclude(_ from: Int, before target: Int) -> Bool {
@@ -122,10 +130,17 @@ public final class DocumentBuffer {
         assign(text,patch:patch); selection = after; return true
     }
     public func loadExternal(_ text: String) {
-        guard text != source else { return }; collapsedSourceStarts.removeAll(); projection = Projection(source:source,parsed:parsed); undoSteps.removeAll(); redoSteps.removeAll(); assign(text)
+        guard text != source else { return }; referencePresentations.removeAll(); collapsedSourceStarts.removeAll(); projection = Projection(source:source,parsed:parsed); undoSteps.removeAll(); redoSteps.removeAll(); assign(text)
         selection = EditSelection(min(selection.anchor, source.utf8.count), min(selection.focus, source.utf8.count))
     }
     private func assign(_ text: String, patch: SourcePatch? = nil) {
+        if let change = patch ?? SourcePatch.difference(source,text) {
+            referencePresentations = referencePresentations.compactMap { reference in
+                if change.oldSpan.end <= reference.source.start { return reference.shifted(by:change.inserted.utf8.count-change.removed.utf8.count) }
+                if change.start >= reference.source.end { return reference }
+                return nil
+            }
+        }
         if let change = patch ?? SourcePatch.difference(source,text) {
             collapsedSourceStarts = Set(projection.blocks.filter { $0.collapsed }.compactMap { block in
                 if change.start+change.removed.utf8.count <= block.source.start {
@@ -138,7 +153,7 @@ public final class DocumentBuffer {
         lastEditWasLocal = false
         // Conservative local reparse: one text block, no newline or structural
         // boundary change. Unknown code and cross-block edits always take the full path.
-        if !hasSyntaxErrors, let patch, !patch.inserted.contains("\n"), !patch.removed.contains("\n"),
+        if referencePresentations.isEmpty, !projection.blocks.contains(where:{ $0.inlines.flatMap(\.runs).contains(where: \.atomic) }), !hasSyntaxErrors, let patch, !patch.inserted.contains("\n"), !patch.removed.contains("\n"),
            let index = projection.blocks.firstIndex(where:{ $0.editable && patch.start >= $0.body.start && patch.start+patch.removed.utf8.count <= $0.body.end }) {
             let old = projection.blocks[index], delta = patch.inserted.utf8.count-patch.removed.utf8.count
             let raw = text.bytes(ByteSpan(old.source.start,old.source.end+delta))
@@ -158,7 +173,7 @@ public final class DocumentBuffer {
         source = text; let fresh = ParsedSource.parse(text); parsedCache = fresh; hasSyntaxErrors = fresh.erroneous
         includes = literalIncludes(text,fresh)
         imports = literalIncludes(text,fresh,kind:"ModuleImport")
-        projection = folded(Projection(source:text,parsed:fresh)); revision += 1
+        projection = folded(Projection(source:text,parsed:fresh,references:referencePresentations)); revision += 1
     }
     public func undo() {
         guard let step = undoSteps.popLast() else { return }
@@ -178,12 +193,13 @@ public final class DocumentBuffer {
         commit(source.replacingBytes(span, with: text), selection: EditSelection(end,end), group: text.contains("\n") ? "" : group)
     }
     public func editWrite(_ range: NSRange, text: String, raw: Bool = false, group: String = "write", styleOverride: TextStyle? = nil) {
+        let range = projection.atomicRange(range)
         if editCell(range,group:group,operation:{ model,range in model.editWrite(range,text:text,raw:raw,group:group,styleOverride:styleOverride) }) { return }
         if range.length > 0, projection.blocks.contains(where:{ !$0.cellRanges.isEmpty && range.location <= NSMaxRange($0.display) && NSMaxRange(range) >= $0.display.location }) {
             // Cell separators cannot be deleted as ordinary source characters.
             // A selection across cells edits their contents as one transaction;
             // a whole-table selection replaces the complete source block.
-            let draft = DocumentBuffer(source)
+            let draft = editingCopy()
             var regions: [(NSRange,Int?)] = []
             for (index,block) in projection.blocks.enumerated() {
                 let overlap = NSIntersectionRange(block.display,range)
@@ -279,6 +295,7 @@ public final class DocumentBuffer {
     private func editCell(_ range: NSRange, group: String = "", operation: (DocumentBuffer,NSRange) -> Void) -> Bool {
         guard let cell = projection.tableCell(at:range) else { return false }
         let model = DocumentBuffer(source.bytes(cell.source)), local = NSRange(location:range.location-cell.display.location,length:range.length)
+        model.setReferencePresentations(referencePresentations.filter { $0.source.start >= cell.source.start && $0.source.end <= cell.source.end }.map { $0.shifted(by:-cell.source.start) })
         model.selection = EditSelection(model.projection.sourceOffset(at:local.location),model.projection.sourceOffset(at:NSMaxRange(local)))
         operation(model,local)
         commit(source.replacingBytes(cell.source,with:model.source),selection:EditSelection(cell.source.start+model.selection.anchor,cell.source.start+model.selection.focus),group:group.isEmpty ? "" : "table:\(cell.block):\(cell.cell):\(group)")
@@ -295,7 +312,7 @@ public final class DocumentBuffer {
     public func split(_ range: NSRange) {
         if editCell(range,operation:{ $0.split($1) }) { return }
         if range.length > 0 {
-            let draft = DocumentBuffer(source); draft.selection = selection
+            let draft = editingCopy(); draft.selection = selection
             draft.editWrite(range,text:"",group:"")
             draft.split(NSRange(location:draft.projection.displayOffset(at:draft.selection.focus),length:0))
             commit(draft.source,selection:draft.selection); return
@@ -315,10 +332,11 @@ public final class DocumentBuffer {
         editWrite(range,text:"\\ ",raw:true,group:"")
     }
     public func format(_ range: NSRange, italic: Bool) {
+        let range = projection.atomicRange(range)
         guard range.length > 0 else { return }
         if editCell(range,operation:{ $0.format($1,italic:italic) }) { return }
         if projection.blocks.contains(where:{ !$0.cellRanges.isEmpty && NSIntersectionRange($0.display,range).length > 0 }) {
-            let draft = DocumentBuffer(source)
+            let draft = editingCopy()
             for block in projection.blocks.reversed() {
                 let regions = block.cellRanges.isEmpty ? [block.display] : block.cellRanges.map { NSRange(location:block.display.location+$0.location,length:$0.length) }
                 for region in regions.reversed() {
@@ -366,8 +384,15 @@ public final class DocumentBuffer {
         let prefix = kind == "heading" ? String(repeating:"=",count:max(1,level))+" " : kind == "bullet" ? "- " : kind == "number" ? "+ " : kind == "quote" ? "#quote(block: true)[" : ""
         let suffix = kind == "quote" ? "]" : ""
         let body = source.bytes(b.body)
-        let text = source.replacingBytes(b.source,with:prefix+body+suffix)
-        let at = b.source.start+prefix.utf8.count+min(max(0,selection.focus-b.body.start),body.utf8.count)
+        var leading = "", trailing = ""
+        if kind == "paragraph", body.isEmpty {
+            // A removed list marker must leave an actual empty paragraph slot,
+            // including between items separated by only one source newline.
+            if index > 0, !source.bytes(ByteSpan(projection.blocks[index-1].source.end,b.source.start)).contains("\n\n") { leading = "\n" }
+            if index+1 < projection.blocks.count, !source.bytes(ByteSpan(b.source.end,projection.blocks[index+1].source.start)).contains("\n\n") { trailing = "\n" }
+        }
+        let text = source.replacingBytes(b.source,with:leading+prefix+body+suffix+trailing)
+        let at = b.source.start+leading.utf8.count+prefix.utf8.count+min(max(0,selection.focus-b.body.start),body.utf8.count)
         commit(text,selection:EditSelection(at,at))
     }
     public func setKind(at range: NSRange, kind: String, level: Int = 0) {
@@ -445,8 +470,11 @@ public final class DocumentBuffer {
         return commit(text,selection:EditSelection(at+prefix.utf8.count,at+prefix.utf8.count))
     }
     public func copy(_ range: NSRange) -> RichFragment {
+        let range = projection.atomicRange(range)
         if let cell = projection.tableCell(at:range) {
-            return DocumentBuffer(source.bytes(cell.source)).copy(NSRange(location:range.location-cell.display.location,length:range.length))
+            let model = DocumentBuffer(source.bytes(cell.source))
+            model.setReferencePresentations(referencePresentations.filter { $0.source.start >= cell.source.start && $0.source.end <= cell.source.end }.map { $0.shifted(by:-cell.source.start) })
+            return model.copy(NSRange(location:range.location-cell.display.location,length:range.length))
         }
         let first = projection.blockIndex(at:range.location), last = projection.blockIndex(at:NSMaxRange(range))
         var pieces: [String] = []
@@ -457,13 +485,18 @@ public final class DocumentBuffer {
             else if !b.cellRanges.isEmpty {
                 for (cell,display) in b.cellRanges.enumerated() {
                     let selected = NSIntersectionRange(NSRange(location:b.display.location+display.location,length:display.length),range)
-                    if selected.length > 0 { pieces.append(DocumentBuffer(source.bytes(b.tableCells[cell])).copy(NSRange(location:selected.location-b.display.location-display.location,length:selected.length)).source) }
+                    if selected.length > 0 {
+                        let model = DocumentBuffer(source.bytes(b.tableCells[cell]))
+                        let span = b.tableCells[cell]
+                        model.setReferencePresentations(referencePresentations.filter { $0.source.start >= span.start && $0.source.end <= span.end }.map { $0.shifted(by:-span.start) })
+                        pieces.append(model.copy(NSRange(location:selected.location-b.display.location-display.location,length:selected.length)).source)
+                    }
                 }
             } else { pieces.append(sliceInlines(b.inlines,a,z,source:source)) }
         }
         var plain = (projection.text as NSString).substring(with:range)
         if projection.blocks.contains(where:{ $0.collapsed && NSIntersectionRange($0.display,range).length > 0 }) {
-            let expanded = Projection(source:source,parsed:parsed)
+            let expanded = Projection(source:source,parsed:parsed,references:referencePresentations)
             let a = expanded.displayOffset(at:projection.sourceOffset(at:range.location)), z = expanded.displayOffset(at:projection.sourceOffset(at:NSMaxRange(range)))
             plain = (expanded.text as NSString).substring(with:NSRange(location:a,length:max(0,z-a)))
         }
@@ -471,6 +504,7 @@ public final class DocumentBuffer {
         return RichFragment(source:pieces.joined(separator:"\n\n"),plain:plain,block:entire)
     }
     public func paste(_ fragment: RichFragment, range: NSRange) {
+        let range = projection.atomicRange(range)
         if editCell(range,operation:{ model,range in model.editWrite(range,text:fragment.source,raw:true,group:"") }) { return }
         let index = projection.blockIndex(at:range.location), b = projection.blocks[index]
         if fragment.block && range.location == b.display.location && range.length >= b.display.length {
@@ -507,11 +541,85 @@ extension DocumentBuffer {
         }
         return Projection(blocks:blocks)
     }
+    public func setReferencePresentations(_ references: [ReferencePresentation]) {
+        guard !references.isEmpty || !referencePresentations.isEmpty else { return }
+        let originals = references
+        let ordinary = Projection(source:source,parsed:parsed)
+        func allMarkup(_ node: SyntaxNode) -> [SyntaxNode] {
+            (node.kind == "Markup" ? [node] : []) + node.children.flatMap(allMarkup)
+        }
+        let markups = allMarkup(parsed.tree)
+        let balancedReferences = references.map { reference -> ReferencePresentation in
+            guard reference.kind == "citation",
+                  let markup = markups.filter({ $0.start <= reference.source.start && $0.end >= reference.source.end }).min(by:{ $0.span.count < $1.span.count }),
+                  let first = markup.children.firstIndex(where:{ $0.end > reference.source.start }),
+                  let last = markup.children.lastIndex(where:{ $0.start < reference.source.end }) else { return reference }
+            let start = first > 0 && markup.children[first-1].kind == "Hash" ? first-1 : first
+            let balanced = ByteSpan(markup.children[start].start,markup.children[last].end)
+            guard balanced != reference.source else { return reference }
+            // CSL can group citations across emphasis/link wrappers. Keep whole
+            // syntax nodes in the atomic object, including any visible prose
+            // around those citations, so copy/paste and deletion stay balanced.
+            let a = ordinary.displayOffset(at:balanced.start), x = ordinary.displayOffset(at:reference.source.start)
+            let y = ordinary.displayOffset(at:reference.source.end), z = ordinary.displayOffset(at:balanced.end)
+            guard a <= x, x <= y, y <= z, z <= ordinary.text.utf16.count else { return reference }
+            let text = ordinary.text as NSString
+            let prefix = text.substring(with:NSRange(location:a,length:x-a)), suffix = text.substring(with:NSRange(location:y,length:z-y))
+            var formats = reference.formats.map { ReferenceFormat(range:NSRange(location:$0.range.location+prefix.utf16.count,length:$0.range.length),bold:$0.bold,italic:$0.italic) }
+            for block in ordinary.blocks {
+                var at = block.display.location
+                for run in block.inlines.flatMap(\.runs) {
+                    defer { at += run.text.utf16.count }
+                    guard run.style.bold || run.style.italic else { continue }
+                    for (range,offset) in [(NSRange(location:a,length:x-a),-a),(NSRange(location:y,length:z-y),prefix.utf16.count+reference.text.utf16.count-y)] {
+                        let part = NSIntersectionRange(NSRange(location:at,length:run.text.utf16.count),range)
+                        if part.length > 0 { formats.append(ReferenceFormat(range:NSRange(location:part.location+offset,length:part.length),bold:run.style.bold,italic:run.style.italic)) }
+                    }
+                }
+            }
+            return ReferencePresentation(source:balanced,text:prefix+reference.text+suffix,kind:reference.kind,formats:formats)
+        }
+        var references: [ReferencePresentation] = []
+        for reference in balancedReferences.sorted(by:{ $0.source.start < $1.source.start }) {
+            guard reference.kind == "citation", let previous = references.last, previous.kind == "citation", reference.source.start < previous.source.end else { references.append(reference); continue }
+            // Two CSL groups can share a surrounding mark wrapper. Represent
+            // their union once, preserving prose between the formatted groups.
+            let span = ByteSpan(previous.source.start,max(previous.source.end,reference.source.end))
+            let members = originals.filter { $0.kind == "citation" && $0.source.start >= span.start && $0.source.end <= span.end }.sorted { $0.source.start < $1.source.start }
+            var text = "", formats: [ReferenceFormat] = [], cursor = ordinary.displayOffset(at:span.start)
+            func appendLiteral(until end: Int) {
+                guard end > cursor else { return }
+                let offset = text.utf16.count-cursor, range = NSRange(location:cursor,length:end-cursor)
+                text += (ordinary.text as NSString).substring(with:range)
+                for block in ordinary.blocks {
+                    var at = block.display.location
+                    for run in block.inlines.flatMap(\.runs) {
+                        defer { at += run.text.utf16.count }
+                        let part = NSIntersectionRange(NSRange(location:at,length:run.text.utf16.count),range)
+                        if part.length > 0 && (run.style.bold || run.style.italic) { formats.append(ReferenceFormat(range:NSRange(location:part.location+offset,length:part.length),bold:run.style.bold,italic:run.style.italic)) }
+                    }
+                }
+                cursor = end
+            }
+            for member in members {
+                appendLiteral(until:ordinary.displayOffset(at:member.source.start))
+                let offset = text.utf16.count
+                formats += member.formats.map { ReferenceFormat(range:NSRange(location:$0.range.location+offset,length:$0.range.length),bold:$0.bold,italic:$0.italic) }
+                text += member.text; cursor = ordinary.displayOffset(at:member.source.end)
+            }
+            appendLiteral(until:ordinary.displayOffset(at:span.end))
+            references[references.count-1] = ReferencePresentation(source:span,text:text,formats:formats)
+        }
+        guard referencePresentations != references else { return }
+        referencePresentations = references
+        projection = folded(Projection(source:source,parsed:parsed,references:references))
+        presentationRevision += 1; lastEditWasLocal = false
+    }
     public func setSourceCollapsed(_ index: Int,_ collapsed: Bool) {
         guard projection.blocks.indices.contains(index), projection.blocks[index].kind == "source" else { return }
         let start = projection.blocks[index].source.start
         if collapsed { collapsedSourceStarts.insert(start) } else { collapsedSourceStarts.remove(start) }
-        projection = folded(Projection(source:source,parsed:parsed)); presentationRevision += 1
+        projection = folded(Projection(source:source,parsed:parsed,references:referencePresentations)); presentationRevision += 1
         lastEditWasLocal = false
     }
 

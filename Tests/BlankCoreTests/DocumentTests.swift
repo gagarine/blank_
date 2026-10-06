@@ -263,11 +263,97 @@ final class DocumentTests {
         b.undo(); b.undo(); XCTAssertEqual(b.source,"A *bold* and #link(\"https://typst.app\")[café].")
     }
     func testEmptyStructuredBlockInsertion() {
+        for original in ["/", "Before\n\n/", "Before\n\n/\n\nAfter", "Before\n\n/\n\n"] {
+            for (kind,marker) in [("heading","= "),("bullet","- "),("number","+ ")] {
+                let b = DocumentBuffer(original), slash = (b.projection.text as NSString).range(of:"/")
+                let index = b.projection.blockIndex(at:slash.location)
+                b.editWrite(slash,text:"",group:"")
+                b.setKind(at:NSRange(location:b.projection.displayOffset(at:b.selection.focus),length:0),kind:kind,level:1)
+                XCTAssertEqual(b.source,original.replacingOccurrences(of:"/",with:marker))
+                XCTAssertEqual(b.projection.displayOffset(at:b.selection.focus),b.projection.blocks[index].display.location)
+                XCTAssertEqual(b.projection.blocks[index].body.start,b.selection.focus)
+                b.editWrite(NSRange(location:b.projection.displayOffset(at:b.selection.focus),length:0),text:"Café 👩🏽‍💻",group:"")
+                XCTAssertEqual(b.projection.blocks[index].text,"Café 👩🏽‍💻")
+                b.undo(); b.undo(); b.undo(); XCTAssertEqual(b.source,original)
+            }
+        }
+        for original in ["- First\n- ", "+ First\n+ ", "- First\n- \n- Third"] {
+            let b = DocumentBuffer(original), index = 1
+            b.selection = EditSelection(b.projection.blocks[index].body.start,b.projection.blocks[index].body.start)
+            b.setKind(index,kind:"paragraph")
+            XCTAssertEqual(b.projection.blocks[index].kind,"paragraph")
+            XCTAssertEqual(b.projection.blocks[index].text,"")
+            XCTAssertEqual(b.projection.displayOffset(at:b.selection.focus),b.projection.blocks[index].display.location)
+            b.editWrite(NSRange(location:b.projection.displayOffset(at:b.selection.focus),length:0),text:"Body 👋",group:"")
+            XCTAssertEqual(b.projection.blocks[index].text,"Body 👋")
+            b.undo(); b.undo(); XCTAssertEqual(b.source,original)
+        }
         for (kind,level,prefix) in [("heading",2,"== "),("bullet",0,"- "),("number",0,"+ ")] {
             let b = DocumentBuffer(); b.setKind(0,kind:kind,level:level)
             for c in "A café" { b.editWrite(NSRange(location:b.projection.text.utf16.count,length:0),text:String(c)) }
             XCTAssertEqual(b.source,prefix+"A café"); XCTAssertEqual(b.projection.blocks[0].kind,kind)
             XCTAssertEqual(b.projection.text,"A café")
+        }
+    }
+    func testRenderedReferencesPreserveSource() {
+        let original = "// Keep café\n\nBefore #cite(<smith>, supplement: [p. 7]) after.\n\n#bibliography(\"works.bib\", style: \"apa\")"
+        let b = DocumentBuffer(original)
+        let cite = (original as NSString).range(of:"#cite(<smith>, supplement: [p. 7])")
+        let bib = (original as NSString).range(of:"#bibliography(\"works.bib\", style: \"apa\")")
+        let citeSpan = ByteSpan(original.byteOffset(utf16:cite.location),original.byteOffset(utf16:NSMaxRange(cite)))
+        let bibSpan = ByteSpan(original.byteOffset(utf16:bib.location),original.byteOffset(utf16:NSMaxRange(bib)))
+        b.setReferencePresentations([ReferencePresentation(source:citeSpan,text:"(Smith, 2020, p. 7)"),ReferencePresentation(source:bibSpan,text:"References\n\nSmith, J. (2020). Book.",kind:"bibliography")])
+        XCTAssertEqual(b.source,original); XCTAssertFalse(b.canUndo)
+        XCTAssertTrue(b.projection.text.contains("(Smith, 2020, p. 7)")); XCTAssertFalse(b.projection.text.contains("#cite")); XCTAssertFalse(b.projection.text.contains("#bibliography"))
+        let rendered = (b.projection.text as NSString).range(of:"(Smith, 2020, p. 7)")
+        XCTAssertEqual(b.projection.sourceOffset(at:rendered.location),citeSpan.start)
+        XCTAssertEqual(b.projection.sourceOffset(at:NSMaxRange(rendered)),citeSpan.end)
+        let copied = b.copy(NSRange(location:rendered.location+2,length:3))
+        XCTAssertEqual(copied.source,original.bytes(citeSpan)); XCTAssertEqual(copied.plain,"(Smith, 2020, p. 7)")
+        b.editWrite(NSRange(location:rendered.location,length:0),text:"日本 ",group:"")
+        XCTAssertTrue(b.projection.text.contains("日本 (Smith, 2020, p. 7)"))
+        let shifted = (b.projection.text as NSString).range(of:"(Smith, 2020, p. 7)")
+        b.editWrite(NSRange(location:NSMaxRange(shifted)-1,length:1),text:"",group:"")
+        XCTAssertFalse(b.source.contains("#cite")); XCTAssertTrue(b.source.hasPrefix("// Keep café")); XCTAssertTrue(b.source.contains("#bibliography"))
+        b.undo(); b.undo(); XCTAssertEqual(b.source,original)
+        let table = DocumentBuffer("#table(columns: 1, [Before #cite(<smith>) after])")
+        let span = (table.source as NSString).range(of:"#cite(<smith>)")
+        table.setReferencePresentations([ReferencePresentation(source:ByteSpan(span.location,NSMaxRange(span)),text:"(Smith, 2020)")])
+        let displayed = (table.projection.text as NSString).range(of:"(Smith, 2020)")
+        XCTAssertEqual(table.copy(displayed).source,"#cite(<smith>)")
+        XCTAssertEqual(table.copy(displayed).plain,"(Smith, 2020)")
+        table.editWrite(NSRange(location:displayed.location,length:0),text:"日本 ",group:"")
+        XCTAssertTrue(table.source.contains("[Before 日本 #cite(<smith>) after]"))
+        table.undo(); XCTAssertEqual(table.source,"#table(columns: 1, [Before #cite(<smith>) after])")
+        for original in ["#emph[#cite(<smith>)] #cite(<doe>).", "*#cite(<smith>)* #cite(<doe>).", "#cite(<smith>) *#cite(<doe>)*.", "#emph[日本 before #cite(<smith>)] #cite(<doe>).", "#cite(<smith>) *#cite(<doe>) after*.", "#cite(<smith>) /* keep */ #cite(<doe>).", "#cite(<smith>) // café keep\n#cite(<doe>)."] {
+            let grouped = DocumentBuffer(original)
+            let first = original.range(of:"#cite")!.lowerBound, last = original.range(of:")",options:.backwards)!.upperBound
+            grouped.setReferencePresentations([ReferencePresentation(source:ByteSpan(original[..<first].utf8.count,original[..<last].utf8.count),text:"(Doe, 2021; Smith, 2020)")])
+            XCTAssertTrue(grouped.projection.text.contains("(Doe, 2021; Smith, 2020)")); XCTAssertFalse(grouped.projection.text.contains("Citation"))
+            if original.contains("before") { XCTAssertTrue(grouped.projection.text.hasPrefix("日本 before ")) }
+            if original.contains("after") { XCTAssertTrue(grouped.projection.text.hasSuffix(" after.")) }
+            let range = grouped.projection.atomicRanges.first!
+            let fragment = grouped.copy(range)
+            XCTAssertEqual(fragment.source,String(original.dropLast()))
+            let pasted = DocumentBuffer(); pasted.paste(fragment,range:NSRange(location:0,length:0)); XCTAssertFalse(pasted.parsed.erroneous)
+            grouped.editWrite(range,text:""); XCTAssertFalse(grouped.parsed.erroneous); XCTAssertEqual(grouped.source,".")
+            grouped.undo(); XCTAssertEqual(grouped.source,original)
+        }
+        let overlapSource = "#cite(<a>) *#cite(<b>) middle #cite(<c>)* #cite(<d>)."
+        let overlap = DocumentBuffer(overlapSource)
+        let bEnd = overlapSource.range(of:"#cite(<b>)")!.upperBound, cStart = overlapSource.range(of:"#cite(<c>)")!.lowerBound
+        overlap.setReferencePresentations([ReferencePresentation(source:ByteSpan(0,overlapSource[..<bEnd].utf8.count),text:"(A; B)"),ReferencePresentation(source:ByteSpan(overlapSource[..<cStart].utf8.count,overlapSource.utf8.count-1),text:"(C; D)")])
+        XCTAssertEqual(overlap.projection.text,"(A; B) middle (C; D).")
+        XCTAssertEqual(overlap.copy(overlap.projection.atomicRanges.first!).source,String(overlapSource.dropLast()))
+        XCTAssertEqual(overlap.renderedReferences.count,1)
+        for original in ["*Before #cite(<smith>) after*.", "#emph[日本 Before #cite(<smith>) after].", "#table(columns: 1, [*Before #cite(<smith>) after*])"] {
+            let single = DocumentBuffer(original), raw = original.range(of:"#cite(<smith>)")!
+            single.setReferencePresentations([ReferencePresentation(source:ByteSpan(original[..<raw.lowerBound].utf8.count,original[..<raw.upperBound].utf8.count),text:"(Smith, 2020)")])
+            let before = (single.projection.text as NSString).range(of:"Before")
+            XCTAssertFalse(single.copy(before).source.contains("#cite"))
+            single.editWrite(before,text:"Updated")
+            XCTAssertTrue(single.source.contains("#cite(<smith>)")); XCTAssertTrue(single.source.contains("after")); XCTAssertFalse(single.parsed.erroneous)
+            single.undo(); XCTAssertEqual(single.source,original)
         }
     }
     func testExplicitFormattingInsideWords() {
@@ -479,6 +565,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Local projection equals full parsing",t.testLocalProjectionMatchesFullParse),
             ("Typing inside formatting",t.testTypingInsideFormattingKeepsWrappers),
             ("Empty headings and lists",t.testEmptyStructuredBlockInsertion),
+            ("Rendered references preserve canonical source",t.testRenderedReferencesPreserveSource),
             ("Formatting inside words",t.testExplicitFormattingInsideWords),
             ("Literal includes and prose statistics",t.testIncludesAndStatistics),
             ("Include movement and conditional boundaries",t.testIncludeMovementPreservesSource),
