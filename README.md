@@ -1,24 +1,24 @@
 # blank_
 
-A quiet native macOS editor for [Typst](https://typst.app). Write, edit source and preview typeset PDFs in a SwiftUI/AppKit interface, using ordinary local `.typ` projects.
+A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI and AppKit. Your documents stay ordinary local `.typ` projects.
 
-Native typography and tables, structured block editing, collapsible code, an outline and page thumbnails, shared undo, formatted clipboard, figures, links, footnotes, Zotero citations, live search and recovery. Complex Typst stays editable in Source. Try the [Field notes](examples/Field%20notes.typ) sample.
+![blank_ with a heading outline, formatted writing and a native table](Resources/Screenshots/editor.png)
 
-**File → Templates…** (also Cmd-K) offers Standard, Thesis, Paper, Letter A4 and Book. Preview, add, duplicate, edit or trash templates; Save updates an edited template. **Save as Template…** captures the current project. New Document stays empty.
+- **Write, Source and Preview** — native rich text, exact source editing and typeset PDFs; shared undo and formatted clipboard.
+- **Structured writing** — headings, lists, tables, figures, links, footnotes, citations and collapsible code blocks.
+- **Navigation** — a movable outline, thumbnails, contact sheet and live search across project files.
+- **Templates** — Standard, Thesis, Paper, Letter A4 and Book; preview, create, duplicate, edit or delete your own.
+- **Native document tools** — PDF export/sharing, Zotero integration, statistics, recovery and macOS save/move controls.
+
+New Document opens an empty editor. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
 ## First launch
 
-Current releases are not notarized. If macOS blocks the app:
-
-1. Click **Done** in the warning.
-2. Open **System Settings → Privacy & Security**, scroll to **Security**, and click **Open Anyway** for blank_.
-3. Authenticate if asked, then click **Open**.
-
-See [Apple’s instructions](https://support.apple.com/en-us/102445).
+Releases are not notarized. If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. Authenticate if asked, then click **Open**. [Apple’s instructions](https://support.apple.com/en-us/102445).
 
 ## Development
 
-Requires macOS 26+, Swift 6 with a macOS 26/27 SDK, Rust 1.98.1 (pinned) and Python 3 for checks.
+Requires macOS 26+, Swift 6 with a macOS 26/27 SDK, Rust 1.98.1 (pinned) and Python 3.
 
 ```sh
 bash scripts/build.sh release  # omit release for debug
@@ -26,22 +26,21 @@ open build/blank_.app
 bash scripts/check.sh
 ```
 
-The root Cargo workspace shares `Cargo.lock` and `target/` between the in-process `typst-syntax-bridge` library and the separate `typst-compiler` executable; Typst is pinned to 0.15.1.
+Both builds update the same app; quit and reopen after rebuilding. Checks cover the document model, compiler, native editing/files and a relocated bundle; native checks need an unlocked desktop session.
 
-Both configurations update `build/blank_.app`; quit and reopen after rebuilding. Checks cover the document model, official compiler, native editing/file behavior and a relocated app bundle. Native checks require a logged-in desktop session. See [AGENTS.md](AGENTS.md) for architecture and development conventions.
+The Cargo workspace shares a lockfile/cache for the in-process parser and separate PDF compiler, both using Typst 0.15.1. See [AGENTS.md](AGENTS.md) for architecture and build conventions.
 
-[GitHub Actions](.github/workflows/build-macos.yml) tests pull requests and pushes on macOS 26 and 27. Publishing a release tagged `vX.Y.Z` (prerelease suffixes supported) builds that commit and attaches `blank_-macos-arm64.zip` and `SHA256SUMS` after both jobs pass. Builds are ad-hoc signed and not notarized; Intel support remains unverified.
+[CI](.github/workflows/build-macos.yml) checks pushes and pull requests on macOS 26/27. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after both builds pass. Apps are ad-hoc signed; Intel support is unverified.
 
 ## Remaining work
 
-- Refine existing link/footnote/citation editing and figure size, alternative text and PDF-page controls; validate SVG, multipage PDFs and clipboard/drop formats.
-- Validate live Zotero integration; add group-library discovery, citation-picker keyboard selection and custom CSL styles.
-- Continuous editing across included files and repeated includes; improve chapter navigation and manuscript search/counting across file boundaries.
-- Synchronize settings across windows; validate window lifetime, long-document scrolling/dragging, real IME candidate panels, international keyboards, bidirectional selection, VoiceOver and Writing Tools.
-- Merge disjoint external changes; broaden relaunch, disk-full and abrupt-termination recovery checks.
-- Optimize large-table editing and full Source reprojection; measure total editor/compiler memory on long and image-heavy documents.
-- Opt-in per-window MCP/agent access with revision-checked multi-file transactions and selective agent undo.
+- Rich controls for editing existing links, footnotes, citations and figures; PDF-page selection and broader image-format validation.
+- Zotero group discovery, citation-picker keyboard navigation and custom CSL styles.
+- Continuous editing across included files and repeated includes.
+- Settings synchronization, disjoint external-change merging and broader recovery checks.
+- Large-table and Source performance; long-document memory/latency measurements.
+- Opt-in MCP/agent access with revision-checked transactions and selective undo.
 
-Live Zotero, real IME candidates, bidirectional editing and VoiceOver remain unverified. One Apple Silicon release run on macOS 27 measured 0.14% of one core over five seconds with an empty editor and 14.5 MiB RSS; 100-row table key transactions took about 55 ms. Compiler memory and physical key-to-screen latency were excluded. Reproduce with the app's `--measure` option and a disposable `BLANK_DATA_DIR`.
+Live Zotero, physical IME candidates, bidirectional editing, VoiceOver and Writing Tools remain unverified. An empty-editor release run measured 0.14% of one CPU core and 14.5 MiB RSS; compiler memory was excluded. Use `--measure` with disposable `BLANK_DATA_DIR` data.
 
 [MIT](LICENSE) · Built with OpenAI Codex.
