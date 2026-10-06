@@ -12,9 +12,11 @@ A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI a
 
 New Document opens an empty editor. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
-## First launch
+## Download
 
-Releases are not notarized. If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. Authenticate if asked, then click **Open**. [Apple’s instructions](https://support.apple.com/en-us/102445).
+Download the last release from https://github.com/gagarine/blank_/releases (no auto-update yet)
+
+⚠️ Releases are not notarized. If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. Authenticate if asked, then click **Open**. [Apple’s instructions](https://support.apple.com/en-us/102445).
 
 ## Development
 
