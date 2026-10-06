@@ -7,10 +7,10 @@ A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI a
 - **Write, Source and Preview** — native rich text, exact source editing and typeset PDFs; shared undo and formatted clipboard.
 - **Structured writing** — headings, lists, tables, figures, links, footnotes, citations and collapsible code blocks.
 - **Navigation** — a movable outline, thumbnails, contact sheet and live search across project files.
-- **Templates** — Standard, Thesis, Paper, Letter A4 and Book; preview, create, duplicate, edit or delete your own.
+- **Templates** — Standard, Thesis, Paper, Letter A4, Book and Slides (16:9 projector); preview, create, duplicate, edit or delete your own.
 - **Native document tools** — PDF export/sharing, Zotero integration, statistics, recovery and macOS save/move controls.
 
-New Document opens an empty editor. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
+New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table selects it; a second Delete removes it, and Undo restores it. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
 ## Download
 

@@ -178,25 +178,18 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                     renderTable(block,in:result,size:size)
                     continue
                 }
-                let p = style.mutableCopy() as! NSMutableParagraphStyle
-                var textSize = size
-                if block.kind == "heading" {
-                    textSize = size * (block.level == 1 ? 1.89 : block.level == 2 ? 1.33 : 1.056)
-                    p.lineSpacing = 2
-                    p.paragraphSpacingBefore = index == 0 ? 0 : block.level == 1 ? 14 : 10
-                }
-                if ["bullet","number"].contains(block.kind) { p.firstLineHeadIndent = 25; p.headIndent = 25; p.paragraphSpacing = 5 }
-                if block.kind == "quote" { p.firstLineHeadIndent = 24; p.headIndent = 24 }
+                let attributes = blockAttributes(index)
+                let p = attributes[.paragraphStyle] as! NSParagraphStyle
+                let blockFont = attributes[.font] as! NSFont
+                let textSize = blockFont.pointSize
                 let raw = !block.editable
-                if raw { p.lineSpacing = 4; p.paragraphSpacing = 12 }
-                if block.collapsed { p.lineBreakMode = .byTruncatingTail }
                 let range = block.display
                 // Include the paragraph terminator: an empty next paragraph has
                 // no glyphs from which TextKit can recover its preceding spacing.
                 let paragraphRange = NSRange(location:range.location,length:range.length+(index+1 < b.projection.blocks.count ? 1 : 0))
-                if paragraphRange.length > 0 { result.addAttribute(.paragraphStyle,value:p,range:paragraphRange) }
+                if paragraphRange.length > 0 { result.addAttributes(attributes,range:paragraphRange) }
                 if range.length > 0 {
-                    result.addAttributes([.paragraphStyle:p,.font:raw ? NSFont.monospacedSystemFont(ofSize:13,weight:.regular) : readingFont(size:textSize,bold:block.kind == "heading",italic:block.kind == "quote")],range:range)
+                    result.addAttributes([.paragraphStyle:p,.font:raw ? NSFont.monospacedSystemFont(ofSize:13,weight:.regular) : blockFont],range:range)
                     if raw { result.addAttribute(.foregroundColor,value:session.inkColor.withAlphaComponent(0.65),range:range) }
                     if block.text == "\u{FFFC}" {
                         let attachment = ObjectAttachment(editor:self,index:index,width:max(160,bounds.width-textContainerInset.width*2))
@@ -225,6 +218,37 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             }
         }
         return result
+    }
+    // Empty blocks have no text to inherit from. Keep their caret and paragraph
+    // terminators styled using the same block rules as populated text.
+    func blockAttributes(_ index: Int) -> [NSAttributedString.Key:Any] {
+        guard let session else { return [:] }
+        let block = session.buffer.projection.blocks[index], size = CGFloat(session.fontSize)
+        let p = NSMutableParagraphStyle(); p.lineHeightMultiple = 1; p.lineSpacing = size*0.3; p.paragraphSpacing = 18
+        var textSize = size
+        if block.kind == "heading" {
+            textSize = size*(block.level == 1 ? 1.89 : block.level == 2 ? 1.33 : 1.056)
+            p.lineSpacing = 2; p.paragraphSpacingBefore = index == 0 ? 0 : block.level == 1 ? 14 : 10
+        }
+        if ["bullet","number"].contains(block.kind) { p.firstLineHeadIndent = 25; p.headIndent = 25; p.paragraphSpacing = 5 }
+        if block.kind == "quote" { p.firstLineHeadIndent = 24; p.headIndent = 24 }
+        if !block.editable { p.lineSpacing = 4; p.paragraphSpacing = 12 }
+        if block.collapsed { p.lineBreakMode = .byTruncatingTail }
+        return [.font:block.editable ? readingFont(size:textSize,bold:block.kind == "heading",italic:block.kind == "quote") : NSFont.monospacedSystemFont(ofSize:13,weight:.regular),.paragraphStyle:p,.foregroundColor:session.inkColor,.ligature:1]
+    }
+    func updateTypingAttributes() {
+        guard let session, !composing, !hasMarkedText() else { return }
+        if session.mode == .source {
+            typingAttributes = [.font:NSFont.monospacedSystemFont(ofSize:14,weight:.regular),.foregroundColor:session.inkColor,.ligature:1]
+            return
+        }
+        let at = selectedRange().location, index = session.buffer.projection.blockIndex(at:at)
+        var attributes = blockAttributes(index)
+        if session.buffer.projection.tableCell(at:selectedRange()) != nil, at < (textStorage?.length ?? 0) {
+            attributes = textStorage!.attributes(at:at,effectiveRange:nil)
+        }
+        if plainSlashQuery { attributes[.font] = readingFont(size:CGFloat(session.fontSize)) }
+        typingAttributes = attributes
     }
     private func renderTable(_ block: ProjectedBlock,in result: NSMutableAttributedString,size: CGFloat) {
         guard let session else { return }
@@ -321,7 +345,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let a = session.mode == .source ? session.buffer.source.utf16Offset(byte:selected.anchor) : session.buffer.projection.displayOffset(at:selected.anchor)
         let z = session.mode == .source ? session.buffer.source.utf16Offset(byte:selected.focus) : session.buffer.projection.displayOffset(at:selected.focus)
         setSelectedRange(NSRange(location:min(a,z),length:abs(z-a)))
-        typingAttributes = [.font:session.mode == .source ? NSFont.monospacedSystemFont(ofSize:14,weight:.regular) : readingFont(size:CGFloat(session.fontSize)),.foregroundColor:session.inkColor,.ligature:1]
+        updateTypingAttributes()
+        ensureNativeLayout()
         backgroundColor = session.paperColor; insertionPointColor = session.systemColors ? .textInsertionPointColor : session.inkColor
         enclosingScrollView?.backgroundColor = backgroundColor
         lastPresentationRevision = session.buffer.presentationRevision
@@ -395,7 +420,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         return result
     }
     func textViewDidChangeSelection(_ notification: Notification) {
-        captureSelection(); if session?.paragraphFocus == true { lastAppearance = ""; refresh() }
+        captureSelection(); if !refreshing { updateTypingAttributes(); needsDisplay = true }; if session?.paragraphFocus == true { lastAppearance = ""; refresh() }
         if !refreshing, session?.mode == .write {
             tableControlCell = session?.buffer.projection.tableCell(at:selectedRange()).map { ($0.block,$0.cell) }
             positionTableControls()
@@ -565,6 +590,33 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if session.mode == .write { session.buffer.lineBreak(selectedRange()) }
         else { session.buffer.editSource(selectedRange(),text:"\n",group:"") }
         session.changed(); scrollRangeToVisible(selectedRange()); dismissSlash()
+    }
+    override func deleteBackward(_ sender: Any?) {
+        if handleBlockDelete(backward:true) { return }
+        super.deleteBackward(sender)
+    }
+    override func deleteForward(_ sender: Any?) {
+        if handleBlockDelete(backward:false) { return }
+        super.deleteForward(sender)
+    }
+    private func handleBlockDelete(backward: Bool) -> Bool {
+        guard let session, session.mode == .write, !composing, !hasMarkedText(), selectedRange().length == 0 else { return false }
+        let range = selectedRange(), blocks = session.buffer.projection.blocks
+        let index = session.buffer.projection.blockIndex(at:range.location), block = blocks[index]
+        if backward, range.location == block.display.location, ["heading","bullet","number","quote"].contains(block.kind) {
+            guard session.requestEditing() else { return true }
+            captureSelection(); session.buffer.setKind(index,kind:"paragraph"); session.changed(); return true
+        }
+        // Cell boundaries stay within the native table. Only an outside caret
+        // deletes toward the table; the first key selects its complete range.
+        guard session.buffer.projection.tableCell(at:range) == nil else { return false }
+        let table: ProjectedBlock?
+        if backward, index > 0, range.location == block.display.location, blocks[index-1].kind == "table" { table = blocks[index-1] }
+        else if !backward, index+1 < blocks.count, range.location == NSMaxRange(block.display), blocks[index+1].kind == "table" { table = blocks[index+1] }
+        else if block.kind == "table", range.location == NSMaxRange(block.display) { table = block }
+        else { table = nil }
+        guard let table else { return false }
+        setSelectedRange(table.display); captureSelection(); scrollRangeToVisible(selectedRange()); return true
     }
     func focusTableCell(_ blockIndex: Int,_ cell: Int) {
         guard let blocks = session?.buffer.projection.blocks, blocks.indices.contains(blockIndex), blocks[blockIndex].cellRanges.indices.contains(cell) else { return }
@@ -831,6 +883,23 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             guard r.intersects(visibleRect) else { continue }
             let label = b.kind == "bullet" ? "•" : "\(listNumber(index))."
             (label as NSString).draw(at:NSPoint(x:textContainerInset.width,y:r.minY),withAttributes:[.font:readingFont(size:CGFloat(session.fontSize)),.foregroundColor:session.inkColor.withAlphaComponent(0.6)])
+        }
+        // Hints are decoration, never text storage, clipboard or source content.
+        if !hasMarkedText() {
+            for (index,block) in session.buffer.projection.blocks.enumerated() {
+                if block.editable && block.text.isEmpty {
+                    let r = rectFor(block.display.location)
+                    guard r.intersects(visibleRect) else { continue }
+                    let label = block.kind == "heading" ? "Heading \(block.level)" : block.kind == "bullet" ? "List item" : block.kind == "number" ? "Numbered item" : block.kind == "quote" ? "Quote" : "Type here…"
+                    var attributes = blockAttributes(index); attributes[.foregroundColor] = NSColor.tertiaryLabelColor
+                    (label as NSString).draw(at:NSPoint(x:r.minX,y:r.minY),withAttributes:attributes)
+                }
+                for cell in block.cellRanges where cell.length == 0 {
+                    let r = rectFor(block.display.location+cell.location)
+                    guard r.intersects(visibleRect) else { continue }
+                    ("Text" as NSString).draw(at:NSPoint(x:r.minX,y:r.minY),withAttributes:[.font:readingFont(size:CGFloat(session.fontSize)*0.85),.foregroundColor:NSColor.tertiaryLabelColor])
+                }
+            }
         }
         if let grabbed, draggingBlock {
             let raw = session.buffer.projection.blocks[grabbed].text

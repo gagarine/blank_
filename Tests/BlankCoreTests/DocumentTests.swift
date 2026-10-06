@@ -263,6 +263,31 @@ final class DocumentTests {
         b.undo(); b.undo(); XCTAssertEqual(b.source,"A *bold* and #link(\"https://typst.app\")[café].")
     }
     func testEmptyStructuredBlockInsertion() {
+        for original in ["/", "Before\n\n/", "Before\n\n/\n\nAfter", "Before\n\n/\n\n"] {
+            for (kind,marker) in [("heading","= "),("bullet","- "),("number","+ ")] {
+                let b = DocumentBuffer(original), slash = (b.projection.text as NSString).range(of:"/")
+                let index = b.projection.blockIndex(at:slash.location)
+                b.editWrite(slash,text:"",group:"")
+                b.setKind(at:NSRange(location:b.projection.displayOffset(at:b.selection.focus),length:0),kind:kind,level:1)
+                XCTAssertEqual(b.source,original.replacingOccurrences(of:"/",with:marker))
+                XCTAssertEqual(b.projection.displayOffset(at:b.selection.focus),b.projection.blocks[index].display.location)
+                XCTAssertEqual(b.projection.blocks[index].body.start,b.selection.focus)
+                b.editWrite(NSRange(location:b.projection.displayOffset(at:b.selection.focus),length:0),text:"Café 👩🏽‍💻",group:"")
+                XCTAssertEqual(b.projection.blocks[index].text,"Café 👩🏽‍💻")
+                b.undo(); b.undo(); b.undo(); XCTAssertEqual(b.source,original)
+            }
+        }
+        for original in ["- First\n- ", "+ First\n+ ", "- First\n- \n- Third"] {
+            let b = DocumentBuffer(original), index = 1
+            b.selection = EditSelection(b.projection.blocks[index].body.start,b.projection.blocks[index].body.start)
+            b.setKind(index,kind:"paragraph")
+            XCTAssertEqual(b.projection.blocks[index].kind,"paragraph")
+            XCTAssertEqual(b.projection.blocks[index].text,"")
+            XCTAssertEqual(b.projection.displayOffset(at:b.selection.focus),b.projection.blocks[index].display.location)
+            b.editWrite(NSRange(location:b.projection.displayOffset(at:b.selection.focus),length:0),text:"Body 👋",group:"")
+            XCTAssertEqual(b.projection.blocks[index].text,"Body 👋")
+            b.undo(); b.undo(); XCTAssertEqual(b.source,original)
+        }
         for (kind,level,prefix) in [("heading",2,"== "),("bullet",0,"- "),("number",0,"+ ")] {
             let b = DocumentBuffer(); b.setKind(0,kind:kind,level:level)
             for c in "A café" { b.editWrite(NSRange(location:b.projection.text.utf16.count,length:0),text:String(c)) }

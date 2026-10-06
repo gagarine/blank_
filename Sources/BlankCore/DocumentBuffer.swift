@@ -366,8 +366,15 @@ public final class DocumentBuffer {
         let prefix = kind == "heading" ? String(repeating:"=",count:max(1,level))+" " : kind == "bullet" ? "- " : kind == "number" ? "+ " : kind == "quote" ? "#quote(block: true)[" : ""
         let suffix = kind == "quote" ? "]" : ""
         let body = source.bytes(b.body)
-        let text = source.replacingBytes(b.source,with:prefix+body+suffix)
-        let at = b.source.start+prefix.utf8.count+min(max(0,selection.focus-b.body.start),body.utf8.count)
+        var leading = "", trailing = ""
+        if kind == "paragraph", body.isEmpty {
+            // A removed list marker must leave an actual empty paragraph slot,
+            // including between items separated by only one source newline.
+            if index > 0, !source.bytes(ByteSpan(projection.blocks[index-1].source.end,b.source.start)).contains("\n\n") { leading = "\n" }
+            if index+1 < projection.blocks.count, !source.bytes(ByteSpan(b.source.end,projection.blocks[index+1].source.start)).contains("\n\n") { trailing = "\n" }
+        }
+        let text = source.replacingBytes(b.source,with:leading+prefix+body+suffix+trailing)
+        let at = b.source.start+leading.utf8.count+prefix.utf8.count+min(max(0,selection.focus-b.body.start),body.utf8.count)
         commit(text,selection:EditSelection(at,at))
     }
     public func setKind(at range: NSRange, kind: String, level: Int = 0) {
