@@ -114,6 +114,8 @@ struct Recovery: Codable {
     var pendingPDFRequests: [(Int,(Result<Data,any Error>) -> Void)] = []
     var pendingExport: (URL,Int)?
     var sourceMap: [[String:Any]] = []
+    private var referenceWork: DispatchWorkItem?
+    private var referenceScheduledRevision = -1
     var navigationBack: [SourceDestination] = []
     var navigationForward: [SourceDestination] = []
     var insertionKind = "footnote"
@@ -149,7 +151,7 @@ struct Recovery: Codable {
         saveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.autosave() }
         saveWork = work; DispatchQueue.main.asyncAfter(deadline:.now()+0.65,execute:work)
-        if mode == .preview { compile() }
+        if mode == .preview { compile() } else { scheduleReferencePreview() }
     }
     func synchronizeSelection() { editor?.captureSelection() }
     func requestEditing() -> Bool {
@@ -365,6 +367,43 @@ struct Recovery: Codable {
         dirty = false; onTitle?(); installWatchers()
         NotificationCenter.default.post(name:.blankDocumentSaved,object:self)
     }
+    func scheduleReferencePreview() {
+        guard mode == .write, editor?.composing != true, editor?.hasMarkedText() != true, referenceScheduledRevision != revision,
+              buffers.values.contains(where:{ $0.source.contains("#bibliography") || $0.source.contains("#cite(") || $0.source.contains("@zotero-") }) else { return }
+        referenceScheduledRevision = revision; referenceWork?.cancel()
+        let current = revision
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.revision == current, self.mode == .write else { return }
+            let snapshot = self.buffers.mapValues(\.source)
+            let directory = self.root ?? AppController.dataDirectory.appendingPathComponent("drafts/\(self.id)")
+            do {
+                try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+                for (path,data) in self.assets { try Self.writeDependency(data,path:path,root:directory) }
+            } catch { return }
+            self.compiler.compile(root:directory,entry:self.entry,files:snapshot,revision:current) { [weak self] response in
+                guard let self, self.revision == current, case let .success(result) = response, result.data != nil else { return }
+                self.applyReferencePresentations(result.references)
+            }
+        }
+        referenceWork = work; DispatchQueue.main.asyncAfter(deadline:.now()+0.25,execute:work)
+    }
+    private func applyReferencePresentations(_ records: [[String:Any]]) {
+        guard editor?.composing != true, editor?.hasMarkedText() != true else { referenceScheduledRevision = -1; return }
+        for (path,buffer) in buffers where path.hasSuffix(".typ") {
+            let references = records.compactMap { record -> ReferencePresentation? in
+                guard record["path"] as? String == path, let start = record["start"] as? Int, let end = record["end"] as? Int,
+                      start >= 0, end >= start, end <= buffer.source.utf8.count,
+                      let text = record["text"] as? String, let kind = record["kind"] as? String else { return nil }
+                let formats = (record["formats"] as? [[String:Any]] ?? []).compactMap { format -> ReferenceFormat? in
+                    guard let a = format["start"] as? Int, let z = format["end"] as? Int, a >= 0, z >= a, z <= text.utf16.count else { return nil }
+                    return ReferenceFormat(range:NSRange(location:a,length:z-a),bold:format["bold"] as? Bool ?? false,italic:format["italic"] as? Bool ?? false)
+                }
+                return ReferencePresentation(source:ByteSpan(start,end),text:text,kind:kind,formats:formats)
+            }
+            buffer.setReferencePresentations(references)
+        }
+        editor?.refresh()
+    }
     func compile(export: URL? = nil) {
         guard !compiling else {
             if let export {
@@ -394,6 +433,7 @@ struct Recovery: Codable {
                 if result.revision != self.revision { self.finishPDFRequests(.failure(NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"Document changed while preparing the PDF. Try again."])),revision:current); if export != nil { self.error = "Document changed during export. Try again." }; if self.mode == .preview { self.compile() }; return }
                 if let data = result.data, let document = PDFDocument(data:data) {
                     self.pdfData = data; self.pdf = document; self.compileRevision = current; self.sourceMap = result.map; self.error = nil
+                    self.applyReferencePresentations(result.references)
                     self.finishPDFRequests(.success(data),revision:current)
                     if let export { do { try data.write(to:export,options:.atomic) } catch { self.error = error.localizedDescription } }
                 } else { self.error = result.diagnostics.joined(separator:"\n"); self.finishPDFRequests(.failure(NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:self.error ?? "PDF compilation failed."])),revision:current) }

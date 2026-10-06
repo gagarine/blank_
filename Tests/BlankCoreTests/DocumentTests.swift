@@ -295,6 +295,37 @@ final class DocumentTests {
             XCTAssertEqual(b.projection.text,"A café")
         }
     }
+    func testRenderedReferencesPreserveSource() {
+        let original = "// Keep café\n\nBefore #cite(<smith>, supplement: [p. 7]) after.\n\n#bibliography(\"works.bib\", style: \"apa\")"
+        let b = DocumentBuffer(original)
+        let cite = (original as NSString).range(of:"#cite(<smith>, supplement: [p. 7])")
+        let bib = (original as NSString).range(of:"#bibliography(\"works.bib\", style: \"apa\")")
+        let citeSpan = ByteSpan(original.byteOffset(utf16:cite.location),original.byteOffset(utf16:NSMaxRange(cite)))
+        let bibSpan = ByteSpan(original.byteOffset(utf16:bib.location),original.byteOffset(utf16:NSMaxRange(bib)))
+        b.setReferencePresentations([ReferencePresentation(source:citeSpan,text:"(Smith, 2020, p. 7)"),ReferencePresentation(source:bibSpan,text:"References\n\nSmith, J. (2020). Book.",kind:"bibliography")])
+        XCTAssertEqual(b.source,original); XCTAssertFalse(b.canUndo)
+        XCTAssertTrue(b.projection.text.contains("(Smith, 2020, p. 7)")); XCTAssertFalse(b.projection.text.contains("#cite")); XCTAssertFalse(b.projection.text.contains("#bibliography"))
+        let rendered = (b.projection.text as NSString).range(of:"(Smith, 2020, p. 7)")
+        XCTAssertEqual(b.projection.sourceOffset(at:rendered.location),citeSpan.start)
+        XCTAssertEqual(b.projection.sourceOffset(at:NSMaxRange(rendered)),citeSpan.end)
+        let copied = b.copy(NSRange(location:rendered.location+2,length:3))
+        XCTAssertEqual(copied.source,original.bytes(citeSpan)); XCTAssertEqual(copied.plain,"(Smith, 2020, p. 7)")
+        b.editWrite(NSRange(location:rendered.location,length:0),text:"日本 ",group:"")
+        XCTAssertTrue(b.projection.text.contains("日本 (Smith, 2020, p. 7)"))
+        let shifted = (b.projection.text as NSString).range(of:"(Smith, 2020, p. 7)")
+        b.editWrite(NSRange(location:NSMaxRange(shifted)-1,length:1),text:"",group:"")
+        XCTAssertFalse(b.source.contains("#cite")); XCTAssertTrue(b.source.hasPrefix("// Keep café")); XCTAssertTrue(b.source.contains("#bibliography"))
+        b.undo(); b.undo(); XCTAssertEqual(b.source,original)
+        let table = DocumentBuffer("#table(columns: 1, [Before #cite(<smith>) after])")
+        let span = (table.source as NSString).range(of:"#cite(<smith>)")
+        table.setReferencePresentations([ReferencePresentation(source:ByteSpan(span.location,NSMaxRange(span)),text:"(Smith, 2020)")])
+        let displayed = (table.projection.text as NSString).range(of:"(Smith, 2020)")
+        XCTAssertEqual(table.copy(displayed).source,"#cite(<smith>)")
+        XCTAssertEqual(table.copy(displayed).plain,"(Smith, 2020)")
+        table.editWrite(NSRange(location:displayed.location,length:0),text:"日本 ",group:"")
+        XCTAssertTrue(table.source.contains("[Before 日本 #cite(<smith>) after]"))
+        table.undo(); XCTAssertEqual(table.source,"#table(columns: 1, [Before #cite(<smith>) after])")
+    }
     func testExplicitFormattingInsideWords() {
         let b = DocumentBuffer("word")
         b.format(NSRange(location:1,length:2),italic:false)
@@ -504,6 +535,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Local projection equals full parsing",t.testLocalProjectionMatchesFullParse),
             ("Typing inside formatting",t.testTypingInsideFormattingKeepsWrappers),
             ("Empty headings and lists",t.testEmptyStructuredBlockInsertion),
+            ("Rendered references preserve canonical source",t.testRenderedReferencesPreserveSource),
             ("Formatting inside words",t.testExplicitFormattingInsideWords),
             ("Literal includes and prose statistics",t.testIncludesAndStatistics),
             ("Include movement and conditional boundaries",t.testIncludeMovementPreservesSource),

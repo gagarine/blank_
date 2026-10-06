@@ -127,6 +127,79 @@ fn reading_map(world: &Environment, frame: &typst::layout::Frame, transform: typ
     }
 }
 
+#[derive(Serialize)]
+struct PresentationFormat { start: usize, end: usize, bold: bool, italic: bool }
+
+fn append_presentation(content: &typst::foundations::Content, bold: bool, italic: bool, text: &mut String, formats: &mut Vec<PresentationFormat>) {
+    use typst::foundations::{PlainText, Value};
+    use typst::model::{DirectLinkElem, EmphElem, StrongElem};
+    if let Some(link) = content.to_packed::<DirectLinkElem>() { append_presentation(&link.body, bold, italic, text, formats); }
+    else if let Some(emph) = content.to_packed::<EmphElem>() { append_presentation(&emph.body, bold, true, text, formats); }
+    else if let Some(strong) = content.to_packed::<StrongElem>() { append_presentation(&strong.body, true, italic, text, formats); }
+    else if let Some(plain) = content.with::<dyn PlainText>() {
+        let mut part = typst::ecow::EcoString::new(); plain.plain_text(&mut part);
+        let start = text.encode_utf16().count(); text.push_str(&part);
+        if bold || italic { formats.push(PresentationFormat { start, end: text.encode_utf16().count(), bold, italic }); }
+    } else {
+        fn visit(value: Value, bold: bool, italic: bool, text: &mut String, formats: &mut Vec<PresentationFormat>) {
+            match value {
+                Value::Content(content) => append_presentation(&content, bold, italic, text, formats),
+                Value::Array(array) => { for value in array { visit(value, bold, italic, text, formats); } },
+                _ => {}
+            }
+        }
+        for (_, value) in content.fields() { visit(value, bold, italic, text, formats); }
+    }
+}
+
+// Reuse Typst's stateful CSL formatter after layout, so Write displays the
+// same citation groups and bibliography entries as the exported document.
+fn citation_presentation(world: &Environment, document: &typst_layout::PagedDocument) -> Vec<Value> {
+    use comemo::Track;
+    use typst::engine::{Engine, Route, Sink, Traced};
+    use typst::foundations::{NativeElement, StyleChain, Styles};
+    use typst::introspection::Introspector;
+    use typst::model::{BibliographyElem, CiteGroup, Works};
+    use typst::utils::Protected;
+    let introspector = document.introspector().as_ref() as &dyn Introspector;
+    let traced = Traced::default();
+    let mut sink = Sink::new();
+    let mut engine = Engine { world: (world as &dyn World).track(), library: world.library(), introspector: Protected::new(introspector.track()), traced: traced.track(), sink: sink.track_mut(), route: Route::default() };
+    let mut out = vec![];
+    for content in introspector.query(&CiteGroup::ELEM.select()).iter().chain(introspector.query(&BibliographyElem::ELEM.select()).iter()) {
+        let span = content.span();
+        let Some(id) = span.id() else { continue };
+        if !matches!(id.root(), VirtualRoot::Project) { continue; }
+        let Some(mut range) = world.range(span) else { continue };
+        if let Ok(source) = world.source(id) { if range.start > 0 && source.text().as_bytes()[range.start-1] == b'#' { range.start -= 1; } }
+        let Ok(works) = Works::generate(&mut engine, span) else { continue };
+        let Some(location) = content.location() else { continue };
+        let mut text = String::new();
+        let mut formats = vec![];
+        let kind = if let Some(group) = content.to_packed::<CiteGroup>() {
+            for child in &group.children {
+                if child.span().id() == Some(id) { if let Some(child_range) = world.range(child.span()) { range.start = range.start.min(child_range.start); range.end = range.end.max(child_range.end); } }
+            }
+            let Ok(shown) = works.citation(location, span) else { continue };
+            append_presentation(&shown, false, false, &mut text, &mut formats);
+            "citation"
+        } else if let Some(bib) = content.to_packed::<BibliographyElem>() {
+            let Ok(shown) = works.bibliography(location, span) else { continue };
+            let mut styles = Styles::new();
+            if let Some(lang) = bib.lang { styles.set(typst::text::TextElem::lang, lang); }
+            if let Some(title) = bib.realize_title(StyleChain::new(&styles)) { append_presentation(&title, true, false, &mut text, &mut formats); }
+            for entry in &shown.entries {
+                if !text.is_empty() { text.push_str("\n\n"); }
+                if let Some(prefix) = &entry.prefix { append_presentation(prefix, false, false, &mut text, &mut formats); text.push(' '); }
+                append_presentation(&entry.body, false, false, &mut text, &mut formats);
+            }
+            "bibliography"
+        } else { continue };
+        out.push(json!({"path":id.vpath().get_without_slash(),"start":range.start,"end":range.end,"kind":kind,"text":text,"formats":formats}));
+    }
+    out
+}
+
 fn compile(params: Value) -> Result<Value,String> {
     let p: CompileRequest = serde_json::from_value(params).map_err(|e| e.to_string())?;
     let root = Path::new(&p.root).canonicalize().map_err(|e|e.to_string())?;
@@ -145,7 +218,7 @@ fn compile(params: Value) -> Result<Value,String> {
                 page_ratios.push(size.y.to_pt()/size.x.to_pt());
                 reading_map(&world, &page.frame, typst::layout::Transform::identity(), index + 1, size.y.to_pt(), &mut source_map);
             }
-            Ok(json!({"revision":p.revision,"pdf":base64::engine::general_purpose::STANDARD.encode(pdf),"pages":document.pages().len(),"sourceMap":source_map,"pageRatios":page_ratios,"diagnostics":[]}))
+            Ok(json!({"revision":p.revision,"pdf":base64::engine::general_purpose::STANDARD.encode(pdf),"pages":document.pages().len(),"sourceMap":source_map,"citations":citation_presentation(&world, &document),"pageRatios":page_ratios,"diagnostics":[]}))
         },
         Err(errors) => {
             let diagnostics: Vec<Value> = errors.iter().map(|e| {
@@ -186,5 +259,49 @@ fn main() {
             "compile"=>{let output=output.clone();std::thread::spawn(move||respond(&output,id,compile(params)));},
             _=>respond(&output,id,Err("unknown method".into()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn rendered(source: &str) -> Value {
+        static SEQUENCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let index = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("blank-citation-check-{}-{}-{}", std::process::id(), index, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&root).unwrap();
+        let bib = "@book{smith, author={Smith, Jane}, title={A Book}, year={2020}, publisher={Press}}\n@book{doe, author={Doe, John}, title={Another Book}, year={2021}, publisher={Press}}";
+        let result = compile(json!({"root":root,"entry":"main.typ","files":{"main.typ":source,"works.bib":bib},"revision":1})).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(result["pdf"].is_string(), "{result}");
+        result
+    }
+    #[test]
+    fn official_citation_forms_and_bibliography_formats() {
+        let source = "#cite(<smith>).\n\n#cite(<smith>, form: \"prose\").\n\n#cite(<smith>, form: \"author\").\n\n#cite(<smith>, form: \"year\").\n\n#cite(<smith>, supplement: [p. 7]).\n\n#bibliography(\"works.bib\", style: \"apa\")";
+        let result = rendered(source);
+        let records = result["citations"].as_array().unwrap();
+        let citations: Vec<_> = records.iter().filter(|r| r["kind"] == "citation").collect();
+        assert_eq!(citations.iter().take(4).map(|r|r["text"].as_str().unwrap()).collect::<Vec<_>>(), vec!["(Smith, 2020)","Smith (2020)","Smith","2020"]);
+        assert!(citations[4]["text"].as_str().unwrap().contains("p. 7"));
+        for record in &citations {
+            let span = &source[record["start"].as_u64().unwrap() as usize..record["end"].as_u64().unwrap() as usize];
+            assert!(span.starts_with("#cite(") && span.ends_with(')'));
+        }
+        let bib = records.iter().find(|r|r["kind"] == "bibliography").unwrap();
+        assert!(bib["text"].as_str().unwrap().contains("Smith, J. (2020). A Book. Press."));
+        assert!(bib["formats"].as_array().unwrap().iter().any(|r|r["italic"] == true));
+    }
+    #[test]
+    fn grouped_shorthand_and_numeric_style() {
+        let source = "@smith @doe.\n\n#bibliography(\"works.bib\", style: \"ieee\")";
+        let result = rendered(source);
+        let records = result["citations"].as_array().unwrap();
+        let cite = records.iter().find(|r|r["kind"] == "citation").unwrap();
+        let text = cite["text"].as_str().unwrap();
+        assert!(text.contains('1') && text.contains('2') && text.contains('['));
+        assert_eq!(&source[cite["start"].as_u64().unwrap() as usize..cite["end"].as_u64().unwrap() as usize], "@smith @doe");
+        let bib = records.iter().find(|r|r["kind"] == "bibliography").unwrap();
+        assert!(bib["text"].as_str().unwrap().contains("[1]"));
     }
 }

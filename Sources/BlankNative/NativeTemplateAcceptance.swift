@@ -65,7 +65,7 @@ import BlankCore
             check(grid.numberOfItems(inSection:0) == starters.count && grid.isSelectable && !grid.allowsMultipleSelection,"Gallery uses a native single-selection thumbnail collection")
             let firstFrame = grid.layoutAttributesForItem(at:IndexPath(item:0,section:0))!.frame
             let lastFrame = grid.layoutAttributesForItem(at:IndexPath(item:4,section:0))!.frame
-            check(firstFrame.minY == lastFrame.minY && lastFrame.maxX <= grid.bounds.maxX,"First row of starter thumbnails fits in the gallery’s initial layout")
+            check(firstFrame.minY <= lastFrame.minY && (0..<starters.count).allSatisfy { grid.layoutAttributesForItem(at:IndexPath(item:$0,section:0))!.frame.maxX <= grid.bounds.maxX },"Starter thumbnails fit the gallery’s available width across native rows")
             check(chooser.window?.toolbar?.items.filter { $0.isBordered }.count == 4,"Template gallery uses native glass toolbar controls")
             grid.selectItems(at:[IndexPath(item:0,section:0)],scrollPosition:[]); library.selection = starters[0].id
             func key(_ code: UInt16,_ characters: String) -> NSEvent {

@@ -182,7 +182,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 let p = attributes[.paragraphStyle] as! NSParagraphStyle
                 let blockFont = attributes[.font] as! NSFont
                 let textSize = blockFont.pointSize
-                let raw = !block.editable
+                let raw = !block.editable && block.kind != "bibliography"
                 let range = block.display
                 // Include the paragraph terminator: an empty next paragraph has
                 // no glyphs from which TextKit can recover its preceding spacing.
@@ -209,6 +209,22 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 }
             }
         }
+        if !source {
+            for reference in b.renderedReferences {
+                let at = b.projection.displayOffset(at:reference.source.start)
+                let shown = NSRange(location:at,length:reference.text.utf16.count)
+                guard NSMaxRange(shown) <= result.length, (result.string as NSString).substring(with:shown) == reference.text else { continue }
+                for format in reference.formats {
+                    let range = NSRange(location:at+format.range.location,length:format.range.length)
+                    guard range.length > 0, NSMaxRange(range) <= result.length else { continue }
+                    let index = b.projection.blockIndex(at:range.location)
+                    if let onlyBlock, index != onlyBlock { continue }
+                    let base = result.attribute(.font,at:range.location,effectiveRange:nil) as? NSFont
+                    let traits = base.map { NSFontManager.shared.traits(of:$0) } ?? []
+                    result.addAttribute(.font,value:readingFont(size:base?.pointSize ?? size,bold:format.bold || traits.contains(.boldFontMask),italic:format.italic || traits.contains(.italicFontMask)),range:range)
+                }
+            }
+        }
         if !source, plainSlashQuery, let start = slashStart, start < result.length {
             let end = max(start,min(b.projection.displayOffset(at:b.selection.focus),result.length))
             let range = NSRange(location:start,length:end-start)
@@ -232,9 +248,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
         if ["bullet","number"].contains(block.kind) { p.firstLineHeadIndent = 25; p.headIndent = 25; p.paragraphSpacing = 5 }
         if block.kind == "quote" { p.firstLineHeadIndent = 24; p.headIndent = 24 }
-        if !block.editable { p.lineSpacing = 4; p.paragraphSpacing = 12 }
+        if !block.editable && block.kind != "bibliography" { p.lineSpacing = 4; p.paragraphSpacing = 12 }
         if block.collapsed { p.lineBreakMode = .byTruncatingTail }
-        return [.font:block.editable ? readingFont(size:textSize,bold:block.kind == "heading",italic:block.kind == "quote") : NSFont.monospacedSystemFont(ofSize:13,weight:.regular),.paragraphStyle:p,.foregroundColor:session.inkColor,.ligature:1]
+        return [.font:block.editable || block.kind == "bibliography" ? readingFont(size:textSize,bold:block.kind == "heading",italic:block.kind == "quote") : NSFont.monospacedSystemFont(ofSize:13,weight:.regular),.paragraphStyle:p,.foregroundColor:session.inkColor,.ligature:1]
     }
     func updateTypingAttributes() {
         guard let session, !composing, !hasMarkedText() else { return }
@@ -289,6 +305,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
            session.buffer.revision != blockMenuRevision || session.active != blockMenuPath { blockPopover?.close() }
 
         effectiveAppearance.performAsCurrentDrawingAppearance { refreshContent(reveal:reveal) }
+        session?.scheduleReferencePreview()
     }
     private func refreshContent(reveal: Bool) {
         guard !composing, !hasMarkedText(), let session, session.mode != .preview else { return }
@@ -417,6 +434,13 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 result.location = result.location > old.location ? NSMaxRange(block.display) : block.display.location
             } else if result.length > 0 && NSIntersectionRange(result,block.display).length > 0 { result = NSUnionRange(result,block.display) }
         }
+        // Generated citations and bibliographies select as source objects.
+        for atomic in session.buffer.projection.atomicRanges {
+            if result.length > 0 && NSIntersectionRange(result,atomic).length > 0 { result = NSUnionRange(result,atomic) }
+            else if result.length == 0 && result.location > atomic.location && result.location < NSMaxRange(atomic) {
+                result.location = result.location > old.location ? NSMaxRange(atomic) : atomic.location
+            }
+        }
         return result
     }
     func textViewDidChangeSelection(_ notification: Notification) {
@@ -481,7 +505,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             let inner = before.substring(with:NSRange(location:open+1,length:close-open-1))
             guard preceding != inserted, preceding != "\\", inner.first?.isWhitespace != true, inner.last?.isWhitespace != true, !inner.contains("\n"), !inner.contains("\u{FFFC}") else { return }
             if preceding.unicodeScalars.contains(where:CharacterSet.alphanumerics.contains), inner.unicodeScalars.first.map(CharacterSet.alphanumerics.contains) == true { return }
-            let copy = DocumentBuffer(session.buffer.source), fragment = copy.copy(NSRange(location:b.display.location+open+1,length:inner.utf16.count))
+            let copy = session.buffer.editingCopy(), fragment = copy.copy(NSRange(location:b.display.location+open+1,length:inner.utf16.count))
             copy.editWrite(NSRange(location:b.display.location+open,length:close-open+1),text:fragment.source,raw:true)
             let marked = NSRange(location:b.display.location+open,length:inner.utf16.count)
             copy.format(marked,italic:inserted == "_")
@@ -981,7 +1005,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard session.requestEditing() else { return }
         let command = slashMatches[slashIndex]
         let range = NSRange(location:start,length:selectedRange().location-start)
-        let copy = DocumentBuffer(session.buffer.source); copy.selection = session.buffer.selection
+        let copy = session.buffer.editingCopy(); copy.selection = session.buffer.selection
         copy.editWrite(range,text:"",group:"")
         if !command.insertion { copy.setKind(at:NSRange(location:copy.projection.displayOffset(at:copy.selection.focus),length:0),kind:command.kind,level:command.level) }
         session.buffer.commit(copy.source,selection:copy.selection); dismissSlash(); session.changed()

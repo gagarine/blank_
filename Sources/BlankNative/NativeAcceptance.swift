@@ -353,6 +353,21 @@ import BlankCore
         let handleMenu = (editor.blockPopover?.contentViewController as? NSHostingController<BlockActionMenu>)?.rootView
         check(editor.blockPopover?.isShown == true && handleMenu?.items.map { $0.item.title } == ["Turn into","Duplicate","Delete"],"Block handle uses the compact app popover without injected text-context actions")
         check(handleMenu?.items.first?.children.allSatisfy { ($0.item as? BlockMenuItem)?.command?.kind != "paragraph" } == true,"Turn into omits the current block type")
+        if let content = editor.blockPopover?.contentViewController?.view {
+            func menuButtons(_ view: NSView) -> [MenuActionButton] {
+                (view as? MenuActionButton).map { [$0] } ?? view.subviews.flatMap(menuButtons)
+            }
+            guard let duplicateButton = menuButtons(content).first(where:{ $0.accessibilityLabel() == "Duplicate" }) else { fatalError("Missing Duplicate menu row") }
+            var reportedHover = false
+            let hover = duplicateButton.hover
+            duplicateButton.hover = { value in hover(value); reportedHover = value }
+            let event = NSEvent.enterExitEvent(with:.mouseEntered,location:duplicateButton.convert(NSPoint(x:10,y:10),to:nil),modifierFlags:[],timestamp:0,windowNumber:content.window!.windowNumber,context:nil,eventNumber:1,trackingNumber:0,userData:nil)!
+            duplicateButton.mouseEntered(with:event)
+            RunLoop.main.run(until:Date().addingTimeInterval(0.05))
+            check(duplicateButton.isHovered && reportedHover,"Native block menu pointer entry updates the highlighted row")
+            duplicateButton.mouseExited(with:event)
+            check(!duplicateButton.isHovered,"Leaving a menu row resets its native hover state")
+        }
         if let duplicate = handleMenu?.items.first(where:{ $0.item.title == "Duplicate" }) { handleMenu?.choose(duplicate.item) }
         check(session.buffer.projection.blocks.count == 4 && controller.window?.firstResponder === editor,"Popover Duplicate uses the document transaction and restores editing focus")
         session.undo(); check(session.buffer.source == menuSource,"Popover block actions share exact-source undo")
