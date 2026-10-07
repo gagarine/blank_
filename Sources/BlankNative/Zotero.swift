@@ -94,6 +94,12 @@ enum ZoteroIntegration {
     @MainActor static func insert(_ refs: [ZoteroReference],session: DocumentSession,anchor: EditSelection,locator: String,form: String,destinationID: String? = nil,completion: @escaping (Error?)->Void) {
         guard !refs.isEmpty else { completion(failure("Select a reference.")); return }
         session.editor?.finishComposition()
+        if refs.allSatisfy({ $0.key.isEmpty }) {
+            guard session.requestEditing() else { completion(failure("The document is locked.")); return }
+            session.insertionAnchor = anchor
+            session.insertSource(citationSource(refs,locator:locator,form:form))
+            completion(nil); return
+        }
         if session.root != nil, session.dependencyRevision != session.revision {
             session.prepareProjectCopy { error in
                 if let error { completion(error); return }
@@ -115,6 +121,7 @@ enum ZoteroIntegration {
             }
             selected = refs.map { ref in
                 var ref = ref
+                if ref.key.isEmpty { return ref }
                 if let saved = existing.first(where:{ $0.key == ref.key && (try? path($0.library)) == (try? path(ref.library)) }) { ref.citeKey = saved.citeKey }
                 else {
                     let base = ref.citeKey; var suffix = 2
@@ -122,7 +129,7 @@ enum ZoteroIntegration {
                 }
                 used.insert(ref.citeKey); return ref
             }
-            imports = selected.filter { ref in !existing.contains(where:{ $0.citeKey == ref.citeKey && $0.key == ref.key && (try? path($0.library)) == (try? path(ref.library)) }) }
+            imports = selected.filter { ref in !ref.key.isEmpty && !existing.contains(where:{ $0.citeKey == ref.citeKey && $0.key == ref.key && (try? path($0.library)) == (try? path(ref.library)) }) }
         } catch { completion(error); return }
         let revision = session.revision, active = session.active
         collect(imports) { response in DispatchQueue.main.async {
@@ -142,9 +149,7 @@ enum ZoteroIntegration {
                             if patch.oldSpan.end <= start && patch.start < start { let delta = patch.inserted.utf8.count-patch.removed.utf8.count; start += delta; end += delta }
                             else if patch.start < end && patch.oldSpan.end > start { throw failure("Place the citation outside the bibliography data.") }
                         }
-                        let cites = selected.map { ref in
-                            ("#cite("+(safeLabel(ref.citeKey) == ref.citeKey && !ref.citeKey.isEmpty ? "<\(ref.citeKey)>" : "label(\(typstStringLiteral(ref.citeKey)))"))+(locator.isEmpty ? "" : ", supplement: [\(escapeTypst(locator))]")+(form == "normal" ? "" : ", form: \(typstStringLiteral(form))")+")"
-                        }.joined(separator:" ")
+                        let cites = citationSource(selected,locator:locator,form:form)
                         source = source.replacingBytes(ByteSpan(start,end),with:cites); texts[active] = source
                         let caret = start+cites.utf8.count
                         session.commitReferences(texts,selections:[active:EditSelection(caret,caret)],undoPath:active)
@@ -205,4 +210,10 @@ enum ZoteroIntegration {
         }
         next(0)
     }
+}
+
+func citationSource(_ refs: [ZoteroReference],locator: String,form: String) -> String {
+    refs.map { ref in
+        ("#cite("+(safeLabel(ref.citeKey) == ref.citeKey && !ref.citeKey.isEmpty ? "<\(ref.citeKey)>" : "label(\(typstStringLiteral(ref.citeKey)))"))+(locator.isEmpty ? "" : ", supplement: [\(escapeTypst(locator))]")+(form == "normal" ? "" : ", form: \(typstStringLiteral(form))")+")"
+    }.joined(separator:" ")
 }

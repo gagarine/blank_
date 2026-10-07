@@ -146,12 +146,19 @@ import Combine
     @objc func redo(_ sender: Any?) { current?.undo(true) }
     @objc func bold(_ sender: Any?) { current?.editor?.formatNative(false) }
     @objc func italic(_ sender: Any?) { current?.editor?.formatNative(true) }
+    @objc func blockCommand(_ sender: NSMenuItem) {
+        guard let command = sender.representedObject as? SlashCommand else { return }
+        current?.performBlockCommand(command)
+    }
     @objc func go(_ sender: NSMenuItem) {
         guard NSApp.keyWindow == nil || current?.window === NSApp.keyWindow,
               let action = sender.representedObject as? GoAction else { return }
         current?.navigate(action)
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(blockCommand(_:)), let command = menuItem.representedObject as? SlashCommand {
+            return current?.canPerformBlockCommand(command) == true
+        }
         if menuItem.action == #selector(go(_:)), let action = menuItem.representedObject as? GoAction {
             return (NSApp.keyWindow == nil || current?.window === NSApp.keyWindow) && current?.canNavigate(action) == true
         }
@@ -210,7 +217,15 @@ import Combine
         let edit = menu("Edit")
         add(edit,"Undo",#selector(undo(_:)),"z",target:self); add(edit,"Redo",#selector(redo(_:)),"z",[.command,.shift],target:self); edit.addItem(.separator())
         add(edit,"Cut",#selector(NSText.cut(_:)),"x"); add(edit,"Copy",#selector(NSText.copy(_:)),"c"); add(edit,"Paste",#selector(NSText.paste(_:)),"v"); add(edit,"Select All",#selector(NSText.selectAll(_:)),"a"); edit.addItem(.separator()); add(edit,"Find…",#selector(find(_:)),"f",target:self)
+        func blockItem(_ menu: NSMenu,_ command: SlashCommand) {
+            add(menu,command.label+(command.insertion && !["table","code"].contains(command.kind) ? "…" : ""),#selector(blockCommand(_:)),target:self)
+            menu.items.last?.representedObject = command
+        }
+        let insert = menu("Insert")
+        for command in SlashCommand.all where command.insertion { blockItem(insert,command) }
         let format = menu("Format"); add(format,"Bold",#selector(bold(_:)),"b",target:self); add(format,"Italic",#selector(italic(_:)),"i",target:self)
+        format.addItem(.separator())
+        for command in SlashCommand.all where !command.insertion { blockItem(format,command) }
         let view = menu("View"); add(view,"Write",#selector(writeMode(_:)),"1",target:self); add(view,"Source",#selector(sourceMode(_:)),"2",target:self); add(view,"Preview",#selector(previewMode(_:)),"3",target:self)
         view.addItem(.separator()); add(view,"Toggle Sidebar",#selector(outline(_:)),"l",[.command,.shift],target:self); add(view,"Commands…",#selector(commands(_:)),"k",target:self); add(view,"Refresh Preview",#selector(refresh(_:)),target:self); add(view,"Enter Full Screen",#selector(fullscreen(_:)),"f",[.command,.control],target:self)
         let go = menu("Go")

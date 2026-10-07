@@ -19,7 +19,7 @@ import BlankCore
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         guard let view = session.editor else { fatalError("No native editor") }
         func check(_ condition: @autoclosure () -> Bool,_ label: String) { if !condition() { fatalError("FAIL: \(label) | source=\(session.buffer.source) | native=\(view.string)") }; print("PASS: \(label)") }
-        check(app.activationPolicy() == .regular && app.mainMenu?.items.map(\.title) == ["blank_","File","Edit","Format","View","Go","Window","Help"],"Complete application menus are installed during launch preparation")
+        check(app.activationPolicy() == .regular && app.mainMenu?.items.map(\.title) == ["blank_","File","Edit","Insert","Format","View","Go","Window","Help"],"Complete application menus are installed during launch preparation")
         check(app.mainMenu?.items.allSatisfy { $0.submenu?.items.isEmpty == false } == true && app.servicesMenu != nil && app.windowsMenu != nil && app.helpMenu != nil,"Launch menus include populated submenus and native Services, Window and Help integration")
         check(view.textLayoutManager == nil && view.layoutManager != nil,"TextKit 1 selected explicitly at creation")
         check(controller.window?.firstResponder === view,"Empty editor is focused")

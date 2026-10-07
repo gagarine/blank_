@@ -125,6 +125,11 @@ struct Recovery: Codable {
     var insertionKind = "footnote"
     var insertionAnchor = EditSelection(0,0)
     var objectIndex = 0
+    var objectSpan = ByteSpan(0,0)
+    var objectOriginal = ""
+    var objectPath = ""
+    var objectRevision = -1
+    var objectTitle = "Edit source"
     var saveWork: DispatchWorkItem?
     var diskScanWork: DispatchWorkItem?
     var projectUndoPath: String?
@@ -552,9 +557,26 @@ struct Recovery: Codable {
         let insert = block ? "\n\n"+text+"\n\n" : text
         buffer.commit(buffer.source.replacingBytes(span,with:insert),selection:EditSelection(span.start+insert.utf8.count,span.start+insert.utf8.count)); changed(); sheet = nil
     }
+    func canPerformBlockCommand(_ command: SlashCommand) -> Bool {
+        guard mode == .write, !contactSheet, sheet == nil, let editor else { return false }
+        return buffer.projection.tableCell(at:editor.selectedRange()) == nil || command.supportedInTableCell
+    }
+    func performBlockCommand(_ command: SlashCommand) {
+        guard canPerformBlockCommand(command), requestEditing() else { return }
+        editor?.finishComposition(); synchronizeSelection()
+        if command.insertion { chooseInsertion(command.kind) }
+        else if let editor { buffer.setKind(at:editor.selectedRange(),kind:command.kind,level:command.level); changed() }
+    }
     func chooseInsertion(_ kind: String) {
         guard requestEditing() else { return }
-        synchronizeSelection(); insertionAnchor = buffer.selection
+        editor?.finishComposition(); synchronizeSelection(); insertionAnchor = buffer.selection
+        if kind == "code" {
+            let caret = insertionAnchor.span.start+7 // paragraph break, #{, newline, indentation
+            buffer.commit(buffer.source.replacingBytes(insertionAnchor.span,with:"\n\n#{\n  \n}\n\n"),selection:EditSelection(caret,caret))
+            changed(); sheet = nil; editor?.refresh(reveal:true)
+            window?.makeFirstResponder(editor)
+            return
+        }
         if kind == "table" {
             let start = insertionAnchor.span.start+2
             insertSource("#table(columns: 2,\n  [], [],\n  [], [],\n)",block:true)
@@ -563,7 +585,26 @@ struct Recovery: Codable {
         }
         insertionKind = kind; sheet = .insertion
     }
-    func editObject(_ index: Int) { objectIndex = index; sheet = .object }
+    func editObject(_ index: Int) {
+        editor?.finishComposition()
+        objectIndex = index
+        editSourceObject(buffer.projection.blocks[index].source,title:"Edit source")
+    }
+    func editSourceObject(_ span: ByteSpan,title: String) {
+        editor?.finishComposition()
+        objectSpan = span; objectOriginal = buffer.source.bytes(span); objectPath = active
+        objectRevision = buffer.revision; objectTitle = title; sheet = .object
+    }
+    func applyObjectSource(_ text: String) -> Bool {
+        guard requestEditing() else { return false }
+        guard active == objectPath, buffer.revision == objectRevision,
+              buffer.source.bytes(objectSpan) == objectOriginal else {
+            error = "The document changed while editing. Close this editor and open the field again."; return false
+        }
+        buffer.breakUndoGroup()
+        buffer.commit(buffer.source.replacingBytes(objectSpan,with:text),selection:EditSelection(objectSpan.start,objectSpan.start+text.utf8.count))
+        changed(); sheet = nil; return true
+    }
     func importImage(_ url: URL) throws -> String {
         let data = try Data(contentsOf:url)
         let path = "assets/\(UUID().uuidString.prefix(8))-\(url.lastPathComponent)"
