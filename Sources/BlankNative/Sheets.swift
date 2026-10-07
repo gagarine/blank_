@@ -184,6 +184,7 @@ struct InsertionSheet: View {
     @FocusState var focus: Bool
     @NativeState var bibliographyDestination = ""
     @NativeState var bibliographyLocation = ""
+    @NativeState private var referenceLabels: [String] = []
     var title: String { session.insertionKind == "bibliography" ? "Bibliography style" : SlashCommand.all.first { $0.kind == session.insertionKind }?.label ?? "Insert" }
     var body: some View {
         SheetFrame(title:title,width:session.insertionKind == "citation" ? 620 : 500,dismiss:{ session.sheet = nil }) {
@@ -201,6 +202,9 @@ struct InsertionSheet: View {
                     TextField("Caption",text:$extra).textFieldStyle(.roundedBorder)
                     TextField("Alternative text",text:$alt).textFieldStyle(.roundedBorder)
                     Stepper("Width: \(imageWidth)%",value:$imageWidth,in:5...100,step:5)
+                } else if session.insertionKind == "reference" {
+                    ReferenceLabelField(text:$text,labels:referenceLabels,submit:{ insert() },cancel:{ session.sheet = nil }).frame(height:26)
+                    Text("Choose an existing label or enter a new target.").font(.system(size:11)).foregroundStyle(.secondary)
                 } else if session.insertionKind == "link" {
                     TextField("https://…",text:$text).textFieldStyle(.roundedBorder).focused($focus)
                     TextField("Link text",text:$extra).textFieldStyle(.roundedBorder)
@@ -230,9 +234,10 @@ struct InsertionSheet: View {
                 }
             }
             if !failure.isEmpty { Text(failure).font(.system(size:11)).foregroundStyle(.red).textSelection(.enabled) }
-            HStack { Spacer(); Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction); Button("Insert") { insert() }.keyboardShortcut(.defaultAction).disabled(finding) }
+            HStack { Spacer(); Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction); Button("Insert") { insert() }.keyboardShortcut(.defaultAction).disabled(finding || session.insertionKind == "reference" && crossReferenceTarget(text).isEmpty) }
         }.onAppear {
             focus = true
+            if session.insertionKind == "reference" { referenceLabels = session.referenceLabels }
             if session.insertionKind == "bibliography" {
                 text = "apa"
                 if session.bibliographyLocations.count == 1 { bibliographyLocation = session.bibliographyLocations[0].id }
@@ -295,7 +300,12 @@ struct InsertionSheet: View {
         case "footnote": session.insertSource("#footnote[\(escapeTypst(text))]")
         case "link": session.insertSource("#link(\(jsonString(text)))[\(escapeTypst(extra.isEmpty ? text : extra))]")
         case "label": session.insertSource("<\(safeLabel(text))>")
-        case "reference": session.insertSource("@\(safeLabel(text))")
+        case "reference":
+            let target = crossReferenceTarget(text)
+            guard !target.isEmpty else { return }
+            // Terminate the inline code so adjacent prose/brackets cannot
+            // become part of the target or another argument of the call.
+            session.insertSource("#ref(<\(target)>);")
         case "citation":
             finding = true
             ZoteroIntegration.insert(chosenReferences.values.sorted { $0.id < $1.id }.map { ref in

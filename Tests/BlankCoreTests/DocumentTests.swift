@@ -2,6 +2,34 @@ import Foundation
 import BlankCore
 
 final class DocumentTests {
+    func testLiteralMarkupLabels() {
+        let source = """
+        = Café <sec:cafe\u{301}>
+
+        // <comment>
+        /* <block-comment> */
+        `<raw>` \\<escaped> "<prose>"
+        #let text = "<string>"
+        #let value = <code-value>
+        #cite(<citation-key>) @reference
+        #figure([Caption]) <fig:one>
+        #table(columns:1,[Cell <cell>])
+        #[Nested <nested>]
+        <fig:one>
+        """
+        let model = DocumentBuffer(source)
+        XCTAssertEqual(model.literalLabels,["sec:cafe\u{301}","prose","fig:one","cell","nested","fig:one"])
+        XCTAssertEqual(model.source,source)
+        XCTAssertFalse(model.canUndo)
+        model.editSource(NSRange(location:source.utf16.count,length:0),text:"\n<unsaved>",group:"")
+        XCTAssertEqual(model.literalLabels.last,"unsaved")
+        model.undo(); XCTAssertEqual(model.literalLabels.last,"fig:one")
+        let standalone = DocumentBuffer("#ref(<sec:end.>);")
+        XCTAssertEqual(standalone.projection.blocks[0].kind,"paragraph")
+        XCTAssertEqual(standalone.projection.text,standalone.source)
+        XCTAssertEqual(standalone.literalLabels,[])
+        XCTAssertEqual(model.source,source)
+    }
     func testUnicodeSourceOffsets() {
         let text = "a👩🏽‍💻e\u{301}日本"
         for byte in 0...text.utf8.count where byte == text.utf8.count || Array(text.utf8)[byte] & 0xC0 != 0x80 {
@@ -630,6 +658,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
         let t = DocumentTests()
         let tests: [(String,()->Void)] = [
             ("Unicode source mapping",t.testUnicodeSourceOffsets),
+            ("Literal markup labels",t.testLiteralMarkupLabels),
             ("Source folding preserves bytes and offsets",t.testSourceFoldingPreservesBytesAndOffsets),
             ("Table dimension transactions preserve source",t.testTableDimensionsPreserveSource),
             ("Lossless styled edit",t.testProjectionAndLosslessEdit),

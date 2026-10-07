@@ -207,7 +207,7 @@ public struct Projection {
             if n.kind == "Hash", i+1 < nodes.count {
                 let next = nodes[i+1]
                 let span = ByteSpan(n.start, next.end)
-                if next.kind == "FuncCall", let name = next.children.first, ["strong","emph","link","footnote","cite"].contains(source.bytes(name.span)) {
+                if next.kind == "FuncCall", let name = next.children.first, ["strong","emph","link","footnote","cite","ref"].contains(source.bytes(name.span)) {
                     pending += [n,next]; i += 2; continue
                 }
                 let before = source.bytes(ByteSpan(0, n.start)).components(separatedBy: "\n").last ?? ""
