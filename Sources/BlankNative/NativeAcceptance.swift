@@ -27,6 +27,7 @@ import BlankCore
         check(controller.window?.contentViewController === controller.splitController && controller.splitController.contentsItem.behavior == .sidebar,"Native split-view controller supplies sidebar behavior")
         check(controller.searchItem != nil && controller.shareButton != nil,"Search and Share use native toolbar controls")
         check(controller.sidebarItem?.isBordered == true && controller.modeItem?.isBordered == true,"Interactive toolbar controls opt into the system glass backing")
+        NativeReferenceAcceptance.run(controller:controller)
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
         NativeGoAcceptance.text(original:controller)

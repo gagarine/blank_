@@ -51,6 +51,9 @@ import Combine
         // Finish AppKit's launch/activation-policy transition before requesting
         // activation. The complete menu is already attached at this point.
         DispatchQueue.main.async { NSApp.activate() }
+        if CommandLine.arguments.contains("--reference-ui-test"), let controller = controllers.first {
+            NativeReferenceAcceptance.showFixture(controller:controller)
+        }
         if CommandLine.arguments.contains("--citation-ui-test"), let controller = controllers.first {
             NativeCitationAcceptance.showFixture(controller:controller)
         }
