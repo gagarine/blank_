@@ -173,6 +173,7 @@ struct InsertionSheet: View {
     @NativeState var columns = 2
     @NativeState var rows = 3
     @StateObject private var citationSearch = CitationSearch()
+    @NativeState private var citationChoices = CitationChoices()
     @NativeState private var chosenReferences: [String:ZoteroReference] = [:]
     @NativeState var finding = false
     @NativeState var failure = ""
@@ -238,9 +239,10 @@ struct InsertionSheet: View {
             }
             if session.insertionKind == "citation" && !loadedInitialReferences {
                 loadedInitialReferences = true
+                session.loadBibliographies(); citationChoices = session.citationChoices()
                 session.prepareProjectCopy { error in
                     if let error { failure = error.localizedDescription }
-                    else { session.loadBibliographies(); session.objectWillChange.send() }
+                    else { session.loadBibliographies(); citationChoices = session.citationChoices(); session.objectWillChange.send() }
                 }
                 searchZotero()
             }
@@ -256,9 +258,15 @@ struct InsertionSheet: View {
             if !citationSearch.error.isEmpty { Text(citationSearch.error).font(.system(size:11)).foregroundStyle(.red) }
             ScrollView {
                 VStack(alignment:.leading,spacing:12) {
-                    ForEach(citationSearch.references) { ref in
+                    ForEach(citationChoices.results(citationSearch.references,query:text)) { ref in
                         Toggle(isOn:Binding(get:{ chosenReferences[ref.id] != nil },set:{ if $0 { chosenReferences[ref.id] = ref } else { chosenReferences.removeValue(forKey:ref.id) } })) {
-                            VStack(alignment:.leading,spacing:3) { Text(ref.title).font(.system(size:12)); Text(ref.author+" · "+ref.year).font(.system(size:10)).foregroundStyle(.secondary) }
+                            VStack(alignment:.leading,spacing:3) {
+                                HStack {
+                                    Text(ref.title).font(.system(size:12))
+                                    if citationChoices.keys.contains(ref.citeKey) { Label("Already cited",systemImage:"checkmark.circle.fill").font(.system(size:10)).foregroundStyle(.secondary) }
+                                }
+                                Text([ref.author,ref.year].filter { !$0.isEmpty }.joined(separator:" · ")).font(.system(size:10)).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }.padding(4)
@@ -290,7 +298,9 @@ struct InsertionSheet: View {
         case "reference": session.insertSource("@\(safeLabel(text))")
         case "citation":
             finding = true
-            ZoteroIntegration.insert(chosenReferences.values.sorted { $0.id < $1.id },session:session,anchor:session.insertionAnchor,locator:locator,form:form,destinationID:bibliographyDestination.isEmpty ? nil : bibliographyDestination) { error in finding = false; if let error { failure = error.localizedDescription } else { session.sheet = nil } }
+            ZoteroIntegration.insert(chosenReferences.values.sorted { $0.id < $1.id }.map { ref in
+                var ref = ref; if citationChoices.keys.contains(ref.citeKey) { ref.key = "" }; return ref
+            },session:session,anchor:session.insertionAnchor,locator:locator,form:form,destinationID:bibliographyDestination.isEmpty ? nil : bibliographyDestination) { error in finding = false; if let error { failure = error.localizedDescription } else { session.sheet = nil } }
         case "bibliography":
             do { try session.setBibliographyStyle(text,locationID:bibliographyLocation); session.sheet = nil }
             catch { failure = error.localizedDescription }
@@ -303,19 +313,20 @@ func safeLabel(_ text: String) -> String { text.filter { $0.isLetter || $0.isNum
 struct ObjectSheet: View {
     @ObservedObject var session: DocumentSession
     @NativeState var raw = ""
-    var block: ProjectedBlock { session.buffer.projection.blocks[min(session.objectIndex,session.buffer.projection.blocks.count-1)] }
     var body: some View {
-        SheetFrame(title:"Edit source",width:620,dismiss:{ session.sheet = nil }) {
+        if session.objectTitle == "Edit Citation", let edit = CitationFieldEdit(session.objectOriginal) {
+            CitationFieldEditor(session:session,edit:edit)
+        } else { sourceEditor }
+    }
+    var sourceEditor: some View {
+        SheetFrame(title:session.objectTitle,width:620,dismiss:{ session.sheet = nil }) {
             TextEditor(text:$raw).font(.system(size:13,design:.monospaced)).frame(height:260).border(Color.primary.opacity(0.1))
             Text("Every character is preserved. Preview shows the typeset result.").font(.system(size:11)).foregroundStyle(.secondary)
             HStack { Spacer(); Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction); Button("Apply") { apply() }.keyboardShortcut(.defaultAction) }
-        }.onAppear { raw = session.buffer.source.bytes(block.source) }
+        }.onAppear { raw = session.objectOriginal }
     }
     func apply() {
-        guard session.requestEditing() else { return }
-        let buffer = session.buffer
-        buffer.commit(buffer.source.replacingBytes(block.source,with:raw),selection:buffer.selection)
-        session.changed(); session.sheet = nil
+        _ = session.applyObjectSource(raw)
     }
 }
 struct ConflictSheet: View {

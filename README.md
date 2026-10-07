@@ -10,7 +10,9 @@ A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI a
 - **Templates** — Standard, Thesis, Paper, Letter A4, Book and Slides (16:9 projector); preview, create, duplicate, edit or delete your own.
 - **Native document tools** — PDF export/sharing, Zotero integration, statistics, recovery and macOS save/move controls.
 
-Citation search filters while you type. The document’s style controls formatting; Citation display chooses a standard citation, one within a sentence, author only or year only. Write shows Typst’s formatted citations and bibliography, while Source retains their exact expressions. New insertions consistently use `#cite`.
+Citation search filters while you type. References already cited in the project appear first with an **Already cited** marker and can be reused without contacting Zotero. Inline citations have a subtle gray background; click to edit their reference, locator and display. Rich or computed citations retain an exact-source editor. The document’s style controls formatting; Citation display chooses a standard citation, one within a sentence, author only or year only. Write shows Typst’s formatted citations and bibliography, while Source retains their exact expressions. New insertions consistently use `#cite`.
+
+Slash commands also appear in the macOS **Format** (paragraph styles) and **Insert** (objects) menus. **Code** creates an empty collapsible Typst source block with the caret inside.
 
 New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table selects it; a second Delete removes it, and Undo restores it. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
@@ -28,7 +30,7 @@ Zotero item keys, library identifiers (`users/…` or `groups/…`) and the expo
 
 Save As preflights dependency collisions and copies literal dependencies plus files read by a background Typst evaluation. A nested entry’s literal paths are rebased; when computed paths require their original location, an ordinary `.typ` include wrapper keeps the original entry and folder structure intact. Unreached computed dependencies cannot be discovered automatically. Computed raw-byte bibliography data and package-owned bibliographies remain editable in Source but are not rewritten by Zotero. Hayagriva Zotero edits require block mappings; flow mappings/aliases still compile and remain source-editable.
 
-Checks cover external projects, nested/root paths, embedded/external references, Zotero refresh with isolated responses, custom CSL, assets, Unicode, selection/clipboard, Undo and Save As. Compiler checks compare reference presentation with and without the metadata fields. These checks do not establish live Zotero coverage.
+Checks cover external projects, nested/root paths, embedded/external references, Zotero refresh with isolated responses, custom CSL, assets, Unicode, selection/clipboard, Undo and Save As. Compiler checks compare reference presentation with and without the metadata fields. Native checks also cover citation clicks and local edits, table-cell fields, already-cited search/reuse, menu parity, Code insertion and exact-source Undo. Disposable app inspection verifies the gray fields, citation controls, picker markers and native menu layout; live Zotero insertion/refresh remain unverified.
 
 ## Download
 
@@ -56,13 +58,13 @@ The Cargo workspace shares a lockfile/cache for the in-process parser and separa
 
 ## Remaining work
 
-- Rich controls for editing existing links, footnotes, citations and figures; PDF-page selection and broader image-format validation.
+- Rich controls for editing existing links, footnotes, grouped/complex citations and figures; PDF-page selection and broader image-format validation.
 - Zotero group discovery and citation-picker keyboard navigation. Custom citation show rules and note-style footnote presentation in Write remain unverified.
 - Continuous editing across included files and repeated includes.
 - Settings synchronization, disjoint external-change merging and broader recovery checks.
 - Large-table and Source performance; long-document memory/latency measurements.
 - Opt-in MCP/agent access with revision-checked transactions and selective undo.
 
-Live Zotero, physical IME candidates, bidirectional editing, VoiceOver and Writing Tools remain unverified. An empty-editor release run measured 0.14% of one CPU core and 14.5 MiB RSS; compiler memory was excluded. Use `--measure` with disposable `BLANK_DATA_DIR` data.
+Live Zotero insertion/refresh, physical IME candidates, bidirectional editing, VoiceOver and Writing Tools remain unverified. An empty-editor release run measured 0.14% of one CPU core and 14.5 MiB RSS; compiler memory was excluded. Use `--measure` with disposable `BLANK_DATA_DIR` data.
 
 [MIT](LICENSE) · Built with OpenAI Codex.

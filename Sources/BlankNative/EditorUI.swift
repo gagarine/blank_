@@ -25,7 +25,7 @@ struct SlashCommand: Identifiable {
     // rendering. Structural document objects have no supported cell editor.
     var supportedInTableCell: Bool { ["paragraph","link","footnote","citation","label","reference"].contains(kind) }
     var systemSymbol: String {
-        ["paragraph":"paragraphsign","heading":"textformat.size","bullet":"list.bullet","number":"list.number","quote":"quote.bubble","image":"photo","table":"tablecells","citation":"books.vertical","footnote":"text.badge.plus","equation":"function","link":"link","label":"tag","reference":"arrow.turn.up.right"][kind] ?? "textformat"
+        ["paragraph":"paragraphsign","heading":"textformat.size","bullet":"list.bullet","number":"list.number","quote":"quote.bubble","image":"photo","table":"tablecells","code":"chevron.left.forwardslash.chevron.right","citation":"books.vertical","footnote":"text.badge.plus","equation":"function","link":"link","label":"tag","reference":"arrow.turn.up.right"][kind] ?? "textformat"
     }
     var id: String { kind+String(level) }
     static let all: [SlashCommand] = [
@@ -38,6 +38,7 @@ struct SlashCommand: Identifiable {
         .init(kind:"quote",label:"Quotation",hint:"Block quotation",symbol:"❝",keywords:"quote"),
         .init(kind:"image",label:"Image and caption",hint:"Insert a figure",symbol:"▧",keywords:"picture photo media pdf svg",insertion:true),
         .init(kind:"table",label:"Table",hint:"Rows and columns",symbol:"▦",keywords:"grid",insertion:true),
+        .init(kind:"code",label:"Code",hint:"Typst source",symbol:"</>",keywords:"source syntax programming",insertion:true),
         .init(kind:"citation",label:"Citation",hint:"Search Zotero",symbol:"@",keywords:"reference bibliography",insertion:true),
         .init(kind:"footnote",label:"Footnote",hint:"An explanatory note",symbol:"¹",keywords:"note",insertion:true),
         .init(kind:"equation",label:"Equation",hint:"Typst mathematics",symbol:"∑",keywords:"math formula",insertion:true),

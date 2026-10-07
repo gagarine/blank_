@@ -132,6 +132,27 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if fontCache.count > 100 { fontCache.removeAll() }
         fontCache[key] = font; return font
     }
+    // Atomic inline projections are dynamic fields; bibliography is a block.
+    var inlineFields: [(range: NSRange,source: ByteSpan)] {
+        guard let session, session.mode == .write else { return [] }
+        return session.buffer.projection.blocks.filter { $0.kind != "bibliography" }.flatMap { block in
+            var at = block.display.location
+            return block.inlines.flatMap(\.runs).compactMap { run in
+                let range = NSRange(location:at,length:run.text.utf16.count); at += range.length
+                return run.atomic && range.length > 0 ? (range,run.source) : nil
+            }
+        }
+    }
+    func inlineField(at point: NSPoint) -> (range: NSRange,source: ByteSpan)? {
+        guard let manager = layoutManager, let container = textContainer else { return nil }
+        ensureNativeLayout()
+        let local = NSPoint(x:point.x-textContainerOrigin.x,y:point.y-textContainerOrigin.y)
+        let glyph = manager.glyphIndex(for:local,in:container)
+        guard glyph < manager.numberOfGlyphs,
+              manager.boundingRect(forGlyphRange:NSRange(location:glyph,length:1),in:container).contains(local) else { return nil }
+        let index = manager.characterIndexForGlyph(at:glyph)
+        return inlineFields.first { NSLocationInRange(index,$0.range) }
+    }
     func rendered(onlyBlock: Int? = nil) -> NSAttributedString {
         guard let session else { return NSAttributedString(string:"") }
         let b = session.buffer
@@ -212,6 +233,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             }
         }
         if !source {
+            for field in inlineFields {
+                if let onlyBlock, b.projection.blockIndex(at:field.range.location) != onlyBlock { continue }
+                result.addAttribute(.backgroundColor,value:NSColor.quaternaryLabelColor,range:field.range)
+            }
             for reference in b.renderedReferences {
                 let at = b.projection.displayOffset(at:reference.source.start)
                 let shown = NSRange(location:at,length:reference.text.utf16.count)
@@ -265,6 +290,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if session.buffer.projection.tableCell(at:selectedRange()) != nil, at < (textStorage?.length ?? 0) {
             attributes = textStorage!.attributes(at:at,effectiveRange:nil)
         }
+        attributes.removeValue(forKey:.backgroundColor)
         if plainSlashQuery { attributes[.font] = readingFont(size:CGFloat(session.fontSize)) }
         typingAttributes = attributes
     }
@@ -800,6 +826,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let next = bounds.contains(point) ? hoveredBlock(at:point) : nil
         if next != hoverBlock { hoverBlock = next; needsDisplay = true }
         if let next, isOverBlockHandle(point,index:next) { NSCursor.openHand.set() }
+        else if inlineField(at:point) != nil { NSCursor.pointingHand.set() }
         else { (bounds.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set() }
     }
     override func mouseExited(with event: NSEvent) {
@@ -836,6 +863,12 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             let region = blockRect(hoverBlock)
             if let bitmap = bitmapImageRepForCachingDisplay(in:region) { cacheDisplay(in:region,to:bitmap); let image = NSImage(size:region.size); image.addRepresentation(bitmap); dragImage = image }
             NSCursor.closedHand.push(); needsDisplay = true; return
+        }
+        if event.modifierFlags.intersection([.shift,.command,.option,.control]).isEmpty,
+           let field = inlineField(at:point), let session {
+            finishComposition(); blockPopover?.close(); dismissSlash()
+            setSelectedRange(field.range); captureSelection()
+            session.editSourceObject(field.source,title:"Edit Citation"); return
         }
         if event.clickCount == 2, let session, session.mode == .write {
             let index = session.buffer.projection.blockIndex(at:characterIndexForInsertion(at:point))
