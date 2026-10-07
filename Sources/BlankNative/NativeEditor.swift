@@ -51,6 +51,7 @@ struct NativeInputDefaults {
 }
 final class NativeTextView: NSTextView, NSTextViewDelegate {
     var inputDefaults: NativeInputDefaults?
+    var codeInputPreferences = false
     weak var session: DocumentSession?
     var refreshing = false
     var composing = false
@@ -168,19 +169,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let baseRange = onlyBlock.map { b.projection.blocks[$0].display } ?? all
         result.addAttributes([.font:font,.foregroundColor:session.inkColor,.paragraphStyle:style,.ligature:1],range:baseRange)
         if source {
-            for run in b.parsed.styles {
-                let start = b.source.utf16Offset(byte:run.start), end = b.source.utf16Offset(byte:run.end)
-                guard end > start, end <= result.length else { continue }
-                let color: NSColor
-                switch run.tag {
-                case "Comment": color = NSColor.secondaryLabelColor
-                case "Keyword", "Function": color = NSColor.systemPurple
-                case "String": color = NSColor.systemGreen
-                case "Number", "MathOperator", "MathDelimiter": color = NSColor.systemOrange
-                default: continue
-                }
-                result.addAttribute(.foregroundColor,value:color,range:NSRange(location:start,length:end-start))
-            }
+            applySyntaxColors(to:result,sourceSpan:ByteSpan(0,b.source.utf8.count),displayStart:0)
             func visit(_ node: SyntaxNode, bold: Bool = false, italic: Bool = false, heading: Int = 0) {
                 let function = node.kind == "FuncCall" ? node.children.first.map { b.source.bytes($0.span) } : nil
                 let strong = bold || node.kind == "Strong" || function == "strong", emph = italic || node.kind == "Emph" || function == "emph"
@@ -220,6 +209,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                         result.addAttribute(.baselineOffset,value:0,range:range)
                     }
                     if session.paragraphFocus && !range.contains(selectedRange().location) { result.addAttribute(.foregroundColor,value:NSColor.tertiaryLabelColor,range:range) }
+                    if block.kind == "source", !block.collapsed,
+                       !session.paragraphFocus || range.contains(selectedRange().location) {
+                        applySyntaxColors(to:result,sourceSpan:block.source,displayStart:range.location)
+                    }
                     var at = range.location
                     for run in block.inlines.flatMap(\.runs) {
                         let r = NSRange(location:at,length:run.text.utf16.count)
@@ -262,6 +255,25 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
         return result
     }
+    private func applySyntaxColors(to text: NSMutableAttributedString,sourceSpan: ByteSpan,displayStart: Int) {
+        guard let buffer = session?.buffer else { return }
+        let sourceStart = buffer.source.utf16Offset(byte:sourceSpan.start)
+        for run in buffer.parsed.styles {
+            let start = max(sourceSpan.start,run.start), end = min(sourceSpan.end,run.end)
+            guard end > start else { continue }
+            let color: NSColor
+            switch run.tag {
+            case "Comment": color = .secondaryLabelColor
+            case "Keyword", "Function": color = .systemPurple
+            case "String": color = .systemGreen
+            case "Number", "MathOperator", "MathDelimiter": color = .systemOrange
+            default: continue
+            }
+            let range = NSRange(location:displayStart+buffer.source.utf16Offset(byte:start)-sourceStart,
+                                length:buffer.source.utf16Offset(byte:end)-buffer.source.utf16Offset(byte:start))
+            if NSMaxRange(range) <= text.length { text.addAttribute(.foregroundColor,value:color,range:range) }
+        }
+    }
     // Empty blocks have no text to inherit from. Keep their caret and paragraph
     // terminators styled using the same block rules as populated text.
     func blockAttributes(_ index: Int) -> [NSAttributedString.Key:Any] {
@@ -282,10 +294,13 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     func updateTypingAttributes() {
         guard let session, !composing, !hasMarkedText() else { return }
         if session.mode == .source {
+            codeInputPreferences = false
             typingAttributes = [.font:NSFont.monospacedSystemFont(ofSize:14,weight:.regular),.foregroundColor:session.inkColor,.ligature:1]
             return
         }
         let at = selectedRange().location, index = session.buffer.projection.blockIndex(at:at)
+        codeInputPreferences = session.buffer.projection.blocks[index].kind == "source"
+        inputDefaults?.apply(to:self,source:codeInputPreferences)
         var attributes = blockAttributes(index)
         if session.buffer.projection.tableCell(at:selectedRange()) != nil, at < (textStorage?.length ?? 0) {
             attributes = textStorage!.attributes(at:at,effectiveRange:nil)
@@ -349,7 +364,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let appearance = "\(effectiveAppearance.name.rawValue)/\(session.systemColors)/\(session.fontFamily)/\(session.fontSize)/\(session.paragraphFocus)/\(session.paper)/\(session.ink)"
         guard reveal || lastPresentationRevision != session.buffer.presentationRevision || lastRevision != session.buffer.revision || lastMode != session.mode || lastPath != session.active || lastAppearance != appearance else { return }
         if lastMode != session.mode {
-            if lastMode == .write { inputDefaults = NativeInputDefaults(self) }
+            if lastMode == .write && !codeInputPreferences { inputDefaults = NativeInputDefaults(self) }
             inputDefaults?.apply(to:self,source:session.mode == .source)
         }
         refreshing = true; defer { refreshing = false }
@@ -484,6 +499,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard session.requestEditing() else { return false }
         if composing || hasMarkedText() { return true }
         captureSelection()
+        if session.mode == .write, !session.buffer.canEditWrite(affectedCharRange) { return false }
         var editRange = affectedCharRange
         let block = session.buffer.projection.blocks[session.buffer.projection.blockIndex(at:editRange.location)]
         let emptyingBlock = session.mode == .write && block.editable && text.isEmpty && editRange.length > 0 && editRange == block.display
@@ -523,6 +539,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         var shortcut: (String,Int)?
         if prefix.hasSuffix(" "), prefix.dropLast().allSatisfy({ $0 == "=" }), prefix.count > 1 { shortcut = ("heading",prefix.count-1) }
         else if prefix == "- " { shortcut = ("bullet",0) } else if prefix == "+ " { shortcut = ("number",0) }
+        guard b.editable else { return }
         if let (kind,level) = shortcut, b.kind == "paragraph" {
             session.buffer.editWrite(NSRange(location:b.display.location,length:before.length),text:"",group:"write")
             session.buffer.setKind(index,kind:kind,level:level); session.changed()
@@ -550,6 +567,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         guard session?.requestEditing() != false else { return }
+        if !composing, let session, session.mode == .write,
+           !session.buffer.canEditWrite(replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange) { return }
         if !composing { captureSelection(); compositionOriginal = self.string; composing = true; session?.buffer.breakUndoGroup() }
         super.setMarkedText(string,selectedRange:selectedRange,replacementRange:replacementRange)
     }
@@ -558,6 +577,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     func commitComposition() {
         guard let session, let patch = SourcePatch.difference(compositionOriginal,string) else { refresh(); return }
         let range = NSRange(location:compositionOriginal.utf16Offset(byte:patch.start),length:patch.removed.utf16.count)
+        if session.mode == .write, !session.buffer.canEditWrite(range) { lastRevision = -1; refresh(); return }
         if session.mode == .source { session.buffer.editSource(range,text:patch.inserted,group:"") }
         else { session.buffer.editWrite(range,text:patch.inserted,group:"") }
         session.changed()

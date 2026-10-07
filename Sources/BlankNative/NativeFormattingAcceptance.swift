@@ -97,6 +97,65 @@ import BlankCore
         check(session.buffer.source == "Manager action" && editor.textStorage!.attribute(.font,at:0,effectiveRange:nil) as? NSFont == renderedFont,"Unsupported font-manager size changes cannot diverge from the source")
         manager.target = oldTarget; manager.action = oldAction
         if let oldFont { manager.setSelectedFont(oldFont,isMultiple:oldMultiple) }
+        codeBlocks(controller:controller)
         load(""); editor.setSelectedRange(NSRange(location:0,length:0)); editor.captureSelection()
     }
+    static func codeBlocks(controller: DocumentWindow) {
+        let session = controller.session, editor = session.editor!
+        func check(_ condition: @autoclosure () -> Bool,_ label: String) {
+            guard condition() else { fatalError("FAIL: \(label)") }; print("PASS: \(label)")
+        }
+        let priorDefaults = editor.inputDefaults, prior = NativeInputDefaults(editor)
+        defer { editor.inputDefaults = priorDefaults; prior.apply(to:editor,source:false) }
+        editor.isAutomaticQuoteSubstitutionEnabled = true; editor.isAutomaticDashSubstitutionEnabled = true
+        editor.isAutomaticTextReplacementEnabled = true; editor.isContinuousSpellCheckingEnabled = true
+        editor.inputDefaults = NativeInputDefaults(editor)
+        let raw = "#{\n  let café = \"日本 👋\"\n  let count = 42\n  text(café) // keep\n}"
+        let original = "Before 👩🏽‍💻\n\n"+raw+"\n\nAfter"
+        func load() { session.buffer.loadExternal(original); session.revision += 1; editor.refresh() }
+        func range(_ text: String) -> NSRange { (editor.string as NSString).range(of:text) }
+        func color(_ text: String) -> NSColor? { editor.textStorage?.attribute(.foregroundColor,at:range(text).location,effectiveRange:nil) as? NSColor }
+        load()
+        check(color("let") == .systemPurple && color("42") == .systemOrange && color("\"日本 👋\"") == .systemGreen && color("text(café)") == .systemPurple && color("// keep") == .secondaryLabelColor,"Write code blocks use parser-backed keyword, number, string, function and comment colors")
+        check(color("Before") == session.inkColor && color("After") == session.inkColor && session.buffer.source == original,"Code coloring preserves neighboring prose and canonical source")
+        let opening = range("#{"), closing = range("}")
+        for part in [NSRange(location:opening.location,length:1),NSRange(location:opening.location+1,length:1),closing] {
+            editor.setSelectedRange(part); editor.deleteBackward(nil)
+            check(session.buffer.source == original,"Write prevents deleting an individual code delimiter")
+            editor.setSelectedRange(part); editor.insertText("replacement",replacementRange:editor.selectedRange())
+            check(session.buffer.source == original,"Write prevents replacing an individual code delimiter")
+        }
+        editor.setSelectedRange(opening)
+        editor.setMarkedText("日本",selectedRange:NSRange(location:2,length:0),replacementRange:editor.selectedRange())
+        check(!editor.hasMarkedText() && session.buffer.source == original,"Composition cannot replace the structural code opener")
+        editor.setSelectedRange(NSRange(location:range("café").location,length:0))
+        editor.textViewDidChangeSelection(Notification(name:NSTextView.didChangeSelectionNotification,object:editor))
+        check(!editor.isAutomaticQuoteSubstitutionEnabled && !editor.isAutomaticDashSubstitutionEnabled && !editor.isAutomaticTextReplacementEnabled && !editor.isContinuousSpellCheckingEnabled,"Code caret disables prose substitutions and spelling without changing stored preferences")
+        let end = NSMaxRange(range("42"))
+        editor.setSelectedRange(NSRange(location:end,length:0)); editor.captureSelection(); editor.insertNewline(nil)
+        check(session.buffer.source.contains("42\n  \n  text") && !session.buffer.parsed.erroneous,"Return inserts an indented newline inside a code block")
+        session.undo(); check(session.buffer.source == original,"Code Return has exact-source Undo")
+        editor.setSelectedRange(NSRange(location:range("café").location,length:4))
+        editor.setMarkedText("日本",selectedRange:NSRange(location:2,length:0),replacementRange:editor.selectedRange()); editor.unmarkText()
+        check(session.buffer.source == original.replacingOccurrences(of:"let café",with:"let 日本"),"Composition inside code preserves the surrounding source and delimiters")
+        session.undo(); check(session.buffer.source == original,"Code composition has exact-source Undo")
+        editor.setSelectedRange(NSRange(location:range("42").location,length:0)); editor.captureSelection()
+        session.switchMode(.source); session.switchMode(.write); editor.refresh()
+        editor.setSelectedRange(NSRange(location:range("After").location,length:0))
+        editor.textViewDidChangeSelection(Notification(name:NSTextView.didChangeSelectionNotification,object:editor))
+        check(editor.isAutomaticQuoteSubstitutionEnabled && editor.isAutomaticDashSubstitutionEnabled && editor.isAutomaticTextReplacementEnabled && editor.isContinuousSpellCheckingEnabled,"Returning to prose restores input preferences after Write/Source switches from code")
+        let block = session.buffer.projection.blocks.firstIndex { $0.kind == "source" }!
+        editor.toggleCode(block)
+        check(editor.textStorage!.attribute(.foregroundColor,at:session.buffer.projection.blocks[block].display.location,effectiveRange:nil) as? NSColor == session.inkColor.withAlphaComponent(0.65),"Collapsed code summaries retain their subdued presentation instead of token offsets")
+        editor.setSelectedRange(session.buffer.projection.blocks[block].display); editor.deleteBackward(nil)
+        check(!session.buffer.source.contains(raw) && session.buffer.source.contains("Before 👩🏽‍💻") && session.buffer.source.contains("After"),"Deleting a whole folded code block preserves its surrounding prose")
+        session.undo(); check(session.buffer.source == original,"Whole-block deletion restores every source byte with Undo")
+        session.switchMode(.source); editor.refresh()
+        let sourceOpening = range("#{")
+        editor.setSelectedRange(NSRange(location:sourceOpening.location,length:1)); editor.deleteForward(nil)
+        check(session.buffer.source == original.replacingOccurrences(of:"#{",with:"{"),"Source permits editing code delimiters directly")
+        session.undo(); check(session.buffer.source == original,"Source delimiter edits share exact-source Undo")
+        session.switchMode(.write); session.buffer.loadExternal(""); session.revision += 1; editor.refresh()
+    }
+
 }

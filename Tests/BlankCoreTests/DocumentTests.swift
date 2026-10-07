@@ -190,6 +190,58 @@ final class DocumentTests {
         XCTAssertFalse(b.source.contains("**"))
         b.undo(); XCTAssertEqual(b.source,"plain *bold* middle _italic_ end")
     }
+    func testCodeBlockEditing() {
+        let shell = "#{\n  let café = \"日本 👋\"\n}"
+        let original = "Before 👩🏽‍💻\n\n"+shell+"\n\nAfter // keep"
+        func block(_ model: DocumentBuffer) -> ProjectedBlock { model.projection.blocks.first { $0.kind == "source" }! }
+        for offset in [0,1,shell.utf16.count-1] {
+            let model = DocumentBuffer(original), at = block(model).display.location+offset
+            model.editWrite(NSRange(location:at,length:1),text:"")
+            XCTAssertEqual(model.source,original); XCTAssertFalse(model.canUndo)
+            model.editWrite(NSRange(location:at,length:1),text:"replacement")
+            XCTAssertEqual(model.source,original)
+            model.paste(RichFragment(source:"Text",plain:"Text",block:true),range:NSRange(location:at,length:1))
+            XCTAssertEqual(model.source,original)
+            model.split(NSRange(location:at,length:1)); XCTAssertEqual(model.source,original)
+        }
+        let model = DocumentBuffer(original), raw = block(model)
+        model.editWrite(NSRange(location:raw.display.location+1,length:0),text:"x")
+        XCTAssertEqual(model.source,original)
+        let text = (model.projection.text as NSString).range(of:"café")
+        model.editWrite(text,text:"résumé")
+        XCTAssertEqual(model.source,original.replacingOccurrences(of:"café",with:"résumé"))
+        model.undo(); XCTAssertEqual(model.source,original)
+        model.selection = EditSelection(raw.source.end-2,raw.source.end-2)
+        let at = model.projection.displayOffset(at:model.selection.focus)
+        model.split(NSRange(location:at,length:0))
+        XCTAssertTrue(model.source.contains("\"日本 👋\"\n  \n}")); XCTAssertFalse(model.parsed.erroneous)
+        model.undo(); XCTAssertEqual(model.source,original)
+        model.editWrite(block(model).display,text:"")
+        XCTAssertFalse(model.source.contains(shell)); XCTAssertTrue(model.source.contains("After // keep"))
+        model.undo(); XCTAssertEqual(model.source,original)
+        model.redo(); XCTAssertFalse(model.source.contains(shell))
+        model.undo()
+        model.editSource(NSRange(location:model.source.utf16Offset(byte:raw.source.end-1),length:1),text:"")
+        XCTAssertFalse(model.source.contains("\n}")); model.undo(); XCTAssertEqual(model.source,original)
+        // An unfinished string must not make the known closing brace editable.
+        let body = (model.projection.text as NSString).range(of:"let café = \"日本 👋\"")
+        model.editWrite(body,text:"let café = \"")
+        XCTAssertTrue(model.parsed.erroneous)
+        let incomplete = model.source
+        let closingByte = incomplete.range(of:"\n}\n")!.lowerBound
+        let close = incomplete[..<closingByte].utf8.count+1
+        let closeDisplay = model.projection.displayOffset(at:close)
+        model.editWrite(NSRange(location:closeDisplay,length:1),text:"")
+        XCTAssertEqual(model.source,incomplete)
+        let copy = model.editingCopy(); copy.editWrite(NSRange(location:closeDisplay,length:1),text:"")
+        XCTAssertEqual(copy.source,incomplete)
+        model.undo(); XCTAssertEqual(model.source,original)
+        // Offsets remain correct after moving the shell past Unicode prose.
+        model.editSource(NSRange(location:0,length:0),text:"日本 👋 ")
+        let shifted = block(model)
+        model.editWrite(NSRange(location:shifted.display.location,length:1),text:"")
+        XCTAssertTrue(model.source.hasPrefix("日本 👋 Before")); XCTAssertTrue(model.source.contains(shell))
+    }
     func testConsecutiveCodeBlocksStayTogether() {
         let b = DocumentBuffer("#set text(size: 11pt)\n#let custom = 3\n#show heading: it => it\n\nBody")
         XCTAssertEqual(b.projection.blocks.filter { $0.kind == "source" }.count,1)
@@ -592,6 +644,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Grouped history and selections",t.testHistoryGroupingAndSelections),
             ("Cross-mark deletion",t.testCrossMarkupDeletionRemainsValid),
             ("Consecutive code",t.testConsecutiveCodeBlocksStayTogether),
+            ("Code block shells, editing and history",t.testCodeBlockEditing),
             ("Section movement",t.testMoveSectionPreservesNestedSource),
             ("Section parent movement",t.testMoveSectionAcrossParents),
             ("Formatting toggles",t.testFormatTogglePreservesOtherMarks),
