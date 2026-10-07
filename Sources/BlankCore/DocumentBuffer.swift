@@ -74,6 +74,32 @@ public final class DocumentBuffer {
     }
     public private(set) var lastEditWasLocal = false
     private var collapsedSourceStarts = Set<Int>()
+    // Retain parser-established shells through temporarily incomplete code.
+    // These ranges never change source and are mapped through ordinary patches.
+    private var codeBlockShells: [ByteSpan] = []
+    private static func codeShells(_ text: String,_ parsed: ParsedSource) -> [ByteSpan] {
+        parsed.tree.descendants("CodeBlock").compactMap { node in
+            guard node.start > 0, text.bytes(ByteSpan(node.start-1,node.start+1)) == "#{",
+                  node.children.last?.kind == "RightBrace" else { return nil }
+            return ByteSpan(node.start-1,node.end)
+        }
+    }
+    public func canEditWrite(_ range: NSRange) -> Bool {
+        let range = projection.atomicRange(range)
+        let start = projection.sourceOffset(at:range.location)
+        let end = projection.sourceOffset(at:NSMaxRange(range))
+        for shell in codeBlockShells {
+            if start <= shell.start && end >= shell.end { continue }
+            if range.length == 0 {
+                if start > shell.start && start < shell.start+2 { return false }
+            } else if start < shell.start+2 && end > shell.start || start < shell.end && end > shell.end-1 { return false }
+        }
+        return true
+    }
+    public func isInCodeBlock(_ display: Int) -> Bool {
+        let byte = projection.sourceOffset(at:display)
+        return codeBlockShells.contains { byte >= $0.start+2 && byte <= $0.end-1 }
+    }
     private var referencePresentations: [ReferencePresentation] = []
     public var renderedReferences: [ReferencePresentation] { referencePresentations }
     public private(set) var presentationRevision = 0
@@ -89,13 +115,14 @@ public final class DocumentBuffer {
     public var historyBytes: Int { (undoSteps + redoSteps).reduce(0) { $0+$1.bytes } }
     public init(_ text: String = "") {
         source = text; let parsed = ParsedSource.parse(text); parsedCache = parsed; hasSyntaxErrors = parsed.erroneous; projection = Projection(source: text, parsed: parsed)
+        codeBlockShells = Self.codeShells(text,parsed)
         includes = literalIncludes(text,parsed)
         imports = literalIncludes(text,parsed,kind:"ModuleImport")
     }
     public func editingCopy() -> DocumentBuffer {
         let copy = DocumentBuffer(source)
         copy.referencePresentations = referencePresentations; copy.collapsedSourceStarts = collapsedSourceStarts
-        copy.projection = projection; copy.selection = selection
+        copy.projection = projection; copy.selection = selection; copy.codeBlockShells = codeBlockShells
         return copy
     }
     public func breakUndoGroup() { if !undoSteps.isEmpty { undoSteps[undoSteps.count-1].group = "" } }
@@ -142,10 +169,24 @@ public final class DocumentBuffer {
         assign(text,patch:patch); selection = after; return true
     }
     public func loadExternal(_ text: String) {
-        guard text != source else { return }; referencePresentations.removeAll(); collapsedSourceStarts.removeAll(); projection = Projection(source:source,parsed:parsed); undoSteps.removeAll(); redoSteps.removeAll(); assign(text)
+        guard text != source else { return }; codeBlockShells.removeAll(); referencePresentations.removeAll(); collapsedSourceStarts.removeAll(); projection = Projection(source:source,parsed:parsed); undoSteps.removeAll(); redoSteps.removeAll(); assign(text)
         selection = EditSelection(min(selection.anchor, source.utf8.count), min(selection.focus, source.utf8.count))
     }
     private func assign(_ text: String, patch: SourcePatch? = nil) {
+        if let change = patch ?? SourcePatch.difference(source,text) {
+            codeBlockShells = codeBlockShells.compactMap { shell in
+                func map(_ point: Int) -> Int {
+                    if point <= change.start { return point }
+                    if point >= change.oldSpan.end { return point+change.inserted.utf8.count-change.removed.utf8.count }
+                    return change.newSpan.end
+                }
+                let start = change.removed.isEmpty && shell.start == change.start ? change.newSpan.end : map(shell.start)
+                let mapped = ByteSpan(start,map(shell.end))
+                guard mapped.count >= 3, text.bytes(ByteSpan(mapped.start,mapped.start+2)) == "#{",
+                      text.bytes(ByteSpan(mapped.end-1,mapped.end)) == "}" else { return nil }
+                return mapped
+            }
+        }
         if let change = patch ?? SourcePatch.difference(source,text) {
             referencePresentations = referencePresentations.compactMap { reference in
                 if change.oldSpan.end <= reference.source.start { return reference.shifted(by:change.inserted.utf8.count-change.removed.utf8.count) }
@@ -183,6 +224,7 @@ public final class DocumentBuffer {
             }
         }
         source = text; let fresh = ParsedSource.parse(text); parsedCache = fresh; hasSyntaxErrors = fresh.erroneous
+        for shell in Self.codeShells(text,fresh) where !codeBlockShells.contains(shell) { codeBlockShells.append(shell) }
         includes = literalIncludes(text,fresh)
         imports = literalIncludes(text,fresh,kind:"ModuleImport")
         projection = folded(Projection(source:text,parsed:fresh,references:referencePresentations)); revision += 1
@@ -205,6 +247,7 @@ public final class DocumentBuffer {
         commit(source.replacingBytes(span, with: text), selection: EditSelection(end,end), group: text.contains("\n") ? "" : group)
     }
     public func editWrite(_ range: NSRange, text: String, raw: Bool = false, group: String = "write", styleOverride: TextStyle? = nil) {
+        guard canEditWrite(range) else { return }
         let range = projection.atomicRange(range)
         if editCell(range,group:group,operation:{ model,range in model.editWrite(range,text:text,raw:raw,group:group,styleOverride:styleOverride) }) { return }
         if range.length > 0, projection.blocks.contains(where:{ !$0.cellRanges.isEmpty && range.location <= NSMaxRange($0.display) && NSMaxRange(range) >= $0.display.location }) {
@@ -322,6 +365,12 @@ public final class DocumentBuffer {
         return nil
     }
     public func split(_ range: NSRange) {
+        guard canEditWrite(range) else { return }
+        if isInCodeBlock(range.location), range.length == 0 || isInCodeBlock(NSMaxRange(range)) {
+            let before = source.bytes(ByteSpan(0,projection.sourceOffset(at:range.location))).components(separatedBy:"\n").last ?? ""
+            let indent = String(before.prefix { $0 == " " || $0 == "\t" })
+            editWrite(range,text:"\n"+indent,raw:true,group:""); return
+        }
         if editCell(range,operation:{ $0.split($1) }) { return }
         if range.length > 0 {
             let draft = editingCopy(); draft.selection = selection
@@ -341,6 +390,7 @@ public final class DocumentBuffer {
         editWrite(NSRange(location: caret,length: 0), text: "\n", group: "")
     }
     public func lineBreak(_ range: NSRange) {
+        if isInCodeBlock(range.location) { split(range); return }
         editWrite(range,text:"\\ ",raw:true,group:"")
     }
     public func format(_ range: NSRange, italic: Bool) {
@@ -516,6 +566,7 @@ public final class DocumentBuffer {
         return RichFragment(source:pieces.joined(separator:"\n\n"),plain:plain,block:entire)
     }
     public func paste(_ fragment: RichFragment, range: NSRange) {
+        guard canEditWrite(range) else { return }
         let range = projection.atomicRange(range)
         if editCell(range,operation:{ model,range in model.editWrite(range,text:fragment.source,raw:true,group:"") }) { return }
         let index = projection.blockIndex(at:range.location), b = projection.blocks[index]
