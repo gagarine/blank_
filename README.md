@@ -14,6 +14,8 @@ Citation search filters while you type. References already cited in the project 
 
 Slash commands also appear in the macOS **Format** (paragraph styles) and **Insert** (objects) menus. **Code** creates an empty collapsible Typst source block with the caret inside. Write colors its Typst syntax, keeps Return inside the block with indentation, and protects its outer `#{` / `}` from partial edits; select the whole block to delete it. Source permits editing every delimiter. Code input disables prose substitutions and restores them when returning to prose.
 
+Cross-reference insertion offers existing literal labels from the project, including unsaved edits, and accepts custom targets. Computed and package-created labels can be entered by name. New references use explicit `#ref` calls so label names and adjacent prose remain separate.
+
 New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table selects it; a second Delete removes it, and Undo restores it. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
 ## Projects and references
