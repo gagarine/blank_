@@ -588,28 +588,34 @@ struct Recovery: Codable {
     func editObject(_ index: Int) {
         editor?.finishComposition()
         objectIndex = index
-        editSourceObject(buffer.projection.blocks[index].source,title:"Edit source")
+        let block = buffer.projection.blocks[index]
+        let title = block.kind == "image" && FigureFieldEdit(buffer.source.bytes(block.source)) != nil ? "Edit Image" : "Edit source"
+        editSourceObject(block.source,title:title)
     }
     func editSourceObject(_ span: ByteSpan,title: String) {
         editor?.finishComposition()
         objectSpan = span; objectOriginal = buffer.source.bytes(span); objectPath = active
         objectRevision = buffer.revision; objectTitle = title; sheet = .object
     }
-    func applyObjectSource(_ text: String) -> Bool {
-        guard requestEditing() else { return false }
+    func objectSnapshotIsCurrent() -> Bool {
         guard active == objectPath, buffer.revision == objectRevision,
-              buffer.source.bytes(objectSpan) == objectOriginal else {
+              buffer.source.bytes(objectSpan).utf8.elementsEqual(objectOriginal.utf8) else {
             error = "The document changed while editing. Close this editor and open the field again."; return false
         }
+        return true
+    }
+    func applyObjectSource(_ text: String) -> Bool {
+        guard requestEditing(), objectSnapshotIsCurrent() else { return false }
+        if text.utf8.elementsEqual(objectOriginal.utf8) { sheet = nil; return true }
         buffer.breakUndoGroup()
         buffer.commit(buffer.source.replacingBytes(objectSpan,with:text),selection:EditSelection(objectSpan.start,objectSpan.start+text.utf8.count))
         changed(); sheet = nil; return true
     }
     func importImage(_ url: URL) throws -> String {
         let data = try Data(contentsOf:url)
-        let path = "assets/\(UUID().uuidString.prefix(8))-\(url.lastPathComponent)"
-        assets[path] = data
+        let path = "assets/\(UUID().uuidString)-\(url.lastPathComponent)"
         if let root { try Self.writeDependency(data,path:path,root:root) }
+        assets[path] = data
         return relativeAssetPath(path)
     }
 }

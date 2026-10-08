@@ -2,6 +2,74 @@ import Foundation
 import BlankCore
 
 final class DocumentTests {
+    func testFigureFieldEdits() {
+        let source = "#figure( /* keep */ image(\"assets/café 日本.svg\", fit: \"contain\", width: /*w*/ 85%, alt: \"A \\\"quote\\\"\"), caption: /*c*/ [Hello \\*world\\*], placement: top, supplement: [Diagram]) <fig:one> // keep tail"
+        let edit = FigureFieldEdit(source)!
+        XCTAssertEqual(edit.path,"assets/café 日本.svg"); XCTAssertEqual(edit.caption,"Hello *world*"); XCTAssertEqual(edit.alt,"A \"quote\""); XCTAssertEqual(edit.width,85)
+        XCTAssertEqual(Array(edit.applying(path:edit.path,caption:edit.caption,alt:edit.alt,width:edit.width).utf8),Array(source.utf8))
+        XCTAssertEqual(edit.applying(path:"new.svg",caption:edit.caption,alt:edit.alt,width:85),source.replacingOccurrences(of:typstStringLiteral(edit.path),with:typstStringLiteral("new.svg")))
+        XCTAssertEqual(edit.applying(path:edit.path,caption:edit.caption,alt:"New alternative",width:85),source.replacingOccurrences(of:typstStringLiteral(edit.alt),with:typstStringLiteral("New alternative")))
+        XCTAssertEqual(edit.applying(path:edit.path,caption:edit.caption,alt:edit.alt,width:40),source.replacingOccurrences(of:"85%",with:"40%"))
+        let nextPath = "assets/日本/new \"image\".svg", nextCaption = "Café 👩🏽‍💻 #@[]*_\\", nextAlt = "é slash / emoji 👋"
+        let changed = edit.applying(path:nextPath,caption:nextCaption,alt:nextAlt,width:40)
+        let expected = source.replacingOccurrences(of:typstStringLiteral(edit.path),with:typstStringLiteral(nextPath))
+            .replacingOccurrences(of:"85%",with:"40%")
+            .replacingOccurrences(of:typstStringLiteral(edit.alt),with:typstStringLiteral(nextAlt))
+            .replacingOccurrences(of:"[Hello \\*world\\*]",with:"["+escapeTypst(nextCaption)+"]")
+        XCTAssertEqual(Array(changed.utf8),Array(expected.utf8)); XCTAssertFalse(ParsedSource.parse(changed).erroneous)
+        let reparsed = FigureFieldEdit(changed)!
+        XCTAssertEqual(reparsed.path,nextPath); XCTAssertEqual(reparsed.caption,nextCaption); XCTAssertEqual(reparsed.alt,nextAlt); XCTAssertEqual(reparsed.width,40)
+        XCTAssertEqual(edit.applying(path:edit.path,caption:"Changed",alt:edit.alt,width:85),source.replacingOccurrences(of:"[Hello \\*world\\*]",with:"[Changed]"))
+        // Canonically equivalent strings still require exact-byte field changes.
+        let decomposed = "#figure(image(\"café.svg\", width: 85%, alt: \"é\"), caption: [é])"
+        let unicode = FigureFieldEdit(decomposed)!
+        XCTAssertEqual(Array(unicode.applying(path:"café.svg",caption:"é",alt:"é",width:85).utf8),Array("#figure(image(\"café.svg\", width: 85%, alt: \"é\"), caption: [é])".utf8))
+        for (path,caption,alt) in [("café.svg",unicode.caption,unicode.alt),(unicode.path,"é",unicode.alt),(unicode.path,unicode.caption,"é")] {
+            let history = DocumentBuffer(decomposed), selection = EditSelection(2,7)
+            history.selection = selection
+            let normalized = unicode.applying(path:path,caption:caption,alt:alt,width:85)
+            let after = EditSelection(3,normalized.utf8.count), revision = history.revision
+            XCTAssertTrue(history.commit(normalized,selection:after))
+            XCTAssertTrue(history.revision > revision && history.canUndo)
+            XCTAssertEqual(Array(history.source.utf8),Array(normalized.utf8)); XCTAssertEqual(history.selection,after)
+            history.undo(); XCTAssertEqual(Array(history.source.utf8),Array(decomposed.utf8)); XCTAssertEqual(history.selection,selection)
+            history.redo(); XCTAssertEqual(Array(history.source.utf8),Array(normalized.utf8)); XCTAssertEqual(history.selection,after)
+            let unchangedRevision = history.revision
+            XCTAssertFalse(history.commit(normalized,selection:after)); XCTAssertEqual(history.revision,unchangedRevision)
+        }
+        for bare in ["#figure(image(\"a.svg\", width: 85%))","#figure(image(\"a.svg\", width: 85%, /* keep */), /* keep */)"] {
+            let missing = FigureFieldEdit(bare)!
+            XCTAssertEqual(missing.applying(path:missing.path,caption:"",alt:"",width:85),bare)
+            let added = missing.applying(path:missing.path,caption:"Caption",alt:"Alternative",width:85)
+            XCTAssertFalse(ParsedSource.parse(added).erroneous)
+            XCTAssertEqual(FigureFieldEdit(added)!.caption,"Caption"); XCTAssertEqual(FigureFieldEdit(added)!.alt,"Alternative")
+            XCTAssertEqual(added.components(separatedBy:"/* keep */").count,bare.components(separatedBy:"/* keep */").count)
+        }
+        for unsupported in [
+            "#image(\"a.svg\", width: 85%)", "#figure(image(path, width: 85%))",
+            "#figure(image(\"a.svg\"))", "#figure(image(\"a.svg\", width: auto))",
+            "#figure(image(\"a.svg\", width: 85.5%))", "#figure(image(\"a.svg\", width: 101%))",
+            "#figure(image(\"a.svg\", width: 85%, alt: text))",
+            "#figure(image(\"a.svg\", width: 85%), caption: [*Rich*])",
+            "#figure(image(\"a.svg\", width: 85%), caption: [A /* keep */ caption])",
+            "#figure(image(\"a.svg\", width: 85%), caption: [\\u{41}])",
+            "#figure(image(\"a.svg\", width: 85%), caption: [A\n\nparagraph])",
+            "#figure(image(\"a.svg\", width: 85%, width: 40%))",
+            "#figure(image(\"a.svg\", width: 85%), caption: [A], caption: [B])",
+            "#figure(image(\"a.svg\", width: 85%, ..options))",
+            "#figure(image(\"a.svg\", width: 85%), ..options)",
+            "#figure([#image(\"a.svg\", width: 85%)])",
+            "#figure(image(\"a.svg\", width: 85%), image(\"b.svg\"))",
+            "#figure(custom.image(\"a.svg\", width: 85%))", "#figure(image(\"a.svg\", width: 85%)"
+        ] { XCTAssertTrue(FigureFieldEdit(unsupported) == nil) }
+        let document = "// before café 👩🏽‍💻\n\n"+source+"\n\nAfter 日本."
+        let model = DocumentBuffer(document), start = "// before café 👩🏽‍💻\n\n".utf8.count
+        let originalSelection = EditSelection(start+2,start+8); model.selection = originalSelection
+        model.commit(document.replacingBytes(ByteSpan(start,start+source.utf8.count),with:changed),selection:EditSelection(start,start+changed.utf8.count))
+        model.undo(); XCTAssertEqual(Array(model.source.utf8),Array(document.utf8)); XCTAssertEqual(model.selection,originalSelection)
+        model.redo(); XCTAssertEqual(Array(model.source.utf8),Array(document.replacingBytes(ByteSpan(start,start+source.utf8.count),with:changed).utf8))
+    }
+
     func testLiteralMarkupLabels() {
         let source = """
         = Café <sec:cafe\u{301}>
@@ -657,6 +725,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
         setbuf(stdout,nil)
         let t = DocumentTests()
         let tests: [(String,()->Void)] = [
+            ("Literal figure fields preserve source",t.testFigureFieldEdits),
             ("Unicode source mapping",t.testUnicodeSourceOffsets),
             ("Literal markup labels",t.testLiteralMarkupLabels),
             ("Source folding preserves bytes and offsets",t.testSourceFoldingPreservesBytesAndOffsets),

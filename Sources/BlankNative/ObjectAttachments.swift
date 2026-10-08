@@ -50,6 +50,8 @@ final class FigureBlockView: NSView {
         setAccessibilityLabel("Figure: "+text)
     }
     required init?(coder: NSCoder) { fatalError() }
+    // Image and caption children are display-only; the entire figure opens its editor.
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
     override func mouseDown(with event: NSEvent) { if event.clickCount >= 2 { editor?.session?.editObject(index) } }
 }
 func imagePath(_ raw: String) -> String? {

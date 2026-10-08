@@ -955,7 +955,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 let fold = BlockMenuItem(title:block.collapsed ? "Expand code" : "Collapse code",action:#selector(blockMenuAction(_:)),keyEquivalent:"")
                 fold.target = self; fold.blockIndex = index; fold.blockAction = "fold"; menu.addItem(fold)
             }
-            let edit = BlockMenuItem(title:"Edit \(block.kind == "table" ? "table" : "source")…",action:#selector(blockMenuAction(_:)),keyEquivalent:""); edit.target = self; edit.blockIndex = index; edit.blockAction = "edit"; menu.addItem(edit)
+            let edit = BlockMenuItem(title:"Edit \(block.kind == "table" ? "table" : block.kind == "image" && FigureFieldEdit(session.buffer.source.bytes(block.source)) != nil ? "image" : "source")…",action:#selector(blockMenuAction(_:)),keyEquivalent:""); edit.target = self; edit.blockIndex = index; edit.blockAction = "edit"; menu.addItem(edit)
         }
         for title in ["Duplicate","Delete"] {
             let item = BlockMenuItem(title:title,action:#selector(blockMenuAction(_:)),keyEquivalent:""); item.target = self; item.blockIndex = index; item.blockAction = title.lowercased(); menu.addItem(item)
