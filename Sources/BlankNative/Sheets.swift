@@ -323,13 +323,16 @@ func safeLabel(_ text: String) -> String { text.filter { $0.isLetter || $0.isNum
 struct ObjectSheet: View {
     @ObservedObject var session: DocumentSession
     @NativeState var raw = ""
+    @NativeState private var editingSource = false
     var body: some View {
         if session.objectTitle == "Edit Citation", let edit = CitationFieldEdit(session.objectOriginal) {
             CitationFieldEditor(session:session,edit:edit)
+        } else if !editingSource, session.objectTitle == "Edit Image", let edit = FigureFieldEdit(session.objectOriginal) {
+            FigureFieldEditor(session:session,edit:edit,editSource:{ editingSource = true })
         } else { sourceEditor }
     }
     var sourceEditor: some View {
-        SheetFrame(title:session.objectTitle,width:620,dismiss:{ session.sheet = nil }) {
+        SheetFrame(title:editingSource ? "Edit source" : session.objectTitle,width:620,dismiss:{ session.sheet = nil }) {
             TextEditor(text:$raw).font(.system(size:13,design:.monospaced)).frame(height:260).border(Color.primary.opacity(0.1))
             Text("Every character is preserved. Preview shows the typeset result.").font(.system(size:11)).foregroundStyle(.secondary)
             HStack { Spacer(); Button("Cancel") { session.sheet = nil }.keyboardShortcut(.cancelAction); Button("Apply") { apply() }.keyboardShortcut(.defaultAction) }
