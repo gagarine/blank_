@@ -20,6 +20,8 @@ Write gives literal labels such as `<intro>` a subtle gray background. They stay
 
 Image figures with literal paths, plain captions and integer widths from 5–100% offer the insertion controls when double-clicked or edited through their block menu. Apply changes only the edited values; comments and custom options stay intact. Choose image stages a replacement until Apply, and Undo retains both image assets. **Edit source…** remains available; computed paths, rich captions and unsupported widths open the exact-source editor. Width affects the typeset PDF; Write retains its existing figure sizing.
 
+Every Write block handle offers **Edit source…**, including prose, native tables and folded code. The sheet edits that block’s exact Typst source, preserving surrounding source and sharing Write/Source Undo. Formatting, table controls and **Edit image…** remain available.
+
 New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table selects it; a second Delete removes it, and Undo restores it. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
 ## Projects and references
