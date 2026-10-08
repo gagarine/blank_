@@ -28,6 +28,7 @@ import BlankCore
         check(controller.searchItem != nil && controller.shareButton != nil,"Search and Share use native toolbar controls")
         check(controller.sidebarItem?.isBordered == true && controller.modeItem?.isBordered == true,"Interactive toolbar controls opt into the system glass backing")
         NativeFigureAcceptance.run(controller:controller)
+        NativeLabelAcceptance.run(controller:controller)
         NativeReferenceAcceptance.run(controller:controller)
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)

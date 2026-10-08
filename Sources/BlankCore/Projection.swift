@@ -96,6 +96,8 @@ public struct ProjectedBlock {
     public var cellProjections: [Projection] = []
     public var cellRanges: [NSRange] = []
     public var collapsed = false
+    // Presentation metadata from the parser, retained by localized reparses.
+    public var labelSpans: [ByteSpan] = []
     public var columns: Int = 0
     public var text: String { inlines.flatMap(\.runs).map(\.text).joined() }
     public func shifted(by delta: Int) -> ProjectedBlock {
@@ -103,6 +105,7 @@ public struct ProjectedBlock {
         copy.source = ByteSpan(source.start+delta,source.end+delta)
         copy.body = ByteSpan(body.start+delta,body.end+delta)
         copy.inlines = inlines.map { $0.shifted(by:delta) }
+        copy.labelSpans = labelSpans.map { ByteSpan($0.start+delta,$0.end+delta) }
         copy.tableCells = tableCells.map { ByteSpan($0.start+delta,$0.end+delta) }
         return copy
     }
@@ -268,6 +271,13 @@ public struct Projection {
         else if source.hasSuffix("\n\n") {
             let end = source.utf8.count
             result.append(ProjectedBlock(kind: "paragraph", source: ByteSpan(end, end), body: ByteSpan(end, end), inlines: []))
+        }
+        var labelBlock = 0
+        for label in parsed.markupLabelSpans {
+            while labelBlock < result.count && result[labelBlock].source.end <= label.start { labelBlock += 1 }
+            if labelBlock < result.count, result[labelBlock].source.start <= label.start, label.end <= result[labelBlock].source.end {
+                result[labelBlock].labelSpans.append(label)
+            }
         }
         self.init(blocks:result)
     }
