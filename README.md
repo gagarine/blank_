@@ -16,6 +16,8 @@ Slash commands also appear in the macOS **Format** (paragraph styles) and **Inse
 
 Cross-reference insertion offers existing literal labels from the project, including unsaved edits, and accepts custom targets. Computed and package-created labels can be entered by name. New references use explicit `#ref` calls so label names and adjacent prose remain separate.
 
+Image figures with literal paths, plain captions and integer widths from 5–100% offer the insertion controls when double-clicked or edited through their block menu. Apply changes only the edited values; comments and custom options stay intact. Choose image stages a replacement until Apply, and Undo retains both image assets. **Edit source…** remains available; computed paths, rich captions and unsupported widths open the exact-source editor. Width affects the typeset PDF; Write retains its existing figure sizing.
+
 New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table selects it; a second Delete removes it, and Undo restores it. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
 ## Projects and references
@@ -60,7 +62,7 @@ The Cargo workspace shares a lockfile/cache for the in-process parser and separa
 
 ## Remaining work
 
-- Rich controls for editing existing links, footnotes, grouped/complex citations and figures; PDF-page selection and broader image-format validation.
+- Rich controls for editing existing links, footnotes, grouped/complex citations and custom figures; PDF-page selection and broader image-format validation.
 - Zotero group discovery and citation-picker keyboard navigation. Custom citation show rules and note-style footnote presentation in Write remain unverified.
 - Continuous editing across included files and repeated includes.
 - Settings synchronization, disjoint external-change merging and broader recovery checks.

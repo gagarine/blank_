@@ -6,7 +6,7 @@ import Combine
 @main enum BlankMain {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--measure") { ResourceMetrics.run(); return }
-        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") {
+        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--figure-self-test") {
             setbuf(stdout,nil)
         }
         let app = NSApplication.shared
@@ -51,19 +51,21 @@ import Combine
         // Finish AppKit's launch/activation-policy transition before requesting
         // activation. The complete menu is already attached at this point.
         DispatchQueue.main.async { NSApp.activate() }
+        if CommandLine.arguments.contains("--figure-ui-test"), let controller = controllers.first { NativeFigureAcceptance.showFixture(controller:controller) }
         if CommandLine.arguments.contains("--reference-ui-test"), let controller = controllers.first {
             NativeReferenceAcceptance.showFixture(controller:controller)
         }
         if CommandLine.arguments.contains("--citation-ui-test"), let controller = controllers.first {
             NativeCitationAcceptance.showFixture(controller:controller)
         }
-        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") {
+        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--figure-self-test") {
             // Run outside a main-queue block: the acceptance suite pumps the
             // run loop while waiting for background compiler/file callbacks.
             RunLoop.main.perform {
                 MainActor.assumeIsolated {
                     guard let controller = self.controllers.first else { fatalError("Launch did not open an editor") }
-                    if CommandLine.arguments.contains("--document-self-test") { NativeDocumentAcceptance.run() }
+                    if CommandLine.arguments.contains("--figure-self-test") { NativeFigureAcceptance.run(controller:controller) }
+                    else if CommandLine.arguments.contains("--document-self-test") { NativeDocumentAcceptance.run() }
                     else { NativeAcceptance.run(controller:controller) }
                     exit(0)
                 }
