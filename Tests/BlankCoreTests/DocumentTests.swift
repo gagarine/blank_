@@ -2,6 +2,24 @@ import Foundation
 import BlankCore
 
 final class DocumentTests {
+    func testLabelPresentationSpans() {
+        let source = "Café 👩🏽‍💻 <first>\n\n日本 <later>\n\n#table(columns: 1, [Cell <cell>], [Other])\n\n#let value = <code-value>\n// <comment>\n`<raw>`"
+        let buffer = DocumentBuffer(source)
+        func labels() -> [String] { buffer.projection.blocks.flatMap(\.labelSpans).map { buffer.source.bytes($0) } }
+        XCTAssertEqual(labels(),["<first>","<later>","<cell>"])
+        XCTAssertEqual(buffer.literalLabels,["first","later","cell"])
+        let originalSelection = EditSelection(0,0); buffer.selection = originalSelection
+        buffer.editWrite(NSRange(location:0,length:0),text:"日本 👋 ",group:"")
+        XCTAssertTrue(buffer.lastEditWasLocal)
+        XCTAssertEqual(labels(),["<first>","<later>","<cell>"])
+        let full = Projection(source:buffer.source,parsed:ParsedSource.parse(buffer.source))
+        XCTAssertEqual(buffer.projection.blocks.flatMap(\.labelSpans),full.blocks.flatMap(\.labelSpans))
+        let table = buffer.projection.blocks.first { $0.kind == "table" }!, cellSource = buffer.source.bytes(table.tableCells[0])
+        XCTAssertEqual(table.cellProjections[0].blocks.flatMap(\.labelSpans).map { cellSource.bytes($0) },["<cell>"])
+        buffer.undo(); XCTAssertEqual(Array(buffer.source.utf8),Array(source.utf8)); XCTAssertEqual(buffer.selection,originalSelection)
+        XCTAssertEqual(labels(),["<first>","<later>","<cell>"])
+        buffer.redo(); XCTAssertEqual(labels(),["<first>","<later>","<cell>"])
+    }
     func testFigureFieldEdits() {
         let source = "#figure( /* keep */ image(\"assets/café 日本.svg\", fit: \"contain\", width: /*w*/ 85%, alt: \"A \\\"quote\\\"\"), caption: /*c*/ [Hello \\*world\\*], placement: top, supplement: [Diagram]) <fig:one> // keep tail"
         let edit = FigureFieldEdit(source)!
@@ -725,6 +743,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
         setbuf(stdout,nil)
         let t = DocumentTests()
         let tests: [(String,()->Void)] = [
+            ("Label presentation spans survive local Unicode edits",t.testLabelPresentationSpans),
             ("Literal figure fields preserve source",t.testFigureFieldEdits),
             ("Unicode source mapping",t.testUnicodeSourceOffsets),
             ("Literal markup labels",t.testLiteralMarkupLabels),

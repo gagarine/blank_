@@ -136,13 +136,14 @@ struct SearchResultGroup: Identifiable {
         }
     }
     func clearHighlights() {
-        guard highlightsApplied, let session else { return }
-        highlightsApplied = false
-        if let editor = session.editor {
+        guard let session else { return }
+        if highlightsApplied, let editor = session.editor {
             let all = NSRange(location:0,length:editor.string.utf16.count)
             editor.layoutManager?.removeTemporaryAttribute(.backgroundColor,forCharacterRange:all)
             editor.layoutManager?.removeTemporaryAttribute(.foregroundColor,forCharacterRange:all)
         }
+        highlightsApplied = false
+        session.editor?.applyLabelHighlights()
         session.pdfView?.highlightedSelections = nil
     }
     func applyHighlights() {

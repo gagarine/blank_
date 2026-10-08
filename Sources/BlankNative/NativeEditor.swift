@@ -144,6 +144,27 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             }
         }
     }
+    private weak var labelBuffer: DocumentBuffer?
+    // Temporary layout decoration stays out of RTF and source clipboard data.
+    // Find overlays yellow after this baseline has been restored.
+    func applyLabelHighlights() {
+        guard let manager = layoutManager else { return }
+        manager.removeTemporaryAttribute(.backgroundColor,forCharacterRange:NSRange(location:0,length:(string as NSString).length))
+        guard let session, session.mode == .write, !composing, !hasMarkedText(),
+              labelBuffer === session.buffer, lastMode == .write, lastPath == session.active,
+              lastRevision == session.buffer.revision, lastPresentationRevision == session.buffer.presentationRevision else { return }
+        for block in session.buffer.projection.blocks where !block.labelSpans.isEmpty && (block.editable || !block.cellRanges.isEmpty) {
+            var at = block.display.location
+            for run in block.inlines.flatMap(\.runs) {
+                let range = NSRange(location:at,length:run.text.utf16.count); at += range.length
+                guard run.literal, !run.style.code, block.labelSpans.contains(run.source),
+                      run.text.hasPrefix("<"), run.text.hasSuffix(">"), range.length > 0,
+                      NSMaxRange(range) <= (string as NSString).length,
+                      (string as NSString).substring(with:range).utf8.elementsEqual(run.text.utf8) else { continue }
+                manager.addTemporaryAttribute(.backgroundColor,value:NSColor.quaternaryLabelColor,forCharacterRange:range)
+            }
+        }
+    }
     func inlineField(at point: NSPoint) -> (range: NSRange,source: ByteSpan)? {
         guard let manager = layoutManager, let container = textContainer else { return nil }
         ensureNativeLayout()
@@ -411,6 +432,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         enclosingScrollView?.backgroundColor = backgroundColor
         lastPresentationRevision = session.buffer.presentationRevision
         lastRevision = session.buffer.revision; lastMode = session.mode; lastPath = session.active; lastAppearance = appearance
+        labelBuffer = session.buffer
         setAccessibilityLabel("\(session.mode.rawValue) editor")
         session.searchController.applyHighlights()
         needsDisplay = true
