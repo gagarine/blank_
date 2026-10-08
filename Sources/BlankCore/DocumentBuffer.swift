@@ -24,7 +24,8 @@ public struct SourcePatch: Codable, Equatable {
     public var newSpan: ByteSpan { ByteSpan(start, start + inserted.utf8.count) }
     public var inverse: SourcePatch { SourcePatch(start: start, removed: inserted, inserted: removed) }
     public static func difference(_ old: String, _ new: String) -> SourcePatch? {
-        guard old != new else { return nil }
+        // Source history tracks bytes, including canonically equivalent Unicode.
+        guard !old.utf8.elementsEqual(new.utf8) else { return nil }
         let a = Array(old.utf8), b = Array(new.utf8)
         var prefix = 0
         while prefix < min(a.count,b.count) && a[prefix] == b[prefix] { prefix += 1 }
