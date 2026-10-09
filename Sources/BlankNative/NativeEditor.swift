@@ -960,8 +960,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         else { y = (blockRect(target-1).maxY+blockRect(target).minY)/2 }
         return NSRect(x:textContainerInset.width,y:y-1,width:max(80,bounds.width-textContainerInset.width*2),height:2)
     }
-    func showBlockMenu(_ index: Int,event: NSEvent) {
-        guard let session else { return }
+    func makeBlockMenu(_ index: Int) -> NSMenu {
+        guard let session, session.buffer.projection.blocks.indices.contains(index) else { return NSMenu() }
         let block = session.buffer.projection.blocks[index]
         let menu = NSMenu()
         if block.editable {
@@ -977,25 +977,48 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 let fold = BlockMenuItem(title:block.collapsed ? "Expand code" : "Collapse code",action:#selector(blockMenuAction(_:)),keyEquivalent:"")
                 fold.target = self; fold.blockIndex = index; fold.blockAction = "fold"; menu.addItem(fold)
             }
-            let edit = BlockMenuItem(title:"Edit \(block.kind == "table" ? "table" : block.kind == "image" && FigureFieldEdit(session.buffer.source.bytes(block.source)) != nil ? "image" : "source")…",action:#selector(blockMenuAction(_:)),keyEquivalent:""); edit.target = self; edit.blockIndex = index; edit.blockAction = "edit"; menu.addItem(edit)
+            if block.kind == "table" || block.kind == "image" && FigureFieldEdit(session.buffer.source.bytes(block.source)) != nil {
+                let edit = BlockMenuItem(title:"Edit \(block.kind == "table" ? "table" : "image")…",action:#selector(blockMenuAction(_:)),keyEquivalent:"")
+                edit.target = self; edit.blockIndex = index; edit.blockAction = "edit"; menu.addItem(edit)
+            }
         }
+        let source = BlockMenuItem(title:"Edit source…",action:#selector(blockMenuAction(_:)),keyEquivalent:"")
+        source.target = self; source.blockIndex = index; source.blockAction = "source"; menu.addItem(source)
         for title in ["Duplicate","Delete"] {
             let item = BlockMenuItem(title:title,action:#selector(blockMenuAction(_:)),keyEquivalent:""); item.target = self; item.blockIndex = index; item.blockAction = title.lowercased(); menu.addItem(item)
         }
+        return menu
+    }
+    func showBlockMenu(_ index: Int,event: NSEvent) {
+        guard let session else { return }
+        let path = session.active, revision = session.buffer.revision
+        finishComposition()
+        // The caller chose this index before composition committed. A changed
+        // projection needs a fresh handle click rather than reusing that index.
+        guard session.mode == .write, session.active == path, session.buffer.revision == revision,
+              session.buffer.projection.blocks.indices.contains(index) else { blockPopover?.close(); return }
+        let block = session.buffer.projection.blocks[index]
+        let menu = makeBlockMenu(index)
         dismissSlash(); blockPopover?.close()
         blockMenuRevision = session.buffer.revision; blockMenuPath = session.active
         let popover = NSPopover(); popover.behavior = .transient; popover.animates = false
         blockPopover = popover
         let content = BlockActionMenu(items:BlockAction.items(from:menu),choose:{ [weak self] item in
-            guard let self, let session = self.session,
-                  session.active == self.blockMenuPath, session.buffer.revision == self.blockMenuRevision else { self?.blockPopover?.close(); return }
-            self.blockPopover?.close(); self.window?.makeFirstResponder(self)
-            if let action = item.action { NSApp.sendAction(action,to:item.target,from:item) }
+            self?.chooseBlockMenuItem(item,path:path,revision:revision)
         },resize:{ [weak popover] size in popover?.contentSize = size })
         popover.contentViewController = NSHostingController(rootView:content)
         popover.contentSize = content.size
         let anchor = tableBlockHandleRect(index) ?? NSRect(x:textContainerInset.width-38,y:rectFor(block.display.location).minY,width:32,height:28)
         popover.show(relativeTo:anchor,of:self,preferredEdge:.maxX)
+    }
+    func chooseBlockMenuItem(_ item: NSMenuItem,path: String,revision: Int) {
+        finishComposition()
+        guard let session, session.mode == .write, session.active == path,
+              session.buffer.revision == revision else { blockPopover?.close(); return }
+        let index = (item as? BlockMenuItem)?.blockIndex ?? (item as? TableMenuItem)?.blockIndex
+        if let index, !session.buffer.projection.blocks.indices.contains(index) { blockPopover?.close(); return }
+        blockPopover?.close(); window?.makeFirstResponder(self)
+        if let action = item.action { NSApp.sendAction(action,to:item.target,from:item) }
     }
     @objc func blockMenuAction(_ item: BlockMenuItem) {
         guard let session else { return }
@@ -1003,6 +1026,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if let command = item.command { session.buffer.setKind(item.blockIndex,kind:command.kind,level:command.level) }
         else if item.blockAction == "fold" { toggleCode(item.blockIndex); return }
         else if item.blockAction == "edit" { session.editObject(item.blockIndex); return }
+        else if item.blockAction == "source" {
+            session.editSourceObject(session.buffer.projection.blocks[item.blockIndex].source,title:"Edit source"); return
+        }
         else { session.buffer.blockAction(item.blockIndex,action:item.blockAction) }
         session.changed()
     }

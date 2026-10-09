@@ -28,6 +28,7 @@ import BlankCore
         check(controller.searchItem != nil && controller.shareButton != nil,"Search and Share use native toolbar controls")
         check(controller.sidebarItem?.isBordered == true && controller.modeItem?.isBordered == true,"Interactive toolbar controls opt into the system glass backing")
         NativeFigureAcceptance.run(controller:controller)
+        NativeBlockSourceAcceptance.run(controller:controller)
         NativeLabelAcceptance.run(controller:controller)
         NativeReferenceAcceptance.run(controller:controller)
         NativeSidebarAcceptance.run(controller:controller)
@@ -380,7 +381,7 @@ import BlankCore
         editor.showBlockMenu(0,event:pointer(.leftMouseUp,handle))
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let handleMenu = (editor.blockPopover?.contentViewController as? NSHostingController<BlockActionMenu>)?.rootView
-        check(editor.blockPopover?.isShown == true && handleMenu?.items.map { $0.item.title } == ["Turn into","Duplicate","Delete"],"Block handle uses the compact app popover without injected text-context actions")
+        check(editor.blockPopover?.isShown == true && handleMenu?.items.map { $0.item.title } == ["Turn into","Edit source…","Duplicate","Delete"],"Block handle uses the compact app popover with source access and no injected text-context actions")
         check(handleMenu?.items.first?.children.allSatisfy { ($0.item as? BlockMenuItem)?.command?.kind != "paragraph" } == true,"Turn into omits the current block type")
         if let content = editor.blockPopover?.contentViewController?.view {
             func menuButtons(_ view: NSView) -> [MenuActionButton] {
