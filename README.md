@@ -4,6 +4,8 @@ A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI a
 
 Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3** for Write / Source / Preview.
 
+For a guided tour, open **Help → Tutorial**.
+
 ![blank_ with a garden photograph, heading outline, inline formatting and color palettes](Resources/Screenshots/editor.jpg)
 
 ## Download
@@ -15,8 +17,6 @@ Releases are not notarized. If macOS blocks blank_, click **Done**, then **Syste
 ## Writing
 
 **Write** lets you edit formatted text, **Source** gives you direct access to the underlying Typst, and **Preview** shows the typeset PDF. These are three views of the same document, so you can move between drafting, adjusting the source and checking the result.
-
-Try [Field notes](examples/Field%20notes.typ) or **Help → Tutorial**.
 
 ## Projects and references
 
