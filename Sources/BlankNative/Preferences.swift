@@ -3,6 +3,10 @@ import CoreText
 import SwiftUI
 
 enum EditorPreferences {
+    static var reopensUnsavedDocuments: Bool {
+        get { UserDefaults.standard.object(forKey:"reopenUnsavedDocuments") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue,forKey:"reopenUnsavedDocuments") }
+    }
     static var installedEditorFamilies: [String] {
         var families = Set(NSFontManager.shared.availableFontFamilies)
         // macOS can omit installed supplemental faces from the picker list.

@@ -22,4 +22,12 @@ codesign --verify --deep --strict "$relocated"
 cd "$portable"
 env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH python3 "$repo/scripts/compiler-check.py" "$relocated"
 BLANK_DATA_DIR="$portable/data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --self-test
+# Lifecycle processes share one identity and data directory, independently of
+# editing fixtures whose hard-exit snapshots belong to a different data root.
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier local.blank.acceptance.drafts.$(uuidgen)" "$relocated/Contents/Info.plist"
+codesign --force --deep --sign - "$relocated"
+codesign --verify --deep --strict "$relocated"
+BLANK_DATA_DIR="$portable/draft-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --draft-lifecycle-prepare
+BLANK_DATA_DIR="$portable/draft-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --draft-lifecycle-verify
+BLANK_DATA_DIR="$portable/draft-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --draft-lifecycle-disabled-verify
 printf 'PASS: relocated app bundle (in-process parser and separate compiler)\n'

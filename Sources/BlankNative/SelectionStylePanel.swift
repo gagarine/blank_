@@ -32,65 +32,127 @@ final class SelectionStylePanel: NSPopover {
         return view
     }
 }
+private enum SelectionPage { case bar, blocks, colors, more }
 struct SelectionStyleBar: View {
     let target: SelectionPanelTarget
     var editor: NativeTextView? { target.editor }
     let style: TextStyle
     let block: ProjectedBlock
     let inTable: Bool
+    var resize: (NSSize)->Void = { _ in }
+    @NativeState private var page = SelectionPage.bar
+    var size: NSSize {
+        switch page {
+        case .bar: return NSSize(width:inTable ? 330 : 450,height:44)
+        case .colors: return NSSize(width:280,height:294)
+        case .more: return NSSize(width:240,height:326)
+        case .blocks: return NSSize(width:240,height:CGFloat(SlashCommand.blockStyles.count)*34+52)
+        }
+    }
     var body: some View {
+        Group {
+            switch page {
+            case .bar: bar
+            case .colors: colors
+            case .more: more
+            case .blocks: blocks
+            }
+        }.frame(width:size.width,height:size.height)
+            .font(.system(size:12)).background(.background)
+            .onChange(of:page) { _,_ in resize(size) }
+    }
+    var bar: some View {
         HStack(spacing:5) {
             if !inTable {
-                Menu {
-                    ForEach(SlashCommand.blockStyles) { command in
-                        Button { editor?.selectionBlockStyle(command) } label: {
-                            Label(command.label,systemImage:command.kind == block.kind && command.level == block.level ? "checkmark" : command.systemSymbol)
-                        }
-                    }
-                } label: { Text(block.kind == "heading" ? "Heading \(block.level)" : SlashCommand.blockStyles.first { $0.kind == block.kind }?.label ?? "Text").lineLimit(1) }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width:110).modifier(SelectionMenuFace(width:110))
+                Button { page = .blocks } label: { Text(blockTitle).lineLimit(1) }
+                    .buttonStyle(.plain).modifier(SelectionMenuFace(width:110)).accessibilityLabel("Block style: "+blockTitle)
                 Divider().frame(height:22)
             }
             mark("Bold","bold",.bold); mark("Italic","italic",.italic)
             mark("Underline","underline",.underline); mark("Strikethrough","strikethrough",.strikethrough)
             mark("Inline code","chevron.left.forwardslash.chevron.right",.code)
             Button { editor?.selectionLink() } label: { Image(systemName:"link") }.help("Link…").accessibilityLabel("Link").disabled(block.kind == "raw")
-            Menu {
-                Menu("Text Color") {
-                    Button("Default") { editor?.selectionAttribute("color",nil) }
-                    ForEach(inlinePalette,id:\.0) { name,color,_ in
-                        Button { editor?.selectionAttribute("color",color) } label: { Label { Text(name) } icon: { Image(systemName:"circle.fill").foregroundStyle(Color(nsColor:nativeHexColor(color)!)) } }
-                    }
+            Button { page = .colors } label: { Image(systemName:"textformat.alt").foregroundStyle(Color(nsColor:style.color.flatMap(nativeHexColor) ?? .labelColor)) }
+                .help("Text and highlight color").accessibilityLabel("Colors").disabled(block.kind == "raw")
+            Button { page = .more } label: { Image(systemName:"ellipsis") }.help("Superscript, subscript, and alignment").accessibilityLabel("More styles")
+        }.buttonStyle(SelectionHoverButtonStyle()).controlSize(.small).padding(6)
+    }
+    var blockTitle: String { block.kind == "heading" ? "Heading \(block.level)" : SlashCommand.blockStyles.first { $0.kind == block.kind }?.label ?? "Text" }
+    func header(_ title: String) -> some View {
+        HStack {
+            Button { page = .bar } label: { Label("Back",systemImage:"chevron.left") }
+                .buttonStyle(.plain).modifier(SelectionMenuFace(width:70)).accessibilityLabel("Back to inline styles")
+            Spacer(); Text(title).fontWeight(.medium); Spacer()
+        }.padding(.horizontal,8).frame(height:38)
+    }
+    func row(_ label: String,_ icon: String,selected: Bool = false,enabled: Bool = true,action: @escaping ()->Void) -> some View {
+        Button(action:action) {
+            HStack(spacing:10) { Image(systemName:icon).frame(width:20); Text(label); Spacer(); if selected { Image(systemName:"checkmark").foregroundStyle(.secondary) } }
+                .padding(.horizontal,10).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+        }.buttonStyle(.plain).modifier(SelectionMenuFace(width:nil)).accessibilityLabel(label).disabled(!enabled)
+    }
+    var blocks: some View {
+        VStack(spacing:0) {
+            header("Turn into"); Divider()
+            VStack(spacing:2) {
+                ForEach(SlashCommand.blockStyles) { command in
+                    row(command.label,command.systemSymbol,selected:command.kind == block.kind && command.level == block.level) { editor?.selectionBlockStyle(command) }
                 }
-                Menu("Highlight Color") {
-                    Button("None") { editor?.selectionAttribute("highlight",nil) }
-                    ForEach(inlinePalette,id:\.0) { name,_,color in
-                        Button { editor?.selectionAttribute("highlight",color) } label: { Label { Text(name) } icon: { Image(systemName:"circle.fill").foregroundStyle(Color(nsColor:nativeHexColor(color)!)) } }
-                    }
-                }
-            } label: { Image(systemName:"textformat.alt") }.menuStyle(.borderlessButton).menuIndicator(.hidden).modifier(SelectionMenuFace(width:32)).help("Text and highlight color").accessibilityLabel("Colors").disabled(block.kind == "raw")
-            Menu {
-                Button(style.superscript ? "Remove Superscript" : "Superscript") { editor?.formatNative(.superscript) }.disabled(block.kind == "raw")
-                Button(style.subscripted ? "Remove Subscript" : "Subscript") { editor?.formatNative(.subscripted) }.disabled(block.kind == "raw")
-                Divider()
-                ForEach(["left","center","right","justified"],id:\.self) { alignment in
-                    Button { editor?.selectionAlignment(alignment) } label: { Label(alignment.capitalized,systemImage:alignment == "justified" ? "text.justify" : "text.align"+alignment) }
-                    .disabled(alignment == "justified" && block.kind != "paragraph")
-                }
-            } label: { Image(systemName:"ellipsis") }.menuStyle(.borderlessButton).menuIndicator(.hidden).modifier(SelectionMenuFace(width:32)).help("Superscript, subscript, and alignment").accessibilityLabel("More styles")
+            }.padding(6)
         }
-        .buttonStyle(SelectionHoverButtonStyle()).controlSize(.small).font(.system(size:12)).padding(6)
-        .background(.background,in:RoundedRectangle(cornerRadius:10))
+    }
+    var more: some View {
+        VStack(spacing:0) {
+            header("More styles"); Divider()
+            VStack(spacing:2) {
+                row("Superscript","textformat.superscript",selected:style.superscript,enabled:block.kind != "raw") { editor?.formatNative(.superscript) }
+                row("Subscript","textformat.subscript",selected:style.subscripted,enabled:block.kind != "raw") { editor?.formatNative(.subscripted) }
+                Divider().padding(.vertical,3)
+                row("Default alignment","text.alignleft",selected:block.alignment == nil) { editor?.selectionAlignment(nil) }
+                ForEach(["left","center","right","justified"],id:\.self) { alignment in
+                    row(alignment.capitalized,alignment == "justified" ? "text.justify" : "text.align"+alignment,selected:block.alignment == alignment,enabled:alignment != "justified" || block.kind == "paragraph") { editor?.selectionAlignment(alignment) }
+                }
+            }.padding(6)
+        }
+    }
+    var colors: some View {
+        VStack(alignment:.leading,spacing:0) {
+            header("Colors"); Divider()
+            VStack(alignment:.leading,spacing:8) {
+                Text("Text Color").fontWeight(.medium)
+                palette(highlight:false)
+                Text("Highlight Color").fontWeight(.medium).padding(.top,4)
+                palette(highlight:true)
+            }.padding(12)
+        }
+    }
+    func palette(highlight: Bool) -> some View {
+        let entries: [(String,String?)] = [(highlight ? "None" : "Default",nil)]+inlinePalette.map { ($0.0,highlight ? $0.2 : $0.1) }
+        return LazyVGrid(columns:Array(repeating:GridItem(.flexible(),spacing:6),count:5),spacing:4) {
+            ForEach(entries,id:\.0) { name,hex in
+                let color = Color(nsColor:hex.flatMap(nativeHexColor) ?? .labelColor)
+                let selected = (highlight ? style.highlight : style.color) == hex
+                Button { editor?.selectionAttribute(highlight ? "highlight" : "color",hex) } label: {
+                    ZStack {
+                        Circle().fill(highlight && hex != nil ? color : .clear)
+                        Circle().stroke(highlight ? Color.secondary.opacity(0.35) : color.opacity(0.6),lineWidth:1)
+                        if !highlight { Text("A").font(.system(size:15,weight:.medium)).foregroundStyle(color) }
+                        else if hex == nil { Image(systemName:"slash.circle").foregroundStyle(.secondary) }
+                        if selected { Circle().stroke(Color.accentColor,lineWidth:2).padding(-3) }
+                    }.frame(width:24,height:24)
+                }.buttonStyle(.plain).modifier(SelectionMenuFace(width:40)).help(name+(highlight ? " highlight" : " text color")).accessibilityLabel(name+(highlight ? " highlight" : " text color"))
+            }
+        }
     }
     func mark(_ title: String,_ icon: String,_ mark: InlineMark) -> some View {
         Button { editor?.formatNative(mark) } label: { Image(systemName:icon).foregroundStyle(style[keyPath:mark.keyPath] ? Color.accentColor : Color.primary) }
-        .help(title).accessibilityLabel(title).disabled(block.kind == "raw")
+            .help(title).accessibilityLabel(title).disabled(block.kind == "raw")
     }
 }
 // Keep the same quiet typography/background as slash and handle panels.
 // AppKit owns cursor rectangles so editor tracking cannot leave an I-beam here.
 struct SelectionMenuFace: ViewModifier {
-    let width: CGFloat
+    let width: CGFloat?
     @NativeState private var hovered = false
     func body(content: Content) -> some View {
         content.frame(width:width,height:32).contentShape(Rectangle())
@@ -122,6 +184,20 @@ final class SelectionButtonCursorView: NSView {
     override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
 }
 extension NativeTextView {
+    func updateSelectionPanelCursor(for event: NSEvent) -> Bool {
+        guard let panel = selectionPanel, panel.isShown, let content = panel.contentViewController?.view,
+              let panelWindow = content.window, let eventWindow = event.window ?? window else { return false }
+        let screen = eventWindow.convertPoint(toScreen:event.locationInWindow)
+        guard panelWindow.frame.contains(screen) else { return false }
+        func controls(_ view: NSView) -> [SelectionButtonCursorView] {
+            (view as? SelectionButtonCursorView).map { [$0] } ?? view.subviews.flatMap(controls)
+        }
+        let point = panelWindow.convertPoint(fromScreen:screen)
+        let control = controls(content).first { $0.bounds.contains($0.convert(point,from:nil)) }
+        if hoverBlock != nil { hoverBlock = nil; needsDisplay = true }
+        (control?.enabled == true ? NSCursor.pointingHand : .arrow).set()
+        return true
+    }
     func applyInlineAppearance(_ style: TextStyle,to text: NSMutableAttributedString,range: NSRange) {
         if let color = style.color.flatMap(nativeHexColor) { text.addAttribute(.foregroundColor,value:color,range:range) }
         if let color = style.highlight.flatMap(nativeHexColor) {
@@ -155,7 +231,7 @@ extension NativeTextView {
         let panel = selectionPanel ?? SelectionStylePanel(); selectionPanel = panel
         let width: CGFloat = inTable ? 330 : 450
         if !panel.isShown || selectionPanelIdentity != identity {
-            panel.contentViewController = NSHostingController(rootView:SelectionStyleBar(target:SelectionPanelTarget(self),style:caretStyle(),block:block,inTable:inTable))
+            panel.contentViewController = NSHostingController(rootView:SelectionStyleBar(target:SelectionPanelTarget(self),style:caretStyle(),block:block,inTable:inTable,resize:{ [weak panel] size in panel?.contentSize = size }))
         }
         selectionPanelIdentity = identity; selectionPanelAnchor = rect
         panel.contentSize = NSSize(width:width,height:44)
@@ -168,7 +244,7 @@ extension NativeTextView {
         finishComposition(); session.synchronizeSelection()
         session.buffer.setInlineAttribute(selectedRange(),attribute:attribute,value:value); session.changed(); insertionExtra = caretStyle(); scheduleSelectionPanel()
     }
-    func selectionAlignment(_ alignment: String) {
+    func selectionAlignment(_ alignment: String?) {
         guard let session, session.mode == .write, session.requestEditing() else { return }
         finishComposition(); session.synchronizeSelection()
         session.buffer.setAlignment(selectedRange(),alignment:alignment); session.changed(); scheduleSelectionPanel()

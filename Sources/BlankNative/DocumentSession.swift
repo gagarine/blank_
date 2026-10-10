@@ -11,9 +11,14 @@ struct Recovery: Codable {
     var root: String?
     var files: [String:String]
     var assets: [String:Data]
+    var retainedDraft: Bool? = nil
+    var active: String? = nil
+    var selections: [String:EditSelection]? = nil
+    var mode: String? = nil
 }
 @MainActor final class DocumentSession: ObservableObject {
-    let id = UUID().uuidString
+    let id: String
+    init(id: String = UUID().uuidString) { self.id = id }
     @Published var mode: EditorMode = .write { didSet { searchController.update() } }
     @Published var active = "Untitled.typ"
     @Published var sidebar = false
@@ -264,23 +269,26 @@ struct Recovery: Codable {
         if reinstall { installWatchers() }
     }
     func autosave() {
+        guard editor?.hasMarkedText() != true, editor?.composing != true else { return }
         persistRecovery()
         if root != nil { do { try saveToDisk() } catch { self.error = error.localizedDescription } }
-        else if let document = window?.windowController?.document as? NativeDocument {
-            document.autosave(withImplicitCancellability:true) { [weak self] error in if let error { self?.error = error.localizedDescription } }
+        else if let controller = window?.windowController as? DocumentWindow {
+            controller.nativeDocument.autosave(withImplicitCancellability:true) { [weak self] error in if let error { self?.error = error.localizedDescription } }
         }
     }
     func persistRecovery() {
-        let payload = Recovery(id:id,entry:entry,root:root?.path,files:buffers.mapValues(\.source),assets:assets)
+        let payload = recoverySnapshot()
         guard let data = try? JSONEncoder().encode(payload) else { return }
         let target = recoveryURL
         recoveryQueue.async {
             do { try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true); try data.write(to:target,options:.atomic) } catch { NSLog("Recovery: %@",error.localizedDescription) }
         }
     }
-    func ensureRecovery() -> Bool {
+    func ensureRecovery(retainingDraft: Bool? = nil) -> Bool {
         do {
-            let payload = Recovery(id:id,entry:entry,root:root?.path,files:buffers.mapValues(\.source),assets:assets), data = try JSONEncoder().encode(payload), target = recoveryURL
+            var payload = recoverySnapshot()
+            if let retainingDraft { payload.retainedDraft = retainingDraft && root == nil && hasDraftContents }
+            let data = try JSONEncoder().encode(payload), target = recoveryURL
             try recoveryQueue.sync { try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true); try data.write(to:target,options:.atomic) }
             return true
         } catch { self.error = "Recovery could not be saved: "+error.localizedDescription; return false }

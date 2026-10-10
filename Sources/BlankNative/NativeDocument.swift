@@ -5,10 +5,11 @@ import BlankCore
 // The existing session remains responsible for canonical source, project
 // dependencies, conflict checks, recovery and shared Write/Source history.
 @objc(BlankDocument) @MainActor final class NativeDocument: NSDocument {
-    let session: DocumentSession
+    private(set) var session: DocumentSession
     private var synchronizing = false
     private var nativeSaveDepth = 0
     private var draftURL: URL?
+    private var draftRestorationAllowed = true
     private var synchronizedRevision = -1
     private var draftContainer: URL { AppController.dataDirectory.appendingPathComponent("drafts/"+session.id) }
     // The native Where control displays this final directory component.
@@ -85,10 +86,21 @@ import BlankCore
     }
     nonisolated override var backupFileURL: URL? { nil }
     nonisolated override func read(from url: URL,ofType typeName: String) throws {
-        try MainActor.assumeIsolated { try session.open(url) }
+        try MainActor.assumeIsolated {
+            if let recovery = try DocumentSession.draftRecovery(at:url) {
+                session = try DocumentSession.restoredDraft(recovery)
+                draftRestorationAllowed = recovery.retainedDraft != false
+                draftURL = url; isDraft = true
+            } else { try session.open(url) }
+        }
     }
     override func makeWindowControllers() {
         guard windowControllers.isEmpty else { return }
+        if draftURL != nil, !EditorPreferences.reopensUnsavedDocuments || !draftRestorationAllowed || !session.hasDraftContents { super.close(); return }
+        if let existing = AppController.shared.controllers.first(where:{ $0.session.id == session.id }) {
+            existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil)
+            super.close(); return
+        }
         let controller = DocumentWindow(session:session,nativeDocument:self)
         AppController.shared.controllers.append(controller)
     }
@@ -100,7 +112,7 @@ import BlankCore
             guard session.ensureRecovery() else { throw CocoaError(.fileWriteUnknown) }
             if session.root != nil { try session.saveToDisk(); completionHandler(nil) }
             else {
-                guard hasUnautosavedChanges else { completionHandler(nil); return }
+                guard hasUnautosavedChanges || draftURL == nil || !FileManager.default.fileExists(atPath:draftURL!.path) else { completionHandler(nil); return }
                 try FileManager.default.createDirectory(at:draftDirectory,withIntermediateDirectories:true)
                 let url = draftURL ?? draftDirectory.appendingPathComponent((session.entry as NSString).lastPathComponent)
                 save(to:url,ofType:"org.typst.source",for:draftURL == nil ? .autosaveAsOperation : .autosaveInPlaceOperation) { [weak self] error in
@@ -111,8 +123,11 @@ import BlankCore
         } catch { completionHandler(error) }
     }
     override func close() {
+        session.editor?.finishComposition()
+        let retained = AppController.shared?.retainingDraftsForTermination == true
+        if session.root == nil { _ = session.ensureRecovery(retainingDraft:retained) }
         super.close()
-        try? FileManager.default.removeItem(at:draftContainer)
+        if !retained || session.root != nil || !session.hasDraftContents { try? FileManager.default.removeItem(at:draftContainer) }
     }
     override func canClose(withDelegate delegate: Any,shouldClose shouldCloseSelector: Selector?,contextInfo: UnsafeMutableRawPointer?) {
         session.editor?.finishComposition()

@@ -22,6 +22,8 @@ import Combine
         return FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("blank_-swift")
     }
     var controllers: [DocumentWindow] = []
+    var draftRestorationError: String?
+    var retainingDraftsForTermination = false
     var templateGallery: TemplateGalleryWindow?
     @objc func templates(_ sender: Any?) {
         do {
@@ -45,12 +47,26 @@ import Combine
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         let file = CommandLine.arguments.dropFirst().first.flatMap { $0.hasPrefix("-") ? nil : $0 }
+        let isolated = CommandLine.arguments.contains("--draft-lifecycle-prepare") || CommandLine.arguments.contains(where:{ $0.hasSuffix("self-test") || $0.hasSuffix("ui-test") })
+        let restored = !isolated && restoreDrafts()
         if CommandLine.arguments.contains("--tutorial") { tutorial(nil) }
         else if let file { openURL(URL(fileURLWithPath:file)) }
-        else { newDocument(nil) }
+        else if !restored && controllers.isEmpty { newDocument(nil) }
+        if let draftRestorationError { current?.error = draftRestorationError }
         // Finish AppKit's launch/activation-policy transition before requesting
         // activation. The complete menu is already attached at this point.
         DispatchQueue.main.async { if !CommandLine.arguments.contains("--selection-style-ui-test") { NSApp.activate() } }
+        if CommandLine.arguments.contains(where:{ $0.hasPrefix("--draft-lifecycle-") }) {
+            setbuf(stdout,nil)
+            RunLoop.main.perform {
+                MainActor.assumeIsolated {
+                    if CommandLine.arguments.contains("--draft-lifecycle-prepare") { NativeDraftAcceptance.prepare() }
+                    else if CommandLine.arguments.contains("--draft-lifecycle-disabled-verify") { NativeDraftAcceptance.verifyDisabledLaunch() }
+                    else { NativeDraftAcceptance.verify() }
+                    exit(0)
+                }
+            }
+        }
         if CommandLine.arguments.contains("--selection-style-ui-test"), let controller = controllers.first { NativeSelectionStyleAcceptance.showFixture(controller:controller) }
         if CommandLine.arguments.contains("--figure-ui-test"), let controller = controllers.first { NativeFigureAcceptance.showFixture(controller:controller) }
         if CommandLine.arguments.contains("--reference-ui-test"), let controller = controllers.first {
@@ -106,9 +122,11 @@ import Combine
     }
     func openURL(_ url: URL) {
         if let document = NSDocumentController.shared.document(for:url) { document.showWindows(); return }
-        let session = DocumentSession()
+        var session = DocumentSession()
         do {
-            try session.open(url)
+            if let restored = try DocumentSession.restoredDraft(at:url) { session = restored }
+            else { try session.open(url) }
+            if let existing = controllers.first(where:{ $0.session.id == session.id }) { existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil); return }
             if let entry = session.root?.appendingPathComponent(session.entry), let document = NSDocumentController.shared.document(for:entry) { document.showWindows(); return }
             show(session); NSDocumentController.shared.noteNewRecentDocumentURL(url)
         }
@@ -158,7 +176,7 @@ import Combine
     @objc func underline(_ sender: Any?) { current?.editor?.formatNative(.underline) }
     @objc func strikethrough(_ sender: Any?) { current?.editor?.formatNative(.strikethrough) }
     @objc func inlineStyle(_ sender: NSMenuItem) { if let mark = InlineMark(rawValue:sender.tag) { current?.editor?.formatNative(mark) } }
-    @objc func alignment(_ sender: NSMenuItem) { if let alignment = sender.representedObject as? String { current?.editor?.selectionAlignment(alignment) } }
+    @objc func alignment(_ sender: NSMenuItem) { if let alignment = sender.representedObject as? String { current?.editor?.selectionAlignment(alignment == "default" ? nil : alignment) } }
     @objc func inlineColor(_ sender: NSMenuItem) {
         if let values = sender.representedObject as? [String] { current?.editor?.selectionAttribute(values[0],values.count > 1 ? values[1] : nil) }
     }
@@ -192,21 +210,21 @@ import Combine
     @objc func refresh(_ sender: Any?) { current?.compileRevision = -1; current?.compile() }
     @objc func convertBibliography(_ sender: Any?) { current?.showBibliographyConversion() }
     @objc func refreshReferences(_ sender: Any?) { if let current { ZoteroIntegration.refresh(current) } }
-    @objc func quit(_ sender: Any?) { NSApp.terminate(nil) }
+    @objc func quit(_ sender: Any?) { prepareDocumentsForTermination(); NSApp.terminate(nil) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
-    func applicationShouldHandleReopen(_ sender: NSApplication,hasVisibleWindows flag: Bool) -> Bool { if !flag { newDocument(nil) }; return true }
+    func applicationShouldHandleReopen(_ sender: NSApplication,hasVisibleWindows flag: Bool) -> Bool { if !flag && !restoreDrafts() { newDocument(nil) }; return true }
     func application(_ sender: NSApplication,openFiles filenames: [String]) { filenames.forEach { openURL(URL(fileURLWithPath:$0)) }; sender.reply(toOpenOrPrint:.success) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        retainingDraftsForTermination = false
         prepareDocumentsForTermination()
-        let unsaved = controllers.filter { $0.session.dirty }
-        if unsaved.contains(where:{ !$0.session.ensureRecovery() }) { let alert = NSAlert(); alert.messageText = "Recovery could not be saved"; alert.informativeText = "Keep blank_ open and save your writing to a writable location before quitting."; alert.runModal(); return .terminateCancel }
-        if unsaved.isEmpty { return .terminateNow }
-        let alert = NSAlert(); alert.messageText = "Save changes before quitting?"; alert.informativeText = "Unsaved documents have recovery copies. Save each document to keep it as a .typ file."; alert.addButton(withTitle:"Review Documents"); alert.addButton(withTitle:"Quit with Recovery Copies"); alert.addButton(withTitle:"Cancel")
-        let result = alert.runModal()
-        if result == .alertSecondButtonReturn { return .terminateNow }
-        if result == .alertFirstButtonReturn { unsaved.first?.window?.makeKeyAndOrderFront(nil); unsaved.first?.session.save() }
-        return .terminateCancel
+        if controllers.contains(where:{ ($0.session.dirty || $0.session.root == nil && $0.session.hasDraftContents) && !$0.session.ensureRecovery() }) { let alert = NSAlert(); alert.messageText = "Recovery could not be saved"; alert.informativeText = "Keep blank_ open and save your writing to a writable location before quitting."; alert.runModal(); return .terminateCancel }
+        let keepDrafts = EditorPreferences.reopensUnsavedDocuments
+        // AppKit has already handled its ordinary unsaved-document review.
+        // Preserve any drafts still open at termination without another dialog.
+        if !keepDrafts && controllers.contains(where:{ $0.session.root == nil && !$0.session.ensureRecovery(retainingDraft:false) }) { return .terminateCancel }
+        retainingDraftsForTermination = keepDrafts
+        return .terminateNow
     }
     func prepareDocumentsForTermination() {
         controllers.forEach { $0.session.editor?.finishComposition(); $0.session.autosave() }
@@ -257,7 +275,7 @@ import Combine
             for (name,color,highlight) in inlinePalette { add(submenu,name,#selector(inlineColor(_:)),target:self); submenu.items.last?.representedObject = [attribute,attribute == "color" ? color : highlight] }
         }
         let alignmentItem = NSMenuItem(title:"Alignment",action:nil,keyEquivalent:""); let alignmentMenu = NSMenu(title:"Alignment"); alignmentItem.submenu = alignmentMenu; format.addItem(alignmentItem)
-        for value in ["left","center","right","justified"] { add(alignmentMenu,value.capitalized,#selector(alignment(_:)),target:self); alignmentMenu.items.last?.representedObject = value }
+        for value in ["default","left","center","right","justified"] { add(alignmentMenu,value.capitalized,#selector(alignment(_:)),target:self); alignmentMenu.items.last?.representedObject = value }
         format.addItem(.separator())
         for command in SlashCommand.all where !command.insertion { blockItem(format,command) }
         let view = menu("View"); add(view,"Write",#selector(writeMode(_:)),"1",target:self); add(view,"Source",#selector(sourceMode(_:)),"2",target:self); add(view,"Preview",#selector(previewMode(_:)),"3",target:self)
@@ -320,9 +338,10 @@ import Combine
     }
     required init?(coder: NSCoder) { fatalError() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        // NSDocument has already provided the native Save/Don't Save/Cancel
-        // decision. Keep only the durable-recovery guard here.
-        if session.dirty && !session.ensureRecovery() {
+        session.editor?.finishComposition()
+        // NSDocument supplies the native Save/Don't Save/Cancel panel.
+        // Keep the durable recovery guard for every closing document.
+        if (session.dirty || session.root == nil && session.hasDraftContents) && !session.ensureRecovery() {
             let alert = NSAlert(); alert.messageText = "Recovery could not be saved"; alert.informativeText = session.error ?? "Save your writing before closing."; alert.beginSheetModal(for:sender); return false
         }
         return true

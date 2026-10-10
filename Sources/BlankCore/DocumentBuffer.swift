@@ -566,14 +566,14 @@ public final class DocumentBuffer {
         if editCell(range,operation:{ model,local in model.setKind(at:local,kind:kind,level:level) }) { return }
         setKind(projection.blockIndex(at:range.location),kind:kind,level:level)
     }
-    public func setAlignment(_ range: NSRange, alignment: String) {
-        guard ["left","center","right","justified"].contains(alignment) else { return }
+    public func setAlignment(_ range: NSRange, alignment: String?) {
+        if let alignment, !["left","center","right","justified"].contains(alignment) { return }
         if editCell(range,operation:{ $0.setAlignment($1,alignment:alignment) }) { return }
         var result = source
         for b in projection.blocks.reversed() where b.editable && (NSIntersectionRange(b.display,range).length > 0 || range.length == 0 && b.display.location <= range.location && NSMaxRange(b.display) >= range.location) {
             guard alignment != "justified" || b.kind == "paragraph" else { continue }
             let body = source.bytes(b.unalignedSource ?? b.source)
-            let wrapped = alignment == "justified" ? "#par(justify: true)["+body+"]" : "#align("+alignment+")["+body+"]"
+            let wrapped = alignment.map { $0 == "justified" ? "#par(justify: true)["+body+"]" : "#align("+$0+")["+body+"]" } ?? body
             result = result.replacingBytes(b.source,with:wrapped)
         }
         commit(result,selection:selection)
