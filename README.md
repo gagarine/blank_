@@ -1,66 +1,41 @@
 # blank_
 
-A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI and AppKit. Your documents stay ordinary local `.typ` projects.
+A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI and AppKit. Documents stay ordinary local `.typ` projects.
 
 ![blank_ with a garden photograph, heading outline, inline formatting and color palettes](Resources/Screenshots/editor.jpg)
 
-- **Write, Source and Preview** — native rich text, exact source editing and typeset PDFs; shared undo and formatted clipboard.
-- **Structured writing** — headings, lists, tables, figures, links, footnotes, formatted citations/bibliographies and collapsible code blocks.
-- **Navigation** — a movable outline, thumbnails, contact sheet and live search across project files.
-- **Templates** — Standard, Thesis, Paper, Letter A4, Book and Slides (16:9 projector); preview, create, duplicate, edit or delete your own.
-- **Native document tools** — PDF export/sharing, Zotero integration, statistics, recovery and macOS save/move controls.
+## Download
 
-**Format** and the text’s **Font** context menu offer Bold, Italic, Underline (⌘U) and Strikethrough. Styles combine, toggle on selected text or subsequent typing, and work in native table cells. Underline and Strikethrough use Typst’s `#underline[…]` and `#strike[…]`; Write renders native text decorations, and Source retains the complete expressions. Structured clipboard and RTF paste preserve these styles, with shared Undo across views.
+Get the [latest release](https://github.com/gagarine/blank_/releases) for Apple Silicon and macOS 26+. Automatic updates are not available yet.
 
-Selecting editable text in Write opens a native style panel beside the selection without taking the caret’s focus. It uses the same popover style as slash and handle menus, with hover-only button backgrounds, full padded click targets and pointing-hand cursors. Block styles, colors and more styles open secondary native popovers while the inline toolbar stays visible; Escape or the active toolbar button closes the secondary options first. Secondary panels omit Close controls, and the color palette uses only its Text Color and Highlight Color headings. It offers supported whole-block conversions, Bold/Italic/Underline/Strikethrough, inline code, links, text and highlight palettes, and superscript/subscript. Colors open as visible text/highlight swatches in one panel, with Default/None choices. Alignment applies to whole blocks; **Default alignment** removes explicit alignment, and justification is available for paragraphs. The same additions appear in **Format**. Links stay ordinary selectable text in Write; clicking places the caret instead of opening a destination. Hovering reveals a native panel with the URL, **Open Link** and **Remove Link**. Removal preserves the text, inline formatting and native selection, including table cells. Selected links also use a native URL sheet with Apply and Remove Link. Panel actions use canonical source/history and work in native table cells; block conversion is omitted in cells.
+Releases are not notarized. If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. [Apple’s instructions](https://support.apple.com/en-us/102445).
 
-**Code block** in `/`, Format, the handle menu, or the selection panel turns the whole block into a displayed Typst raw-code example. Write shows literal code in monospace and keeps Return inside it; source fences and language tags survive ordinary edits. Inline code is a separate style. The existing **Code** command still inserts executable Typst source. Source exposes every character of both forms. Colors, links, super/subscript and alignment compile through standard Typst functions. Structured clipboard retains their source; external RTF import currently preserves bold/italic/underline/strikethrough only.
+## Writing
 
-Citation search filters while you type. References already cited in the project appear first with an **Already cited** marker and can be reused without contacting Zotero. Inline citations have a subtle gray background; click to edit their reference, locator and display. Rich or computed citations retain an exact-source editor. The document’s style controls formatting; Citation display chooses a standard citation, one within a sentence, author only or year only. Write shows Typst’s formatted citations and bibliography, while Source retains their exact expressions. New insertions consistently use `#cite`.
+- **Write, Source and Preview** — native rich text, exact Typst source and typeset PDFs, with shared Undo and formatted clipboard.
+- **Blocks** — headings, lists, native tables, figures, footnotes, citations, bibliographies and collapsible Typst source. Displayed code blocks and inline code are also supported.
+- **Text styles** — bold, italic, underline, strikethrough, links, text/highlight colors and superscript/subscript. Select text to open the formatting panel; alignment and block styles apply to the whole block.
+- **Navigation** — movable heading outline, thumbnails, contact sheet and live project search.
+- **Document tools** — PDF export/sharing, statistics, recovery and native macOS save/move controls.
+- **Templates** — Standard, Thesis, Paper, Letter A4, Book and Slides, plus your own editable templates.
 
-Slash commands also appear in the macOS **Format** (paragraph styles) and **Insert** (objects) menus. **Code** creates an empty collapsible Typst source block with the caret inside. Write colors its Typst syntax, keeps Return inside the block with indentation, and protects its outer `#{` / `}` from partial edits; select the whole block to delete it. Source permits editing every delimiter. Code input disables prose substitutions and restores them when returning to prose.
+New Document opens an empty editor. Use `/` for blocks and objects, **⌘K** for commands, and **⌘1 / ⌘2 / ⌘3** for Write / Source / Preview. The same commands appear in **Format** and **Insert**. Block handles show the current type, conversion choices and exact-source editing. Try [Field notes](examples/Field%20notes.typ) or **Help → Tutorial**.
 
-Cross-reference insertion offers existing literal labels from the project, including unsaved edits, and accepts custom targets. Computed and package-created labels can be entered by name. New references use explicit `#ref` calls so label names and adjacent prose remain separate.
-
-Write gives literal labels such as `<intro>` a subtle gray background. They stay ordinary editable text and copy with their existing source; the background is display-only. Find temporarily highlights matches in yellow. Source keeps its existing syntax styling.
-
-Image figures with literal paths, plain captions and integer widths from 5–100% offer the insertion controls when double-clicked or edited through their block menu. Apply changes only the edited values; comments and custom options stay intact. Choose image stages a replacement until Apply, and Undo retains both image assets. **Edit source…** remains available; computed paths, rich captions and unsupported widths open the exact-source editor. Width affects the typeset PDF; Write retains its existing figure sizing.
-
-Every Write block handle identifies its current type and shows supported **Turn into** choices directly, omitting the current type. It also offers **Edit source…**, including prose, native tables and folded code. The sheet edits that block’s exact Typst source, preserving surrounding source and sharing Write/Source Undo. Table controls and **Edit image…** remain available.
-
-The default native toolbar places Zoom immediately before Write / Source / Preview. Previously saved default layouts update to this order; customized layouts stay intact. Zoom appears in Preview and Contact Sheet.
-
-New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table or folded/expanded code block selects it; a second Delete removes it, and Undo restores its exact source. Deleting outward from code also selects the block instead of joining it to prose. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
+Links stay selectable in Write; hover to open or remove them. Click gray citation fields to edit them. **Code** inserts executable Typst source with syntax colors and protected outer delimiters; **Code block** inserts a displayed code example. Source exposes every character. Edits preserve surrounding comments and custom expressions.
 
 ## Projects and references
 
-Unnamed documents save privately in the app’s data directory while you write. The **Reopen unsaved documents on launch** setting is enabled by default and restores available drafts with their exact source, included files, assets, active file, editing view and text selection. Close and Quit retain macOS’s standard save review; explicitly discarded documents do not reopen and remain available as manual recovery copies. Turn the setting off to skip unsaved drafts at launch. Empty documents stay closed. **Save** still lets you choose an ordinary `.typ` file, after which normal file autosave and conflict protection apply. Undo history starts afresh after relaunch. Failed retention blocks normal closing/quitting; unreadable recovery records remain intact and report a restoration error.
+Open a `.typ` file or a project folder. Folders remember their entry document or offer a choice. **File → New Project…** creates a folder with an empty `main.typ`. Includes, imports and assets retain their structure; packages must already be cached or vendored in `packages/`.
 
-**New Document** stays empty. **File → New Project…** creates a dedicated folder containing only an empty `main.typ`. Projects are ordinary Typst folders, with no entry manifest. Opening a `.typ` selects it for compilation; opening a folder uses its remembered entry or a single document that is not included/imported by another file, otherwise a native panel lets you choose. Selections are stored in the app’s data directory. A directly opened file uses its parent as the root unless it belongs to a folder previously opened as a project.
+Unnamed documents save privately while you write. **Reopen unsaved documents on launch** in Settings restores drafts, files, assets, view and selection. Close and Quit use native macOS save review; explicitly discarded documents do not reopen. Save chooses a normal `.typ` location. Undo history starts afresh after relaunch.
 
-Includes and imports keep their names and structure. Relative paths resolve from the referring file; `/…` resolves from the project root. Adding a literal chapter include creates its empty `.typ` automatically. Existing missing/unreadable files are reported rather than overwritten. Packages must already be cached or vendored in `packages/`.
+Save and Save As protect against external changes and dependency collisions. Save As copies discovered dependencies and adjusts literal paths when needed; unreached computed dependencies cannot be discovered automatically.
 
-Zotero insertion uses the document’s declared bibliography, including external BibLaTeX `.bib` and Hayagriva `.yaml`/`.yml`. Multiple inputs offer a destination choice. The app never attaches bibliographies merely because they share a folder. Without a bibliography, the first import embeds readable BibLaTeX in the document using Typst’s `bibliography(bytes(...))` input; independent documents can share a folder without generated reference-file collisions. There is no `writer-references.json` or beta-storage migration.
-
-Zotero item keys, library identifiers (`users/…` or `groups/…`) and the exported field list live in `x-blank-zotero-*` metadata alongside each entry. **Refresh Zotero References** is manual: it retains citation keys, changes only linked entries and keeps unrelated entries, comments, macros and custom fields. Citation insertion and refresh use canonical range history; cross-file insertion undoes the citation and bibliography together. Write uses Typst’s formatted citations/bibliographies; Source keeps the complete editable expressions. **Bibliography style** accepts standard style names or a custom CSL file.
-
-**Convert Bibliography…** is available in Cmd-K and the File menu. Choose a bibliography input, then embedded BibLaTeX, external `.bib`, or external Hayagriva `.yaml`. Moving BibLaTeX between embedded and external storage preserves its exact text; format changes preserve Zotero linkage and keep an encoded original-source snapshot in a comment for an unchanged round trip. Citation keys, call options and styles stay intact. Existing external files are retained, new-file collisions are rejected, and conversion shares source Undo. Conversion requires direct literal paths/bytes inputs; variable or computed inputs stay editable in Source. Hayagriva-to-BibLaTeX conversion is refused when the official parser cannot recover identical reference data.
-
-Save As preflights dependency collisions and copies literal dependencies plus files read by a background Typst evaluation. A nested entry’s literal paths are rebased; when computed paths require their original location, an ordinary `.typ` include wrapper keeps the original entry and folder structure intact. Unreached computed dependencies cannot be discovered automatically. Computed raw-byte bibliography data and package-owned bibliographies remain editable in Source but are not rewritten by Zotero. Hayagriva Zotero edits require block mappings; flow mappings/aliases still compile and remain source-editable.
-
-Checks cover external projects, nested/root paths, embedded/external references, Zotero refresh with isolated responses, custom CSL, assets, Unicode, selection/clipboard, Undo and Save As. Compiler checks compare reference presentation with and without the metadata fields. Native checks also cover citation clicks and local edits, table-cell fields, already-cited search/reuse, menu parity, Code insertion/colors, delimiter protection, indented Return, composition and exact-source Undo. Disposable app inspection verifies the gray fields, citation controls, picker markers and native menu layout; live Zotero insertion/refresh remain unverified.
-
-Selection-panel checks cover combined Unicode styles, whole-block conversion/alignment, default-alignment reset, panel cursor ownership, native clicks on button and swatch padding, persistent toolbar/subpanel focus and Escape, non-clickable links, hover actions, exact link removal with adjacent links and table options preserved, native link-sheet focus, table cells, literal code editing, composition and shared Undo. Disposable app inspection verifies the popover layout and formatting actions. Ten unchanged panel updates in a small release fixture measured 0.1 ms wall time and 0.1 ms CPU; the acceptance process used 176.6 MiB RSS. One hundred link-hover hit checks in the same release fixture measured 3.9 ms wall time and 3.5 ms CPU, with 156.5 MiB process RSS. These measurements exclude initial panel creation and the compiler process and do not establish long-document performance.
-
-## Download
-
-Download the last release from https://github.com/gagarine/blank_/releases (no auto-update yet)
-
-⚠️ Releases are not notarized. If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. Authenticate if asked, then click **Open**. [Apple’s instructions](https://support.apple.com/en-us/102445).
+Zotero insertion uses the declared BibLaTeX or Hayagriva bibliography, or embeds BibLaTeX when none exists. Already-cited references appear first and can be reused locally. Typst supplies citation/bibliography formatting, including custom CSL styles. **Refresh Zotero References** updates linked entries while retaining citation keys and unrelated data. **Convert Bibliography…** moves between embedded/external BibLaTeX and supported Hayagriva inputs. Computed inputs remain editable in Source.
 
 ## Development
 
-Requires macOS 26+, Swift 6 with a macOS 26/27 SDK, Rust 1.98.1 (pinned) and Python 3.
+Requires Swift 6 with a macOS 26/27 SDK, Rust 1.98.1 (pinned) and Python 3.
 
 ```sh
 bash scripts/build.sh release  # omit release for debug
@@ -68,25 +43,21 @@ open build/blank_.app
 bash scripts/check.sh
 ```
 
-Both builds update the same app; quit and reopen after rebuilding. Checks cover the document model, compiler, native editing/files and a relocated bundle; native checks need an unlocked desktop session.
+Both builds update the same app; quit and reopen after rebuilding. Checks cover the document model, official Typst compiler, native editing/files and a relocated bundle. Native checks need an unlocked desktop session and use disposable data.
 
-Draft checks launch three disposable app processes to cover native Close/Cancel and discard cleanup, final termination snapshots, the persistent opt-out setting and native-restoration suppression, committed composition, exact multi-file/asset restoration, native Unicode selection, stable session identities, empty/saved exclusions and failed or damaged recovery. A release acceptance run restored two small draft projects and their native windows in 220.5 ms wall time and 221.5 ms CPU, with 138.4 MiB process RSS. This small desktop fixture excludes compiler-process memory and does not establish large-project or full-launch performance.
+The Rust parser and separate PDF compiler share a Cargo workspace, lockfile and cache, using Typst 0.15.1. See [AGENTS.md](AGENTS.md) for architecture, build and verification conventions.
 
-Write figures scroll with their text instead of sticking to the viewport. Block dragging keeps document-relative targets and continues scrolling while held beyond the viewport edge. Native regressions cover moves past 80 blocks, exact Unicode Undo and figure removal/restoration across scrolls; disposable app checks also verify image scrolling and block placement visually.
-
-The Cargo workspace shares a lockfile/cache for the in-process parser and separate PDF compiler, both using Typst 0.15.1. See [AGENTS.md](AGENTS.md) for architecture and build conventions.
-
-[CI](.github/workflows/build-macos.yml) checks pushes and pull requests on macOS 26/27. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after both builds pass. Apps are ad-hoc signed; Intel support is unverified.
+[CI](.github/workflows/build-macos.yml) checks macOS 26/27. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after both builds pass. Apps are ad-hoc signed; Intel support is unverified.
 
 ## Remaining work
 
-- Rich controls for editing footnotes, grouped/complex citations and custom figures; PDF-page selection and broader image-format validation.
-- Zotero group discovery and citation-picker keyboard navigation. Custom citation show rules and note-style footnote presentation in Write remain unverified.
+- Rich controls for footnotes, complex citations and custom figures; PDF-page selection and broader image-format validation.
+- Zotero group discovery and citation-picker keyboard navigation.
 - Continuous editing across included files and repeated includes.
 - Settings synchronization, disjoint external-change merging and broader recovery checks.
-- Large-table and Source performance; long-document memory/latency measurements.
-- Opt-in MCP/agent access with revision-checked transactions and selective undo.
+- Large-table/Source performance and long-document resource measurements.
+- Opt-in MCP/agent access with revision checks and selective undo.
 
-Live Zotero insertion/refresh, physical IME candidates, bidirectional editing, VoiceOver and Writing Tools remain unverified. An empty-editor release run measured 0.14% of one CPU core and 14.5 MiB RSS; compiler memory was excluded. Use `--measure` with disposable `BLANK_DATA_DIR` data.
+Live Zotero, physical IME candidates, bidirectional editing, VoiceOver and Writing Tools remain unverified, as do custom citation show rules and note-style footnotes in Write.
 
 [MIT](LICENSE) · Built with OpenAI Codex.
