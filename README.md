@@ -22,7 +22,7 @@ Image figures with literal paths, plain captions and integer widths from 5–100
 
 Every Write block handle offers **Edit source…**, including prose, native tables and folded code. The sheet edits that block’s exact Typst source, preserving surrounding source and sharing Write/Source Undo. Formatting, table controls and **Edit image…** remain available.
 
-New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table selects it; a second Delete removes it, and Undo restores it. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
+New Document opens an empty editor. Empty writing blocks show subtle hints; headings and lists apply their formatting before typing. Backspace at the start of a heading/list removes its formatting. Delete toward an adjacent table or folded/expanded code block selects it; a second Delete removes it, and Undo restores its exact source. Deleting outward from code also selects the block instead of joining it to prose. Find templates in **File → Templates…** or Cmd-K. Try the [Field notes](examples/Field%20notes.typ) sample.
 
 ## Projects and references
 

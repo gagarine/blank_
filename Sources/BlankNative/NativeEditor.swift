@@ -521,6 +521,20 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard session.requestEditing() else { return false }
         if composing || hasMarkedText() { return true }
         captureSelection()
+        if session.mode == .write, text.isEmpty, affectedCharRange.length > 0 {
+            let blocks = session.buffer.projection.blocks
+            var selection = affectedCharRange
+            for index in blocks.indices where blocks[index].kind == "source" {
+                let block = blocks[index]
+                guard NSIntersectionRange(affectedCharRange,block.display) != block.display else { continue }
+                let before = index > 0 && NSLocationInRange(block.display.location-1,affectedCharRange)
+                let after = index+1 < blocks.count && NSLocationInRange(NSMaxRange(block.display),affectedCharRange)
+                if before || after { selection = NSUnionRange(selection,block.display) }
+            }
+            // A selected separator (or paragraph tail plus separator) needs
+            // the same protection as a caret deleting toward opaque code.
+            if selection != affectedCharRange { setSelectedRange(selection); captureSelection(); return false }
+        }
         if session.mode == .write, !session.buffer.canEditWrite(affectedCharRange) { return false }
         var editRange = affectedCharRange
         let block = session.buffer.projection.blocks[session.buffer.projection.blockIndex(at:editRange.location)]
@@ -701,16 +715,19 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             guard session.requestEditing() else { return true }
             captureSelection(); session.buffer.setKind(index,kind:"paragraph"); session.changed(); return true
         }
-        // Cell boundaries stay within the native table. Only an outside caret
-        // deletes toward the table; the first key selects its complete range.
+        // Cell boundaries stay within the native table. At opaque source
+        // boundaries, deleting the synthetic paragraph separator would join
+        // code to prose and change its projected kind (also losing folding).
+        // Select the complete object before deleting, as for native tables.
         guard session.buffer.projection.tableCell(at:range) == nil else { return false }
-        let table: ProjectedBlock?
-        if backward, index > 0, range.location == block.display.location, blocks[index-1].kind == "table" { table = blocks[index-1] }
-        else if !backward, index+1 < blocks.count, range.location == NSMaxRange(block.display), blocks[index+1].kind == "table" { table = blocks[index+1] }
-        else if block.kind == "table", range.location == NSMaxRange(block.display) { table = block }
-        else { table = nil }
-        guard let table else { return false }
-        setSelectedRange(table.display); captureSelection(); scrollRangeToVisible(selectedRange()); return true
+        let object: ProjectedBlock?
+        if backward, index > 0, range.location == block.display.location, ["table","source"].contains(blocks[index-1].kind) { object = blocks[index-1] }
+        else if !backward, index+1 < blocks.count, range.location == NSMaxRange(block.display), ["table","source"].contains(blocks[index+1].kind) { object = blocks[index+1] }
+        else if block.kind == "source", backward ? range.location == block.display.location && index > 0 : range.location == NSMaxRange(block.display) && index+1 < blocks.count { object = block }
+        else if block.kind == "table", range.location == NSMaxRange(block.display) { object = block }
+        else { object = nil }
+        guard let object else { return false }
+        setSelectedRange(object.display); captureSelection(); scrollRangeToVisible(selectedRange()); return true
     }
     func focusTableCell(_ blockIndex: Int,_ cell: Int) {
         guard let blocks = session?.buffer.projection.blocks, blocks.indices.contains(blockIndex), blocks[blockIndex].cellRanges.indices.contains(cell) else { return }
