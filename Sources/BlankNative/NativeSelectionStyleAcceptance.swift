@@ -4,12 +4,17 @@ import BlankCore
 @MainActor enum NativeSelectionStyleAcceptance {
     static func showFixture(controller: DocumentWindow) {
         let session = controller.session
-        session.buffer.loadExternal("= Selection styles\n\nSelect café 日本 and change its inline style.\n\nA paragraph for whole-block conversion.\n\n```typ\n#let answer = 42\n```\n\n#table(columns: 2, [Native cell], [Other cell])")
+        session.buffer.loadExternal("= Selection styles\n\nSelect #link(\"https://example.com\")[café 日本] and change its inline style.\n\nA paragraph for whole-block conversion.\n\n```typ\n#let answer = 42\n```\n\n#table(columns: 2, [Native cell], [Other cell])")
         session.revision += 1; session.editor?.refresh()
         guard let editor = session.editor else { return }
         controller.window?.makeFirstResponder(editor)
         editor.setSelectedRange((editor.string as NSString).range(of:"café 日本")); editor.captureSelection(); editor.scrollRangeToVisible(editor.selectedRange()); editor.ensureNativeLayout()
         editor.updateSelectionPanel(requireKeyWindow:false)
+        if CommandLine.arguments.contains("--link-hover-ui-test") {
+            let range = editor.selectedRange(); editor.setSelectedRange(NSRange(location:range.location,length:0)); editor.captureSelection(); editor.updateSelectionPanel(requireKeyWindow:false)
+            let rect = editor.documentGlyphRect(NSRange(location:range.location,length:1))
+            editor.updateLinkHover(at:NSPoint(x:rect.midX,y:rect.midY),delay:0)
+        }
     }
 
     static func run(controller: DocumentWindow) {
@@ -44,6 +49,7 @@ import BlankCore
             check(session.buffer.source == source && editor.selectedRange() == selection,"Selection-panel pointer tracking preserves source and selection")
         }
         editor.formatNative(.superscript); editor.selectionAttribute("color","#247cb7"); editor.selectionAttribute("highlight","#fff2a6"); editor.selectionAttribute("link","https://example.com")
+        check(editor.textStorage?.attribute(.link,at:range.location,effectiveRange:nil) == nil && !editor.isAutomaticLinkDetectionEnabled,"Write links remain selectable text instead of AppKit click targets")
         check(editor.selectedRange() == range && editor.string.hasPrefix("Before café 👩🏽‍💻 after"),"Panel actions preserve the selected Unicode text")
         check((editor.textStorage?.attribute(.baselineOffset,at:range.location,effectiveRange:nil) as? Double ?? 0) > 0 && editor.textStorage?.attribute(.backgroundColor,at:range.location,effectiveRange:nil) != nil,"Superscript and source-backed highlight render in native text")
         let styled = session.buffer.source
@@ -89,6 +95,78 @@ import BlankCore
             check(session.buffer.projection.blocks.count == 4 && session.buffer.projection.blocks[1].alignment == alignment && session.buffer.projection.blocks[2].alignment == alignment && editor.selectedRange().location == session.buffer.projection.blocks[2].display.location,"Native Return keeps aligned paragraphs editable and places the caret in the next block")
             session.undo(); check(session.buffer.source == original,"Aligned Return restores exact source and caret through Undo")
         }
+        let linkedSource = "Before #link(\"https://example.com\")[*café 日本👩🏽‍💻*]#link(\"https://example.com\")[ next] after\n\n// keep this comment\n#let custom = 42"
+        load(linkedSource)
+        let linkedText = (editor.string as NSString).range(of:"café 日本👩🏽‍💻")
+        editor.setSelectedRange(NSRange(location:linkedText.location+2,length:0)); editor.captureSelection(); editor.ensureNativeLayout()
+        let caret = editor.selectedRange(), hit = editor.documentGlyphRect(NSRange(location:linkedText.location+1,length:1))
+        let point = NSPoint(x:hit.midX,y:hit.midY)
+        let hoverCPU = ResourceMetrics.cpuSeconds(), hoverStart = Date()
+        for _ in 0..<100 { _ = editor.linkTarget(at:point) }
+        print(String(format:"Link hover: 100 small-document hit checks %.1f ms wall, %.1f ms CPU; acceptance-process RSS %.1f MiB",Date().timeIntervalSince(hoverStart)*1000,(ResourceMetrics.cpuSeconds()-hoverCPU)*1000,ResourceMetrics.residentMiB()))
+        if let target = editor.linkTarget(at:point) {
+            check(target.range == linkedText,"Link hover identifies the complete styled Unicode link independently of an adjacent identical URL")
+            let hoverEvent = NSEvent.mouseEvent(with:.mouseMoved,location:editor.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
+            editor.mouseMoved(with:hoverEvent)
+            check(editor.linkPanel?.isShown != true,"Brief pointer movement over a link does not immediately show a panel")
+            RunLoop.main.run(until:Date().addingTimeInterval(0.4))
+            check(editor.linkPanel?.isShown == true && editor.selectedRange() == caret && controller.window?.firstResponder === editor,"Link hover presents native actions without moving the caret or taking editing focus")
+            if let content = editor.linkPanel?.contentViewController?.view, let panelWindow = content.window {
+                func buttons(_ view: NSView) -> [SelectionButtonCursorView] { (view as? SelectionButtonCursorView).map { [$0] } ?? view.subviews.flatMap(buttons) }
+                check(buttons(content).count == 2,"Link hover exposes Open Link and Remove Link controls")
+                for button in buttons(content) {
+                    let rect = panelWindow.convertToScreen(button.convert(button.bounds,to:nil)), screen = NSPoint(x:rect.midX,y:rect.midY)
+                    let event = NSEvent.mouseEvent(with:.mouseMoved,location:controller.window!.convertPoint(fromScreen:screen),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
+                    NSCursor.iBeam.set(); editor.cursorUpdate(with:event)
+                    check(NSCursor.current == .pointingHand,"Link hover actions retain pointing-hand cursors above editor text")
+                }
+            }
+            editor.removeHoveredLink(target)
+            let removed = "Before *café 日本👩🏽‍💻*#link(\"https://example.com\")[ next] after\n\n// keep this comment\n#let custom = 42"
+            check(session.buffer.source == removed && editor.selectedRange() == caret && editor.linkPanel?.isShown != true,"Hover Remove Link preserves exact styled body, adjacent link, comments and native caret")
+            session.undo(); check(session.buffer.source == linkedSource && editor.selectedRange() == caret,"Hover link removal shares exact-source Undo and Unicode caret restoration")
+            session.undo(true); check(session.buffer.source == removed && editor.selectedRange() == caret,"Hover link removal shares exact-source Redo and Unicode caret restoration")
+            let afterRemoval = session.buffer.source
+            editor.removeHoveredLink(target); check(session.buffer.source == afterRemoval,"Stale link hover actions cannot modify a newer document revision")
+        } else { check(false,"Styled link exposes a glyph hover target") }
+        load(linkedSource); editor.setSelectedRange(caret); editor.captureSelection(); editor.ensureNativeLayout()
+        let pendingHit = editor.documentGlyphRect(NSRange(location:linkedText.location+1,length:1))
+        editor.updateLinkHover(at:NSPoint(x:pendingHit.midX,y:pendingHit.midY),delay:0.05); editor.dismissLinkHover()
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(editor.linkPanel?.isShown != true && editor.hoveredLink == nil,"Leaving a link cancels its pending hover presentation")
+        editor.updateLinkHover(at:NSPoint(x:pendingHit.midX,y:pendingHit.midY),delay:0)
+        session.switchMode(.source)
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(editor.linkPanel?.isShown != true,"Switching to Source dismisses link hover actions")
+        session.switchMode(.write)
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        for backward in [false,true] {
+            load(linkedSource); editor.setSelectedRange((editor.string as NSString).range(of:"日本👩🏽‍💻")); editor.captureSelection()
+            let character = backward ? "\u{7f}" : "\u{f728}"
+            let event = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:character,charactersIgnoringModifiers:character,isARepeat:false,keyCode:backward ? 51 : 117)!
+            editor.keyDown(with:event)
+            check(session.buffer.source.contains("#link(\"https://example.com\")[*café *]") && session.buffer.source.hasSuffix("// keep this comment\n#let custom = 42"),"Native Delete edits selected linked Unicode text without following its destination")
+            session.undo(); check(session.buffer.source == linkedSource,"Linked native Delete restores exact source through Undo")
+        }
+        load("#table(columns: 2, inset: 8pt, [Before #link(\"https://example.com\")[*日本*] after], [Other])")
+        let tableSource = session.buffer.source, tableWord = (editor.string as NSString).range(of:"日本")
+        editor.setSelectedRange(NSRange(location:tableWord.location+1,length:0)); editor.captureSelection(); editor.ensureNativeLayout()
+        let tableHit = editor.documentGlyphRect(NSRange(location:tableWord.location,length:1))
+        if let target = editor.linkTarget(at:NSPoint(x:tableHit.midX,y:tableHit.midY)) {
+            check(target.range == tableWord && editor.textStorage?.attribute(.link,at:tableWord.location,effectiveRange:nil) == nil,"Native table links expose hover actions while remaining ordinary editable text")
+            editor.removeHoveredLink(target)
+            check(session.buffer.source == "#table(columns: 2, inset: 8pt, [Before *日本* after], [Other])","Hover Remove Link preserves native table options and surrounding cell source")
+            session.undo(); check(session.buffer.source == tableSource,"Native table link removal restores exact source through shared Undo")
+        } else { check(false,"Native table link exposes a glyph hover target") }
+        load("Before #link(\"https://example.com\")[*café*]*日本* after")
+        let adjacentText = editor.string, adjacentSource = session.buffer.source
+        editor.setSelectedRange(NSRange(location:7,length:0)); editor.captureSelection(); editor.ensureNativeLayout()
+        let adjacentHit = editor.documentGlyphRect(NSRange(location:7,length:1))
+        if let target = editor.linkTarget(at:NSPoint(x:adjacentHit.midX,y:adjacentHit.midY)) {
+            editor.removeHoveredLink(target)
+            check(editor.string == adjacentText && !session.buffer.parsed.erroneous && session.buffer.projection.blocks[0].inlines.flatMap(\.runs).filter { $0.text.contains("café") || $0.text.contains("日本") }.allSatisfy { $0.style.bold },"Hover removal preserves adjacent inline formatting boundaries")
+            session.undo(); check(session.buffer.source == adjacentSource,"Adjacent-mark link removal has exact-source Undo")
+        } else { check(false,"Adjacent-mark link exposes a hover target") }
         load("Before café after")
         let linkedWord = (editor.string as NSString).range(of:"café")
         editor.setSelectedRange(linkedWord); editor.captureSelection(); editor.selectionLink()

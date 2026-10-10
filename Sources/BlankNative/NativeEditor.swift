@@ -14,6 +14,7 @@ struct NativeEditor: NSViewRepresentable {
         view.session = session; session.editor = view
         view.delegate = view; view.isRichText = true; view.importsGraphics = false
         view.allowsUndo = false; view.usesFindBar = false
+        view.isAutomaticLinkDetectionEnabled = false
         view.inputDefaults = NativeInputDefaults(view)
         view.isHorizontallyResizable = false; view.isVerticallyResizable = true
         view.autoresizingMask = [.width]; view.minSize = NSSize(width:0,height:scroll.contentSize.height)
@@ -33,7 +34,7 @@ struct NativeEditor: NSViewRepresentable {
         scroll.isHidden = session.contactSheet
         if let view = scroll.documentView as? NativeTextView { view.refresh() }
     }
-    static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) { if let editor = scroll.documentView as? NativeTextView { editor.slashPopover?.close(); editor.blockPopover?.close(); editor.selectionPanel?.close() } }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) { if let editor = scroll.documentView as? NativeTextView { editor.slashPopover?.close(); editor.blockPopover?.close(); editor.selectionPanel?.close(); editor.dismissLinkHover() } }
 }
 
 struct NativeInputDefaults {
@@ -62,6 +63,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var selectionPanelIdentity = ""
     var selectionPanelAnchor = NSRect.zero
     var selectionPanelUpdatePending = false
+    var linkPanel: SelectionStylePanel?
+    var hoveredLink: EditorLinkTarget?
+    var linkHoverWork: DispatchWorkItem?
+    var linkDismissWork: DispatchWorkItem?
     var selectingText = false
     var selectionPanelObservers: [NSObjectProtocol] = []
     deinit { selectionPanelObservers.forEach(NotificationCenter.default.removeObserver) }
@@ -70,13 +75,13 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         selectionPanelObservers.forEach(NotificationCenter.default.removeObserver); selectionPanelObservers.removeAll()
         if let window {
             for name in [NSWindow.didResignKeyNotification,NSWindow.willCloseNotification] {
-                selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:name,object:window,queue:.main) { [weak self] _ in self?.selectionPanel?.orderOut(nil) })
+                selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:name,object:window,queue:.main) { [weak self] _ in self?.selectionPanel?.orderOut(nil); self?.dismissLinkHover() })
             }
             if let clip = enclosingScrollView?.contentView {
                 clip.postsBoundsChangedNotifications = true
-                selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:NSView.boundsDidChangeNotification,object:clip,queue:.main) { [weak self] _ in self?.scheduleSelectionPanel() })
+                selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:NSView.boundsDidChangeNotification,object:clip,queue:.main) { [weak self] _ in self?.scheduleSelectionPanel(); self?.dismissLinkHover() })
             }
-        } else { selectionPanel?.orderOut(nil); selectionPanel?.contentViewController = nil }
+        } else { selectionPanel?.orderOut(nil); selectionPanel?.contentViewController = nil; dismissLinkHover() }
     }
     var insertionExtra: TextStyle?
     var blockMenuRevision = -1
@@ -280,7 +285,6 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                             if run.style.underline { result.addAttribute(.underlineStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
                             if run.style.strikethrough { result.addAttribute(.strikethroughStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
                             applyInlineAppearance(run.style,to:result,range:r)
-                            if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:run.style.color.flatMap(nativeHexColor) ?? NSColor.linkColor],range:r) }
                         }
                         at += r.length
                     }
@@ -402,7 +406,6 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                         if run.style.underline { result.addAttribute(.underlineStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
                         if run.style.strikethrough { result.addAttribute(.strikethroughStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
                         applyInlineAppearance(run.style,to:result,range:r)
-                        if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:run.style.color.flatMap(nativeHexColor) ?? NSColor.linkColor],range:r) }
                     }
                     at += r.length
                 }
@@ -414,6 +417,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         layoutManager?.ensureLayout(forBoundingRect:visibleRect.offsetBy(dx:-textContainerOrigin.x,dy:-textContainerOrigin.y),in:textContainer)
     }
     func refresh(reveal: Bool = false) {
+        if let hoveredLink, !validLinkTarget(hoveredLink) { dismissLinkHover() }
         if session?.mode != .write || session?.contactSheet == true { selectionPanel?.orderOut(nil) }
         if let session, blockPopover?.isShown == true,
            session.buffer.revision != blockMenuRevision || session.active != blockMenuPath { blockPopover?.close() }
@@ -668,6 +672,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         session.changed()
     }
     override func keyDown(with event: NSEvent) {
+        dismissLinkHover()
         if event.keyCode == 53, selectionPanel?.isVisible == true { selectionPanel?.orderOut(nil); return }
         if let session, session.sheet == .commands {
             // SwiftUI attaches the sheet on the next run-loop turn. Preserve
@@ -951,6 +956,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if updateSidebarResizeCursor(for:event) { return }
         guard session?.mode == .write, grabbed == nil else { return }
         let point = convert(event.locationInWindow,from:nil)
+        updateLinkHover(at:point)
         if codeButtons.values.contains(where:{ $0.frame.contains(point) }) || tableButtons.contains(where:{ $0.trackingMenu || !$0.isHidden && $0.frame.insetBy(dx:-6,dy:-6).contains(point) }) { NSCursor.arrow.set(); return }
         let offset = characterIndexForInsertion(at:point)
         if let cell = session?.buffer.projection.tableCell(at:NSRange(location:offset,length:0)), tableCellRect(block:cell.block,cell:cell.cell)?.contains(point) == true { tableControlCell = (cell.block,cell.cell) }
@@ -963,6 +969,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         else { (bounds.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set() }
     }
     override func mouseExited(with event: NSEvent) {
+        scheduleLinkDismiss()
         if updateSelectionPanelCursor(for:event) { return }
         if updateToolbarCursor(for:event) { return }
         if updateSidebarResizeCursor(for:event) { return }
@@ -989,6 +996,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         return true
     }
     override func mouseDown(with event: NSEvent) {
+        dismissLinkHover()
         selectionPanel?.orderOut(nil)
         selectingText = true; defer { selectingText = false; scheduleSelectionPanel() }
         let point = convert(event.locationInWindow,from:nil)
