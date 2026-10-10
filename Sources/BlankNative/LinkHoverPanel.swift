@@ -27,9 +27,9 @@ struct LinkHoverContents: View {
             }
     }
     func action(_ title: String,_ symbol: String,perform: @escaping ()->Void) -> some View {
-        Button(action:perform) {
+        SelectionButton(width:nil,action:perform) {
             Label(title,systemImage:symbol).frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,10)
-        }.buttonStyle(.plain).modifier(SelectionMenuFace(width:nil)).accessibilityLabel(title)
+        }.accessibilityLabel(title)
     }
 }
 

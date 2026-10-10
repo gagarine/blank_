@@ -48,6 +48,60 @@ import BlankCore
             }
             check(session.buffer.source == source && editor.selectedRange() == selection,"Selection-panel pointer tracking preserves source and selection")
         }
+        func panelButtons(_ panel: SelectionStylePanel?) -> [SelectionButtonCursorView] {
+            func descendants(_ view: NSView) -> [SelectionButtonCursorView] { (view as? SelectionButtonCursorView).map { [$0] } ?? view.subviews.flatMap(descendants) }
+            guard let root = panel?.contentViewController?.view else { return [] }
+            func rect(_ view: NSView) -> NSRect { view.window!.convertToScreen(view.convert(view.bounds,to:nil)) }
+            return descendants(root).sorted { a,b in
+                let x = rect(a), y = rect(b)
+                return abs(x.midY-y.midY) > 1 ? x.midY > y.midY : x.midX < y.midX
+            }
+        }
+        func clickPadding(_ button: SelectionButtonCursorView,trailing: Bool = false) {
+            guard let window = button.window else { check(false,"Formatting control has a native window"); return }
+            let point = button.convert(NSPoint(x:trailing ? button.bounds.maxX-3 : button.bounds.minX+3,y:button.bounds.midY),to:nil)
+            func event(_ type: NSEvent.EventType) -> NSEvent { NSEvent.mouseEvent(with:type,location:point,modifierFlags:[],timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:window.windowNumber,context:nil,eventNumber:1,clickCount:1,pressure:1)! }
+            let down = event(.leftMouseDown)
+            NSApp.postEvent(event(.leftMouseUp),atStart:true); window.sendEvent(down)
+            if let up = NSApp.nextEvent(matching:.leftMouseUp,until:Date(),inMode:.default,dequeue:true) { window.sendEvent(up) }
+            RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        }
+        let mainContent = editor.selectionPanel?.contentViewController?.view, mainFrame = editor.selectionPanel?.contentViewController?.view.window?.frame
+        let toolbarButtons = panelButtons(editor.selectionPanel)
+        check(toolbarButtons.count == 9,"Selection toolbar exposes all supported controls")
+        clickPadding(toolbarButtons[0],trailing:true)
+        check(editor.selectionPanel?.child?.isShown == true && editor.selectionPanel?.isShown == true && editor.selectionPanel?.contentViewController?.view === mainContent && mainContent?.window?.frame == mainFrame,"Block-style button padding opens a secondary panel without replacing or moving the inline toolbar")
+        check(AppController.shared.current === session,"Formatting popover focus retains the document's menu context")
+        clickPadding(toolbarButtons[7])
+        check(editor.selectionPanel?.child?.isShown == true && panelButtons(editor.selectionPanel?.child).count == 21 && editor.selectionPanel?.contentViewController?.view === mainContent,"Color-button padding opens both palettes beside the persistent toolbar")
+        let colorButtons = panelButtons(editor.selectionPanel?.child)
+        for button in colorButtons {
+            let screen = button.window!.convertPoint(toScreen:button.convert(NSPoint(x:button.bounds.minX+3,y:button.bounds.midY),to:nil))
+            let event = NSEvent.mouseEvent(with:.mouseMoved,location:controller.window!.convertPoint(fromScreen:screen),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
+            NSCursor.iBeam.set(); editor.cursorUpdate(with:event)
+            check(NSCursor.current == .pointingHand,"Secondary-panel button padding owns the pointing-hand cursor over editor text")
+        }
+        clickPadding(colorButtons[7])
+        check(session.buffer.source.contains("#text(fill: rgb(\"#247cb7\"))[") && editor.selectedRange() == range && editor.selectionPanel?.isShown == true,"Clicking outside a color swatch applies its color while preserving selection and the toolbar")
+        session.undo(); check(session.buffer.source == original,"Padded color-button actions retain shared source Undo")
+        editor.updateSelectionPanel(requireKeyWindow:false)
+        let currentButtons = panelButtons(editor.selectionPanel)
+        clickPadding(currentButtons[8],trailing:true)
+        check(editor.selectionPanel?.child?.isShown == true && editor.selectionPanel?.isShown == true,"More-button padding opens alignment options beside the toolbar")
+        let moreButtons = panelButtons(editor.selectionPanel?.child)
+        check(moreButtons.count == 8,"More styles exposes Close, inline marks and supported alignment choices")
+        clickPadding(moreButtons[5],trailing:true)
+        check(session.buffer.projection.blocks[0].alignment == "center" && editor.selectedRange() == range && editor.selectionPanel?.isShown == true,"Trailing alignment-row padding applies the whole-block alignment and keeps the toolbar")
+        session.undo(); check(session.buffer.source == original,"Padded alignment-row actions retain exact-source Undo")
+        editor.updateSelectionPanel(requireKeyWindow:false)
+        clickPadding(panelButtons(editor.selectionPanel)[7])
+        let escape = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:"\u{1b}",charactersIgnoringModifiers:"\u{1b}",isARepeat:false,keyCode:53)!
+        editor.keyDown(with:escape); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(editor.selectionPanel?.child?.isShown != true && editor.selectionPanel?.isShown == true,"Escape dismisses formatting options while preserving the main toolbar")
+        clickPadding(panelButtons(editor.selectionPanel)[7])
+        check(editor.selectionPanel?.child?.isShown == true,"A secondary panel reopens with one click after Escape")
+        clickPadding(panelButtons(editor.selectionPanel?.child)[0],trailing:true)
+        check(editor.selectionPanel?.child?.isShown != true && editor.selectionPanel?.isShown == true && controller.window?.firstResponder === editor,"Close-button padding dismisses only the secondary panel and retains editing focus")
         editor.formatNative(.superscript); editor.selectionAttribute("color","#247cb7"); editor.selectionAttribute("highlight","#fff2a6"); editor.selectionAttribute("link","https://example.com")
         check(editor.textStorage?.attribute(.link,at:range.location,effectiveRange:nil) == nil && !editor.isAutomaticLinkDetectionEnabled,"Write links remain selectable text instead of AppKit click targets")
         check(editor.selectedRange() == range && editor.string.hasPrefix("Before café 👩🏽‍💻 after"),"Panel actions preserve the selected Unicode text")
