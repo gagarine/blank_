@@ -2,6 +2,72 @@ import Foundation
 import BlankCore
 
 final class DocumentTests {
+    func testSelectionStyles() {
+        let original = "// Keep\nBefore *café 👩🏽‍💻* after\n\n#let custom = 42"
+        let buffer = DocumentBuffer(original)
+        let range = (buffer.projection.text as NSString).range(of:"café 👩🏽‍💻")
+        buffer.format(range,mark:.superscript)
+        XCTAssertTrue(buffer.projection.blocks.flatMap(\.inlines).flatMap(\.runs).filter { $0.style.superscript }.map(\.text).joined() == "café 👩🏽‍💻")
+        buffer.format(range,mark:.subscripted)
+        XCTAssertFalse(buffer.projection.blocks.flatMap(\.inlines).flatMap(\.runs).contains { $0.style.superscript })
+        buffer.setInlineAttribute(range,attribute:"color",value:"#247cb7")
+        buffer.setInlineAttribute(range,attribute:"highlight",value:"#fff2a6")
+        buffer.setInlineAttribute(range,attribute:"link",value:"https://example.com/café?q=\"x\"")
+        XCTAssertEqual(buffer.projection.text,DocumentBuffer(original).projection.text)
+        XCTAssertFalse(buffer.parsed.erroneous)
+        XCTAssertTrue(buffer.projection.blocks.flatMap(\.inlines).flatMap(\.runs).contains { $0.style.link == "https://example.com/café?q=\"x\"" })
+        XCTAssertTrue(buffer.source.hasPrefix("// Keep\nBefore ")); XCTAssertTrue(buffer.source.hasSuffix("\n\n#let custom = 42"))
+        buffer.setInlineAttribute(range,attribute:"color",value:nil)
+        XCTAssertFalse(buffer.projection.blocks.flatMap(\.inlines).flatMap(\.runs).contains { $0.style.color != nil })
+        let code = DocumentBuffer("Before café 👩🏽‍💻 after")
+        let selection = (code.projection.text as NSString).range(of:"café 👩🏽‍💻")
+        code.format(selection,mark:.code); XCTAssertEqual(code.projection.text,"Before café 👩🏽‍💻 after")
+        XCTAssertTrue(code.projection.blocks[0].inlines.flatMap(\.runs).contains { $0.style.code })
+        code.editWrite(NSRange(location:selection.location+4,length:0),text:"#_*")
+        XCTAssertEqual(code.projection.text,"Before café#_* 👩🏽‍💻 after"); XCTAssertFalse(code.parsed.erroneous)
+        code.undo(); code.format(selection,mark:.code); XCTAssertEqual(code.source,"Before café 👩🏽‍💻 after")
+        for text in ["#let x = 2\n日本", "```quoted`", "", "  leading\n\ntrailing  "] {
+            let raw = DocumentBuffer(rawTypst(text,block:true))
+            XCTAssertEqual(raw.projection.blocks[0].kind,"raw"); XCTAssertEqual(raw.projection.text,text)
+            raw.editWrite(NSRange(location:0,length:0),text:"é`#")
+            XCTAssertEqual(raw.projection.text,"é`#"+text); XCTAssertFalse(raw.parsed.erroneous)
+            raw.undo(); XCTAssertEqual(raw.source,rawTypst(text,block:true))
+        }
+        for text in ["日本`#", " leading` ", "````"] {
+            let inline = DocumentBuffer("Before "+rawTypst(text)+" after")
+            XCTAssertEqual(inline.projection.text,"Before "+text+" after"); XCTAssertFalse(inline.parsed.erroneous)
+        }
+        let tagged = DocumentBuffer("```typ\n#let x = 2\n```")
+        tagged.editWrite(NSRange(location:0,length:0),text:"日本`")
+        XCTAssertTrue(tagged.source.hasPrefix("```typ\n")); XCTAssertEqual(tagged.projection.text,"日本`#let x = 2")
+        for alignment in ["left","center","right","justified"] {
+            let aligned = DocumentBuffer("Before\n\n*日本👩🏽‍💻* after\n\nAfter")
+            let selected = aligned.projection.blocks[1].display
+            aligned.setAlignment(selected,alignment:alignment)
+            let source = aligned.source
+            aligned.selection = EditSelection(aligned.projection.sourceOffset(at:selected.location+2),aligned.projection.sourceOffset(at:selected.location+2))
+            aligned.split(NSRange(location:selected.location+2,length:0))
+            XCTAssertEqual(aligned.projection.blocks.count,4); XCTAssertEqual(aligned.projection.blocks[1].alignment,alignment); XCTAssertEqual(aligned.projection.blocks[2].alignment,alignment)
+            XCTAssertEqual(aligned.projection.blocks[1].text,"日本"); XCTAssertEqual(aligned.projection.blocks[2].text,"👩🏽‍💻 after"); XCTAssertFalse(aligned.parsed.erroneous)
+            aligned.undo(); XCTAssertEqual(aligned.source,source)
+            aligned.editWrite(NSRange(location:selected.location+2,length:0),text:"first\nsecond")
+            XCTAssertEqual(aligned.projection.blocks.count,4); XCTAssertEqual(aligned.projection.blocks[2].alignment,alignment); XCTAssertFalse(aligned.parsed.erroneous)
+            aligned.undo(); XCTAssertEqual(aligned.source,source)
+        }
+        let block = DocumentBuffer("Before\n\n= Café *日本*\n\nAfter")
+        let heading = block.projection.blocks[1]
+        block.setAlignment(heading.display,alignment:"center")
+        XCTAssertEqual(block.projection.blocks[1].kind,"heading"); XCTAssertEqual(block.projection.blocks[1].alignment,"center")
+        XCTAssertEqual(block.projection.blocks[1].text,"Café 日本")
+        block.setKind(1,kind:"raw"); XCTAssertEqual(block.projection.blocks[1].kind,"raw")
+        block.setKind(1,kind:"paragraph"); XCTAssertEqual(block.projection.blocks[1].text,"Café 日本")
+        block.undo(); block.undo(); block.undo(); XCTAssertEqual(block.source,"Before\n\n= Café *日本*\n\nAfter")
+        let table = DocumentBuffer("#table(columns: 2, inset: 8pt, /*Keep*/ [日本 👋], [Other])")
+        let cell = table.projection.blocks[0].cellRanges[0]
+        table.setInlineAttribute(cell,attribute:"color",value:"#247cb7"); table.format(cell,mark:.superscript)
+        XCTAssertTrue(table.source.contains("inset: 8pt, /*Keep*/")); XCTAssertEqual(table.projection.text,"日本 👋\nOther\n")
+        table.undo(); table.undo(); XCTAssertEqual(table.source,"#table(columns: 2, inset: 8pt, /*Keep*/ [日本 👋], [Other])")
+    }
     func testUnderlineAndStrikethrough() {
         let original = "// Keep café\nBefore *café 👩🏽‍💻* and _日本_ after\n\n#let custom = 42"
         let b = DocumentBuffer(original), text = b.projection.text
@@ -817,6 +883,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Section parent movement",t.testMoveSectionAcrossParents),
             ("Formatting toggles",t.testFormatTogglePreservesOtherMarks),
             ("Underline and strikethrough source, Unicode, clipboard and history",t.testUnderlineAndStrikethrough),
+            ("Selection styles, raw code, alignment, tables and history",t.testSelectionStyles),
             ("Incremental spaces and Unicode",t.testIncrementalSpacesAndUnicode),
             ("Local projection equals full parsing",t.testLocalProjectionMatchesFullParse),
             ("Typing inside formatting",t.testTypingInsideFormattingKeepsWrappers),

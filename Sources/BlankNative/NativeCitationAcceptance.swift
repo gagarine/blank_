@@ -217,8 +217,8 @@ final class CitationAcceptanceProtocol: URLProtocol {
         check(session.buffer.source == "== ","Format Heading 2 uses the canonical block transaction")
         session.undo(); check(session.buffer.source.isEmpty,"Menu block formatting shares source Undo")
         for character in "/code" { editor.insertText(String(character),replacementRange:editor.selectedRange()) }
-        check(editor.slashMatches.first?.kind == "code","Slash search exposes Code")
-        editor.slashIndex = 0; editor.chooseSlash()
+        check(editor.slashMatches.contains { $0.kind == "code" } && editor.slashMatches.contains { $0.kind == "raw" },"Slash search exposes executable Code and displayed Code block")
+        editor.slashIndex = editor.slashMatches.firstIndex { $0.kind == "code" }!; editor.chooseSlash()
         check(session.sheet == nil && session.buffer.source == "\n\n#{\n  \n}\n\n","Slash Code immediately inserts an empty Typst source block")
         check(session.buffer.projection.blocks.contains { $0.kind == "source" } && editor.codeButtons.values.contains { !$0.isHidden },"Inserted Code uses the existing collapsible source-block presentation")
         check(session.buffer.selection.focus == 7 && controller.window?.firstResponder === editor,"Code insertion focuses its interior ready to type")
@@ -226,6 +226,16 @@ final class CitationAcceptanceProtocol: URLProtocol {
         check(session.buffer.source.contains("#{\n  let café = \"日本 👋\"\n}") && !session.buffer.parsed.erroneous,"Inserted Code accepts Unicode Typst source directly")
         session.undo(); check(session.buffer.source == "\n\n#{\n  \n}\n\n","Typing inside Code has exact-source Undo")
         session.undo(); check(session.buffer.source.isEmpty,"Code block insertion shares source Undo")
+        load("")
+        for character in "/code" { editor.insertText(String(character),replacementRange:editor.selectedRange()) }
+        editor.slashIndex = editor.slashMatches.firstIndex { $0.kind == "raw" }!; editor.chooseSlash()
+        check(session.buffer.projection.blocks.first?.kind == "raw" && !session.buffer.parsed.erroneous,"Slash Code block creates a displayed literal code example")
+        editor.insertText("#let literal = 42",replacementRange:editor.selectedRange())
+        check(session.buffer.projection.text == "#let literal = 42" && session.buffer.source.hasPrefix("```"),"Slash Code block types literal code with protected fences")
+        let displayedCode = session.buffer.source
+        session.undo(); session.undo(); check(session.buffer.source == "/code","Displayed code conversion Undo restores the typed slash command")
+        session.undo(); check(session.buffer.source.isEmpty,"Slash query typing shares source Undo")
+        session.undo(true); session.undo(true); session.undo(true); check(session.buffer.source == displayedCode,"Displayed code conversion and typing retain exact-source Redo")
         load("")
         session.switchMode(.preview)
         check(SlashCommand.all.allSatisfy { !session.canPerformBlockCommand($0) },"Insert and block Format commands are disabled in Preview")

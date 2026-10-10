@@ -6,7 +6,7 @@ import Combine
 @main enum BlankMain {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--measure") { ResourceMetrics.run(); return }
-        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") {
+        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") || CommandLine.arguments.contains("--selection-style-self-test") {
             setbuf(stdout,nil)
         }
         let app = NSApplication.shared
@@ -50,7 +50,8 @@ import Combine
         else { newDocument(nil) }
         // Finish AppKit's launch/activation-policy transition before requesting
         // activation. The complete menu is already attached at this point.
-        DispatchQueue.main.async { NSApp.activate() }
+        DispatchQueue.main.async { if !CommandLine.arguments.contains("--selection-style-ui-test") { NSApp.activate() } }
+        if CommandLine.arguments.contains("--selection-style-ui-test"), let controller = controllers.first { NativeSelectionStyleAcceptance.showFixture(controller:controller) }
         if CommandLine.arguments.contains("--figure-ui-test"), let controller = controllers.first { NativeFigureAcceptance.showFixture(controller:controller) }
         if CommandLine.arguments.contains("--reference-ui-test"), let controller = controllers.first {
             NativeReferenceAcceptance.showFixture(controller:controller)
@@ -58,13 +59,14 @@ import Combine
         if CommandLine.arguments.contains("--citation-ui-test"), let controller = controllers.first {
             NativeCitationAcceptance.showFixture(controller:controller)
         }
-        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") {
+        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") || CommandLine.arguments.contains("--selection-style-self-test") {
             // Run outside a main-queue block: the acceptance suite pumps the
             // run loop while waiting for background compiler/file callbacks.
             RunLoop.main.perform {
                 MainActor.assumeIsolated {
                     guard let controller = self.controllers.first else { fatalError("Launch did not open an editor") }
-                    if CommandLine.arguments.contains("--block-source-self-test") { NativeBlockSourceAcceptance.run(controller:controller) }
+                    if CommandLine.arguments.contains("--selection-style-self-test") { NativeSelectionStyleAcceptance.run(controller:controller) }
+                    else if CommandLine.arguments.contains("--block-source-self-test") { NativeBlockSourceAcceptance.run(controller:controller) }
                     else if CommandLine.arguments.contains("--label-self-test") { NativeLabelAcceptance.run(controller:controller) }
                     else if CommandLine.arguments.contains("--figure-self-test") { NativeFigureAcceptance.run(controller:controller) }
                     else if CommandLine.arguments.contains("--document-self-test") { NativeDocumentAcceptance.run() }
@@ -155,6 +157,12 @@ import Combine
     @objc func italic(_ sender: Any?) { current?.editor?.formatNative(true) }
     @objc func underline(_ sender: Any?) { current?.editor?.formatNative(.underline) }
     @objc func strikethrough(_ sender: Any?) { current?.editor?.formatNative(.strikethrough) }
+    @objc func inlineStyle(_ sender: NSMenuItem) { if let mark = InlineMark(rawValue:sender.tag) { current?.editor?.formatNative(mark) } }
+    @objc func alignment(_ sender: NSMenuItem) { if let alignment = sender.representedObject as? String { current?.editor?.selectionAlignment(alignment) } }
+    @objc func inlineColor(_ sender: NSMenuItem) {
+        if let values = sender.representedObject as? [String] { current?.editor?.selectionAttribute(values[0],values.count > 1 ? values[1] : nil) }
+    }
+    @objc func editLink(_ sender: Any?) { current?.editor?.selectionLink() }
     @objc func blockCommand(_ sender: NSMenuItem) {
         guard let command = sender.representedObject as? SlashCommand else { return }
         current?.performBlockCommand(command)
@@ -168,6 +176,8 @@ import Combine
         if [#selector(bold(_:)),#selector(italic(_:)),#selector(underline(_:)),#selector(strikethrough(_:))].contains(where:{ $0 == menuItem.action }) {
             return current?.mode == .write
         }
+        if menuItem.action == #selector(inlineStyle(_:)) || menuItem.action == #selector(alignment(_:)) { return current?.mode == .write }
+        if menuItem.action == #selector(inlineColor(_:)) || menuItem.action == #selector(editLink(_:)) { return current?.mode == .write && (current?.editor?.selectedRange().length ?? 0) > 0 }
         if menuItem.action == #selector(blockCommand(_:)), let command = menuItem.representedObject as? SlashCommand {
             return current?.canPerformBlockCommand(command) == true
         }
@@ -237,6 +247,17 @@ import Combine
         for command in SlashCommand.all where command.insertion { blockItem(insert,command) }
         let format = menu("Format"); add(format,"Bold",#selector(bold(_:)),"b",target:self); add(format,"Italic",#selector(italic(_:)),"i",target:self)
         add(format,"Underline",#selector(underline(_:)),"u",target:self); add(format,"Strikethrough",#selector(strikethrough(_:)),target:self)
+        for (title,mark) in [("Inline Code",InlineMark.code),("Superscript",.superscript),("Subscript",.subscripted)] {
+            add(format,title,#selector(inlineStyle(_:)),target:self); format.items.last?.tag = mark.rawValue
+        }
+        add(format,"Link…",#selector(editLink(_:)),target:self)
+        for (title,attribute) in [("Text Color","color"),("Highlight Color","highlight")] {
+            let item = NSMenuItem(title:title,action:nil,keyEquivalent:""); let submenu = NSMenu(title:title); item.submenu = submenu; format.addItem(item)
+            add(submenu,attribute == "color" ? "Default" : "None",#selector(inlineColor(_:)),target:self); submenu.items.last?.representedObject = [attribute]
+            for (name,color,highlight) in inlinePalette { add(submenu,name,#selector(inlineColor(_:)),target:self); submenu.items.last?.representedObject = [attribute,attribute == "color" ? color : highlight] }
+        }
+        let alignmentItem = NSMenuItem(title:"Alignment",action:nil,keyEquivalent:""); let alignmentMenu = NSMenu(title:"Alignment"); alignmentItem.submenu = alignmentMenu; format.addItem(alignmentItem)
+        for value in ["left","center","right","justified"] { add(alignmentMenu,value.capitalized,#selector(alignment(_:)),target:self); alignmentMenu.items.last?.representedObject = value }
         format.addItem(.separator())
         for command in SlashCommand.all where !command.insertion { blockItem(format,command) }
         let view = menu("View"); add(view,"Write",#selector(writeMode(_:)),"1",target:self); add(view,"Source",#selector(sourceMode(_:)),"2",target:self); add(view,"Preview",#selector(previewMode(_:)),"3",target:self)

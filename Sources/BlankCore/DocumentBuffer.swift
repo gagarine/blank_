@@ -251,6 +251,7 @@ public final class DocumentBuffer {
         guard canEditWrite(range) else { return }
         let range = projection.atomicRange(range)
         if editCell(range,group:group,operation:{ model,range in model.editWrite(range,text:text,raw:raw,group:group,styleOverride:styleOverride) }) { return }
+        if editAligned(range,group:group,operation:{ $0.editWrite($1,text:text,raw:raw,group:group,styleOverride:styleOverride) }) { return }
         if range.length > 0, projection.blocks.contains(where:{ !$0.cellRanges.isEmpty && range.location <= NSMaxRange($0.display) && NSMaxRange(range) >= $0.display.location }) {
             // Cell separators cannot be deleted as ordinary source characters.
             // A selection across cells edits their contents as one transaction;
@@ -288,6 +289,25 @@ public final class DocumentBuffer {
             commit(source.replacingBytes(ByteSpan(start,end), with: insert), selection: EditSelection(start+insert.utf8.count,start+insert.utf8.count), group: group)
             return
         }
+        if first == last, a.kind == "raw", !raw {
+            if text.isEmpty, from == 0, to == a.display.length, range.length > 0 {
+                commit(source.replacingBytes(a.source,with:""),selection:EditSelection(a.source.start,a.source.start),group:group); return
+            }
+            let plain = (a.text as NSString).replacingCharacters(in:NSRange(location:from,length:to-from),with:text)
+            let span = a.unalignedSource ?? a.source
+            let replacement = replacingRawBody(plain,prefix:source.bytes(ByteSpan(span.start,a.body.start)),suffix:source.bytes(ByteSpan(a.body.end,span.end)))
+            let changed = source.replacingBytes(span,with:replacement)
+            let next = Projection(source:changed,parsed:ParsedSource.parse(changed))
+            let at = next.sourceOffset(at:range.location+text.utf16.count)
+            commit(changed,selection:EditSelection(at,at),group:group)
+            return
+        }
+        if first == last, !raw, styleOverride == nil || styleOverride!.code, let rawEdit = replacingRaw(a.inlines,from:from,to:to,text:text) {
+            let changed = source.replacingBytes(rawEdit.0,with:rawEdit.1)
+            let projected = Projection(source:changed,parsed:ParsedSource.parse(changed))
+            let caret = projected.sourceOffset(at:range.location+text.utf16.count)
+            commit(changed,selection:EditSelection(caret,caret),group:group); return
+        }
         // Removing the complete contents of a mark removes its empty wrapper
         // as well. Keep partial edits, neighboring syntax and custom expressions.
         if first == last, !raw, text.isEmpty, from < to,
@@ -302,9 +322,9 @@ public final class DocumentBuffer {
             var offset = 0
             for run in a.inlines.flatMap(\.runs) {
                 let end = offset+run.text.utf16.count
-                if run.literal, from >= offset, to <= end, styleOverride == nil || (styleOverride!.bold == run.style.bold && styleOverride!.italic == run.style.italic && styleOverride!.underline == run.style.underline && styleOverride!.strikethrough == run.style.strikethrough) {
+                if run.literal, (!run.style.code || !text.contains("`")), from >= offset, to <= end, styleOverride == nil || styleOverride! == run.style {
                     let start = run.source.start+run.text.byteOffset(utf16:from-offset)
-                    let finish = run.source.start+run.text.byteOffset(utf16:to-offset), inserted = escapeTypst(text)
+                    let finish = run.source.start+run.text.byteOffset(utf16:to-offset), inserted = run.style.code ? text : escapeTypst(text)
                     let caret = start+inserted.utf8.count
                     commit(source.replacingBytes(ByteSpan(start,finish),with:inserted),selection:EditSelection(caret,caret),group:group)
                     return
@@ -325,6 +345,12 @@ public final class DocumentBuffer {
                 if style.bold { inserted = styleOverride == nil ? "*"+inserted+"*" : "#strong["+inserted+"]" }
                 if style.underline { inserted = "#underline["+inserted+"]" }
                 if style.strikethrough { inserted = "#strike["+inserted+"]" }
+                if style.superscript { inserted = "#super["+inserted+"]" }
+                if style.subscripted { inserted = "#sub["+inserted+"]" }
+                if let color = style.color { inserted = "#text(fill: rgb("+typstStringLiteral(color)+"))["+inserted+"]" }
+                if let color = style.highlight { inserted = "#highlight(fill: rgb("+typstStringLiteral(color)+"))["+inserted+"]" }
+                if let link = style.link { inserted = "#link("+typstStringLiteral(link)+")["+inserted+"]" }
+                if style.code { inserted = rawTypst(text) }
             }
         }
         var replacement = prefix + inserted + suffix
@@ -332,10 +358,54 @@ public final class DocumentBuffer {
         if styleOverride != nil && (ParsedSource.parse(replacement).erroneous || first == last && Projection(source:replacement,parsed:ParsedSource.parse(replacement)).text != expectedText) {
             replacement = sliceInlines(a.inlines,0,min(from,a.display.length),source:source,explicitMarks:true)+inserted+sliceInlines(b.inlines,to,b.display.length,source:source,explicitMarks:true)
         }
-        let span = ByteSpan(a.body.start,b.body.end)
+        let span = ByteSpan(a.kind == "raw" && from == 0 ? a.source.start : a.body.start,b.kind == "raw" && to == b.display.length ? b.source.end : b.body.end)
         let prefixLength = replacement == prefix+inserted+suffix ? prefix.utf8.count : sliceInlines(a.inlines,0,min(from,a.display.length),source:source,explicitMarks:true).utf8.count
         let caret = span.start + prefixLength + inserted.utf8.count
         commit(source.replacingBytes(span, with: replacement), selection: EditSelection(caret,caret), group: text.contains("\n") || raw ? "" : group)
+    }
+    // An aligned paragraph owns one outer wrapper. Split/paste its affected
+    // content locally, then give each resulting text block its own wrapper so
+    // Return never hides new paragraphs inside an opaque multi-block expression.
+    private func editAligned(_ range: NSRange,group: String = "",operation: (DocumentBuffer,NSRange)->Void) -> Bool {
+        let b = projection.blocks[projection.blockIndex(at:range.location)]
+        guard let alignment = b.alignment, let inner = b.unalignedSource,
+              range.location >= b.display.location, NSMaxRange(range) <= NSMaxRange(b.display) else { return false }
+        let model = DocumentBuffer(source.bytes(inner))
+        model.setReferencePresentations(referencePresentations.filter { $0.source.start >= inner.start && $0.source.end <= inner.end }.map { $0.shifted(by:-inner.start) })
+        let local = NSRange(location:range.location-b.display.location,length:range.length)
+        model.selection = EditSelection(model.projection.sourceOffset(at:local.location),model.projection.sourceOffset(at:NSMaxRange(local)))
+        operation(model,local)
+        var replacement = "", previous = 0, mappedFocus: Int?
+        for part in model.projection.blocks {
+            replacement += model.source.bytes(ByteSpan(previous,part.source.start))
+            let body = model.source.bytes(part.source)
+            let prefix = part.editable ? alignment == "justified" && part.kind == "paragraph" ? "#par(justify: true)[" : "#align("+(alignment == "justified" ? "left" : alignment)+")[" : ""
+            if model.selection.focus >= part.source.start, model.selection.focus <= part.source.end {
+                mappedFocus = b.source.start+replacement.utf8.count+prefix.utf8.count+model.selection.focus-part.source.start
+            }
+            replacement += prefix+body+(part.editable ? "]" : "")
+            previous = part.source.end
+        }
+        replacement += model.source.bytes(ByteSpan(previous,model.source.utf8.count))
+        let changed = source.replacingBytes(b.source,with:replacement)
+        let caret = mappedFocus ?? b.source.start+replacement.utf8.count
+        commit(changed,selection:EditSelection(caret,caret),group:group)
+        return true
+    }
+    private func replacingRaw(_ nodes: [Inline],from: Int,to: Int,text: String) -> (ByteSpan,String)? {
+        var offset = 0
+        for node in nodes {
+            if case let .group(span,prefix,_,children) = node, from >= offset, to <= offset+node.length {
+                if prefix.hasPrefix("`") {
+                    let plain = children.flatMap(\.runs).map(\.text).joined()
+                    let edited = (plain as NSString).replacingCharacters(in:NSRange(location:from-offset,length:to-from),with:text)
+                    return (span,edited.isEmpty ? "" : replacingRawBody(edited,prefix:prefix,suffix:source.bytes(ByteSpan(children.flatMap(\.runs).last?.source.end ?? span.end,span.end))))
+                }
+                if let edit = replacingRaw(children,from:from-offset,to:to-offset,text:text) { return edit }
+            }
+            offset += node.length
+        }
+        return nil
     }
     private func emptiedMarkSpan(_ nodes: [Inline],from: Int,to: Int) -> ByteSpan? {
         var offset = 0
@@ -369,6 +439,8 @@ public final class DocumentBuffer {
     }
     public func split(_ range: NSRange) {
         guard canEditWrite(range) else { return }
+        if editAligned(range,operation:{ $0.split($1) }) { return }
+        if projection.blocks[projection.blockIndex(at:range.location)].kind == "raw" { editWrite(range,text:"\n",group:""); return }
         if isInCodeBlock(range.location), range.length == 0 || isInCodeBlock(NSMaxRange(range)) {
             let before = source.bytes(ByteSpan(0,projection.sourceOffset(at:range.location))).components(separatedBy:"\n").last ?? ""
             let indent = String(before.prefix { $0 == " " || $0 == "\t" })
@@ -393,23 +465,46 @@ public final class DocumentBuffer {
         editWrite(NSRange(location: caret,length: 0), text: "\n", group: "")
     }
     public func lineBreak(_ range: NSRange) {
-        if isInCodeBlock(range.location) { split(range); return }
+        if isInCodeBlock(range.location) || projection.blocks[projection.blockIndex(at:range.location)].kind == "raw" { split(range); return }
         editWrite(range,text:"\\ ",raw:true,group:"")
     }
     public func format(_ range: NSRange, italic: Bool) {
         format(range,mark:italic ? .italic : .bold)
     }
     public func format(_ range: NSRange, mark: InlineMark) {
+        applyInline(range,removing:mark.rawValue,enabled:{ $0[keyPath:mark.keyPath] },wrap:{ source,plain in
+            if mark == .code { return rawTypst(plain) }
+            if mark == .superscript || mark == .subscripted {
+                let opposite = mark == .superscript ? InlineMark.subscripted : .superscript
+                let projection = Projection(source:source,parsed:ParsedSource.parse(source))
+                let body = projection.blocks.flatMap(\.inlines)
+                return mark.wrapper+sliceInlines(body,0,plain.utf16.count,source:source,removingMark:opposite.rawValue)+mark.suffix
+            }
+            return mark.wrapper+source+mark.suffix
+        })
+    }
+    // Native palettes and link editing all use one localized, lossless transaction.
+    public func setInlineAttribute(_ range: NSRange, attribute: String, value: String?) {
+        guard ["color","highlight","link"].contains(attribute) else { return }
+        let identifier = attribute == "color" ? 100 : attribute == "highlight" ? 101 : 102
+        applyInline(range,removing:identifier,enabled:{ _ in value == nil },wrap:{ body,_ in
+            guard let value else { return body }
+            if attribute == "link" { return "#link("+typstStringLiteral(value)+")["+body+"]" }
+            let function = attribute == "color" ? "text" : "highlight"
+            return "#"+function+"(fill: rgb("+typstStringLiteral(value)+"))["+body+"]"
+        })
+    }
+    private func applyInline(_ range: NSRange, removing: Int, enabled: (TextStyle)->Bool, wrap: (String,String)->String) {
         let range = projection.atomicRange(range)
         guard range.length > 0 else { return }
-        if editCell(range,operation:{ $0.format($1,mark:mark) }) { return }
+        if editCell(range,operation:{ $0.applyInline($1,removing:removing,enabled:enabled,wrap:wrap) }) { return }
         if projection.blocks.contains(where:{ !$0.cellRanges.isEmpty && NSIntersectionRange($0.display,range).length > 0 }) {
             let draft = editingCopy()
             for block in projection.blocks.reversed() {
                 let regions = block.cellRanges.isEmpty ? [block.display] : block.cellRanges.map { NSRange(location:block.display.location+$0.location,length:$0.length) }
                 for region in regions.reversed() {
                     let intersection = NSIntersectionRange(region,range)
-                    if intersection.length > 0 { draft.format(intersection,mark:mark) }
+                    if intersection.length > 0 { draft.applyInline(intersection,removing:removing,enabled:enabled,wrap:wrap) }
                 }
             }
             commit(draft.source,selection:selection)
@@ -420,7 +515,7 @@ public final class DocumentBuffer {
         let start = projection.blockIndex(at: range.location), end = projection.blockIndex(at: NSMaxRange(range))
         var text = source
         for index in (start...end).reversed() {
-            let b = projection.blocks[index]; guard b.editable else { continue }
+            let b = projection.blocks[index]; guard b.editable, b.kind != "raw" else { continue }
             let a = max(0,range.location-b.display.location), z = min(b.display.length,NSMaxRange(range)-b.display.location)
             guard z > a else { continue }
             var offset = 0
@@ -428,13 +523,14 @@ public final class DocumentBuffer {
                 defer { offset += run.text.utf16.count }
                 return offset < z && offset+run.text.utf16.count > a
             }
-            let remove = !selectedRuns.isEmpty && selectedRuns.allSatisfy { $0.style[keyPath:mark.keyPath] }
-            let unmarked = sliceInlines(b.inlines,a,z,source:source,removingMark:mark.rawValue)
-            let styled = remove ? unmarked : mark.wrapper+unmarked+mark.suffix
+            let remove = !selectedRuns.isEmpty && selectedRuns.allSatisfy { enabled($0.style) }
+            let unmarked = sliceInlines(b.inlines,a,z,source:source,removingMark:removing)
+            let plain = (b.text as NSString).substring(with:NSRange(location:a,length:z-a))
+            let styled = remove ? unmarked : wrap(unmarked,plain)
             var replacement = sliceInlines(b.inlines,0,a,source:source)+styled+sliceInlines(b.inlines,z,b.display.length,source:source)
             let styledParsed = ParsedSource.parse(replacement)
             if styledParsed.erroneous || Projection(source:replacement,parsed:styledParsed).text != b.text {
-                let explicit = remove ? unmarked : "#"+mark.function+"["+unmarked+"]"
+                let explicit = remove ? unmarked : removing == 1 ? "#strong["+unmarked+"]" : removing == 2 ? "#emph["+unmarked+"]" : wrap(unmarked,plain)
                 replacement = sliceInlines(b.inlines,0,a,source:source,explicitMarks:true)+explicit+sliceInlines(b.inlines,z,b.display.length,source:source,explicitMarks:true)
             }
             text = text.replacingBytes(b.body,with:replacement)
@@ -450,7 +546,7 @@ public final class DocumentBuffer {
         let b = projection.blocks[index]; guard b.editable else { return }
         let prefix = kind == "heading" ? String(repeating:"=",count:max(1,level))+" " : kind == "bullet" ? "- " : kind == "number" ? "+ " : kind == "quote" ? "#quote(block: true)[" : ""
         let suffix = kind == "quote" ? "]" : ""
-        let body = source.bytes(b.body)
+        let body = b.kind == "raw" ? escapeTypst(b.text) : source.bytes(b.body)
         var leading = "", trailing = ""
         if kind == "paragraph", body.isEmpty {
             // A removed list marker must leave an actual empty paragraph slot,
@@ -458,13 +554,31 @@ public final class DocumentBuffer {
             if index > 0, !source.bytes(ByteSpan(projection.blocks[index-1].source.end,b.source.start)).contains("\n\n") { leading = "\n" }
             if index+1 < projection.blocks.count, !source.bytes(ByteSpan(b.source.end,projection.blocks[index+1].source.start)).contains("\n\n") { trailing = "\n" }
         }
-        let text = source.replacingBytes(b.source,with:leading+prefix+body+suffix+trailing)
-        let at = b.source.start+leading.utf8.count+prefix.utf8.count+min(max(0,selection.focus-b.body.start),body.utf8.count)
+        let converted = kind == "raw" ? rawTypst(b.text,block:true) : prefix+body+suffix
+        let wrapped = b.alignment.map { $0 == "justified" && kind == "paragraph" ? "#par(justify: true)["+converted+"]" : "#align("+($0 == "justified" ? "left" : $0)+")["+converted+"]" } ?? converted
+        let text = source.replacingBytes(b.source,with:leading+wrapped+trailing)
+        let local = max(0,projection.displayOffset(at:selection.focus)-b.display.location)
+        let next = Projection(source:text,parsed:ParsedSource.parse(text))
+        let at = next.sourceOffset(at:b.display.location+min(local,b.text.utf16.count))
         commit(text,selection:EditSelection(at,at))
     }
     public func setKind(at range: NSRange, kind: String, level: Int = 0) {
         if editCell(range,operation:{ model,local in model.setKind(at:local,kind:kind,level:level) }) { return }
         setKind(projection.blockIndex(at:range.location),kind:kind,level:level)
+    }
+    public func setAlignment(_ range: NSRange, alignment: String) {
+        guard ["left","center","right","justified"].contains(alignment) else { return }
+        if editCell(range,operation:{ $0.setAlignment($1,alignment:alignment) }) { return }
+        var result = source
+        for b in projection.blocks.reversed() where b.editable && (NSIntersectionRange(b.display,range).length > 0 || range.length == 0 && b.display.location <= range.location && NSMaxRange(b.display) >= range.location) {
+            guard alignment != "justified" || b.kind == "paragraph" else { continue }
+            let body = source.bytes(b.unalignedSource ?? b.source)
+            let wrapped = alignment == "justified" ? "#par(justify: true)["+body+"]" : "#align("+alignment+")["+body+"]"
+            result = result.replacingBytes(b.source,with:wrapped)
+        }
+        commit(result,selection:selection)
+        selection = EditSelection(projection.sourceOffset(at:range.location),projection.sourceOffset(at:NSMaxRange(range)))
+        if !undoSteps.isEmpty { undoSteps[undoSteps.count-1].after = selection }
     }
     public func blockAction(_ index: Int, action: String) {
         guard projection.blocks.indices.contains(index) else { return }
@@ -559,7 +673,8 @@ public final class DocumentBuffer {
                         pieces.append(model.copy(NSRange(location:selected.location-b.display.location-display.location,length:selected.length)).source)
                     }
                 }
-            } else { pieces.append(sliceInlines(b.inlines,a,z,source:source)) }
+            } else if b.kind == "raw" { pieces.append(rawTypst((b.text as NSString).substring(with:NSRange(location:a,length:z-a)))) }
+            else { pieces.append(sliceInlines(b.inlines,a,z,source:source)) }
         }
         var plain = (projection.text as NSString).substring(with:range)
         if projection.blocks.contains(where:{ $0.collapsed && NSIntersectionRange($0.display,range).length > 0 }) {
@@ -736,4 +851,22 @@ extension DocumentBuffer {
         let z = projected.sourceOffset(at:updated.display.location+NSMaxRange(range))
         return commit(next,selection:EditSelection(a,z))
     }
+}
+
+private func replacingRawBody(_ text: String,prefix: String,suffix: String) -> String {
+    let count = prefix.prefix { $0 == "`" }.count
+    guard count > 0 else { return rawTypst(text) }
+    if count >= 3, !prefix.contains("\n") {
+        var longest = 0, current = 0
+        for character in text { if character == "`" { current += 1; longest = max(longest,current) } else { current = 0 } }
+        let fence = String(repeating:"`",count:max(count,longest+1))
+        let padding = text.trimmingCharacters(in:.whitespacesAndNewlines).hasSuffix("`") ? " " : ""
+        return fence+prefix.dropFirst(count)+text+padding+fence
+    }
+    if !text.contains(String(repeating:"`",count:count)) { return prefix+text+suffix }
+    if count == 1 { return rawTypst(text) }
+    var longest = 0, current = 0
+    for character in text { if character == "`" { current += 1; longest = max(longest,current) } else { current = 0 } }
+    let fence = String(repeating:"`",count:max(count,longest+1))
+    return fence+prefix.dropFirst(count)+text+suffix.dropLast(count)+fence
 }

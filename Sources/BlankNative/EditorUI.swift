@@ -25,9 +25,10 @@ struct SlashCommand: Identifiable {
     // rendering. Structural document objects have no supported cell editor.
     var supportedInTableCell: Bool { ["paragraph","link","footnote","citation","label","reference"].contains(kind) }
     var systemSymbol: String {
-        ["paragraph":"paragraphsign","heading":"textformat.size","bullet":"list.bullet","number":"list.number","quote":"quote.bubble","image":"photo","table":"tablecells","code":"chevron.left.forwardslash.chevron.right","citation":"books.vertical","footnote":"text.badge.plus","equation":"function","link":"link","label":"tag","reference":"arrow.turn.up.right"][kind] ?? "textformat"
+        ["paragraph":"paragraphsign","heading":"textformat.size","bullet":"list.bullet","number":"list.number","quote":"quote.bubble","image":"photo","table":"tablecells","raw":"chevron.left.forwardslash.chevron.right","code":"chevron.left.forwardslash.chevron.right","citation":"books.vertical","footnote":"text.badge.plus","equation":"function","link":"link","label":"tag","reference":"arrow.turn.up.right"][kind] ?? "textformat"
     }
     var id: String { kind+String(level) }
+    static var blockStyles: [SlashCommand] { Array(all.prefix(7)) + [SlashCommand(kind:"raw",label:"Code block",hint:"Displayed code example",symbol:"</>",keywords:"raw programming")] }
     static let all: [SlashCommand] = [
         .init(kind:"paragraph",label:"Paragraph",hint:"Plain text",symbol:"¶",keywords:"text"),
         .init(kind:"heading",level:1,label:"Heading 1",hint:"Chapter title",symbol:"H₁",keywords:"title h1"),
@@ -36,6 +37,7 @@ struct SlashCommand: Identifiable {
         .init(kind:"bullet",label:"Bulleted list",hint:"Unordered items",symbol:"•",keywords:"list"),
         .init(kind:"number",label:"Numbered list",hint:"Ordered items",symbol:"1.",keywords:"list"),
         .init(kind:"quote",label:"Quotation",hint:"Block quotation",symbol:"❝",keywords:"quote"),
+        .init(kind:"raw",label:"Code block",hint:"Displayed code example",symbol:"</>",keywords:"raw programming"),
         .init(kind:"image",label:"Image and caption",hint:"Insert a figure",symbol:"▧",keywords:"picture photo media pdf svg",insertion:true),
         .init(kind:"table",label:"Table",hint:"Rows and columns",symbol:"▦",keywords:"grid",insertion:true),
         .init(kind:"code",label:"Code",hint:"Typst source",symbol:"</>",keywords:"source syntax programming",insertion:true),
