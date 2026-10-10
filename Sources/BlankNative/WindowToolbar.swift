@@ -12,12 +12,19 @@ extension NSToolbarItem.Identifier {
 }
 
 @MainActor extension DocumentWindow {
+    static let defaultToolbarItems: [NSToolbarItem.Identifier] = [.blankSidebar,.blankSidebarSeparator,.flexibleSpace,.blankZoom,.space,.blankModes,.flexibleSpace,.blankShare,.space,.blankSearch]
+    static let previousToolbarItems: [NSToolbarItem.Identifier] = [.blankSidebar,.blankSidebarSeparator,.flexibleSpace,.blankModes,.flexibleSpace,.blankZoom,.space,.blankShare,.space,.blankSearch]
+    func updateDefaultToolbarLayout(_ toolbar: NSToolbar) {
+        // Migrate the former default saved by AppKit while retaining custom layouts.
+        if toolbar.itemIdentifiers == Self.previousToolbarItems { toolbar.itemIdentifiers = Self.defaultToolbarItems }
+    }
     func installToolbar() {
         let toolbar = NSToolbar(identifier:"blank.document.native")
         toolbar.delegate = self; toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = true; toolbar.autosavesConfiguration = true
         window?.toolbarStyle = .unified
         window?.toolbar = toolbar
+        updateDefaultToolbarLayout(toolbar)
         session.$mode.combineLatest(session.$contactSheet).sink { [weak self] mode,contact in
             self?.modeItem?.selectedIndex = EditorMode.allCases.firstIndex(of:mode) ?? 0
             self?.zoomItem?.isHidden = mode != .preview && !contact
@@ -64,7 +71,7 @@ extension NSToolbarItem.Identifier {
     }
 }
 extension DocumentWindow: NSToolbarDelegate {
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.blankSidebar,.blankSidebarSeparator,.flexibleSpace,.blankModes,.flexibleSpace,.blankZoom,.space,.blankShare,.space,.blankSearch] }
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { Self.defaultToolbarItems }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.blankSidebar,.blankSidebarSeparator,.blankModes,.blankZoom,.blankSearch,.blankShare,.space,.flexibleSpace] }
     func toolbar(_ toolbar: NSToolbar,itemForItemIdentifier identifier: NSToolbarItem.Identifier,willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         if identifier == .blankSidebarSeparator {

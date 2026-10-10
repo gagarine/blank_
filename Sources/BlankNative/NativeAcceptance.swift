@@ -27,6 +27,22 @@ import BlankCore
         check(controller.window?.contentViewController === controller.splitController && controller.splitController.contentsItem.behavior == .sidebar,"Native split-view controller supplies sidebar behavior")
         check(controller.searchItem != nil && controller.shareButton != nil,"Search and Share use native toolbar controls")
         check(controller.sidebarItem?.isBordered == true && controller.modeItem?.isBordered == true,"Interactive toolbar controls opt into the system glass backing")
+        if let toolbar = controller.window?.toolbar {
+            let original = toolbar.itemIdentifiers
+            func zoomPrecedesModes() -> Bool {
+                guard let zoom = toolbar.itemIdentifiers.firstIndex(of:.blankZoom), let modes = toolbar.itemIdentifiers.firstIndex(of:.blankModes) else { return false }
+                return modes == zoom+2 && toolbar.itemIdentifiers[zoom+1] == .space
+            }
+            check(zoomPrecedesModes(),"Zoom appears immediately to the left of the mode controls")
+            toolbar.itemIdentifiers = DocumentWindow.previousToolbarItems
+            controller.updateDefaultToolbarLayout(toolbar)
+            check(zoomPrecedesModes(),"The saved previous default toolbar updates to place Zoom before the modes")
+            let customized = toolbar.itemIdentifiers.filter { $0 != .blankShare }
+            toolbar.itemIdentifiers = customized
+            controller.updateDefaultToolbarLayout(toolbar)
+            check(toolbar.itemIdentifiers == customized,"Toolbar migration preserves a user's customized layout")
+            toolbar.itemIdentifiers = original
+        }
         NativeDeleteAcceptance.run(controller:controller)
         NativeFigureAcceptance.run(controller:controller)
         NativeBlockSourceAcceptance.run(controller:controller)

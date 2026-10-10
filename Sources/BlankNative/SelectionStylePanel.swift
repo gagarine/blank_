@@ -44,7 +44,7 @@ struct SelectionStyleBar: View {
     @NativeState private var page: SelectionPage?
     private func size(_ page: SelectionPage) -> NSSize {
         switch page {
-        case .colors: return NSSize(width:280,height:294)
+        case .colors: return NSSize(width:280,height:255)
         case .more: return NSSize(width:240,height:326)
         case .blocks: return NSSize(width:240,height:CGFloat(SlashCommand.blockStyles.count)*34+52)
         }
@@ -79,11 +79,8 @@ struct SelectionStyleBar: View {
             .allowsHitTesting(false)
     }
     func header(_ title: String) -> some View {
-        HStack {
-            SelectionButton(width:70) { page = nil } label: { Label("Close",systemImage:"xmark") }
-                .accessibilityLabel("Close formatting options")
-            Spacer(); Text(title).fontWeight(.medium); Spacer()
-        }.padding(.horizontal,8).frame(height:38)
+        Text(title).fontWeight(.medium)
+            .frame(maxWidth:.infinity,alignment:.leading).padding(.horizontal,16).frame(height:38)
     }
     func row(_ label: String,_ icon: String,selected: Bool = false,enabled: Bool = true,action: @escaping ()->Void) -> some View {
         SelectionButton(width:nil,action:action) {
@@ -116,15 +113,12 @@ struct SelectionStyleBar: View {
         }
     }
     var colors: some View {
-        VStack(alignment:.leading,spacing:0) {
-            header("Colors"); Divider()
-            VStack(alignment:.leading,spacing:8) {
-                Text("Text Color").fontWeight(.medium)
-                palette(highlight:false)
-                Text("Highlight Color").fontWeight(.medium).padding(.top,4)
-                palette(highlight:true)
-            }.padding(12)
-        }
+        VStack(alignment:.leading,spacing:8) {
+            Text("Text Color").fontWeight(.medium)
+            palette(highlight:false)
+            Text("Highlight Color").fontWeight(.medium).padding(.top,4)
+            palette(highlight:true)
+        }.padding(12)
     }
     func palette(highlight: Bool) -> some View {
         let entries: [(String,String?)] = [(highlight ? "None" : "Default",nil)]+inlinePalette.map { ($0.0,highlight ? $0.2 : $0.1) }
