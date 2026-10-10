@@ -33,7 +33,7 @@ struct NativeEditor: NSViewRepresentable {
         scroll.isHidden = session.contactSheet
         if let view = scroll.documentView as? NativeTextView { view.refresh() }
     }
-    static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) { if let editor = scroll.documentView as? NativeTextView { editor.slashPopover?.close(); editor.blockPopover?.close() } }
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: ()) { if let editor = scroll.documentView as? NativeTextView { editor.slashPopover?.close(); editor.blockPopover?.close(); editor.selectionPanel?.close() } }
 }
 
 struct NativeInputDefaults {
@@ -58,6 +58,27 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var compositionOriginal = ""
     var slashPopover: NSPopover?
     var blockPopover: NSPopover?
+    var selectionPanel: SelectionStylePanel?
+    var selectionPanelIdentity = ""
+    var selectionPanelAnchor = NSRect.zero
+    var selectionPanelUpdatePending = false
+    var selectingText = false
+    var selectionPanelObservers: [NSObjectProtocol] = []
+    deinit { selectionPanelObservers.forEach(NotificationCenter.default.removeObserver) }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        selectionPanelObservers.forEach(NotificationCenter.default.removeObserver); selectionPanelObservers.removeAll()
+        if let window {
+            for name in [NSWindow.didResignKeyNotification,NSWindow.willCloseNotification] {
+                selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:name,object:window,queue:.main) { [weak self] _ in self?.selectionPanel?.orderOut(nil) })
+            }
+            if let clip = enclosingScrollView?.contentView {
+                clip.postsBoundsChangedNotifications = true
+                selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:NSView.boundsDidChangeNotification,object:clip,queue:.main) { [weak self] _ in self?.scheduleSelectionPanel() })
+            }
+        } else { selectionPanel?.orderOut(nil); selectionPanel?.contentViewController = nil }
+    }
+    var insertionExtra: TextStyle?
     var blockMenuRevision = -1
     var blockMenuPath = ""
     var slashStart: Int?
@@ -90,10 +111,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var insertionUnderline: Bool?
     var insertionStrikethrough: Bool?
     var compositionStyle: TextStyle?
-    var hasInsertionStyle: Bool { insertionBold != nil || insertionItalic != nil || insertionUnderline != nil || insertionStrikethrough != nil }
-    func clearInsertionStyle() { insertionBold = nil; insertionItalic = nil; insertionUnderline = nil; insertionStrikethrough = nil }
+    var hasInsertionStyle: Bool { insertionExtra != nil || insertionBold != nil || insertionItalic != nil || insertionUnderline != nil || insertionStrikethrough != nil }
+    func clearInsertionStyle() { insertionExtra = nil; insertionBold = nil; insertionItalic = nil; insertionUnderline = nil; insertionStrikethrough = nil }
     func typingStyle() -> TextStyle {
-        var style = caretStyle()
+        var style = insertionExtra ?? caretStyle()
         if let insertionBold { style.bold = insertionBold }; if let insertionItalic { style.italic = insertionItalic }
         if let insertionUnderline { style.underline = insertionUnderline }; if let insertionStrikethrough { style.strikethrough = insertionStrikethrough }
         return style
@@ -258,7 +279,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                             result.addAttribute(.font,value:run.style.code ? NSFont.monospacedSystemFont(ofSize:size*0.83,weight:.regular) : readingFont(size:textSize,bold:run.style.bold || block.kind == "heading",italic:run.style.italic || block.kind == "quote"),range:r)
                             if run.style.underline { result.addAttribute(.underlineStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
                             if run.style.strikethrough { result.addAttribute(.strikethroughStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
-                            if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:NSColor.linkColor],range:r) }
+                            applyInlineAppearance(run.style,to:result,range:r)
+                            if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:run.style.color.flatMap(nativeHexColor) ?? NSColor.linkColor],range:r) }
                         }
                         at += r.length
                     }
@@ -319,7 +341,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     func blockAttributes(_ index: Int) -> [NSAttributedString.Key:Any] {
         guard let session else { return [:] }
         let block = session.buffer.projection.blocks[index], size = CGFloat(session.fontSize)
-        let p = NSMutableParagraphStyle(); p.lineHeightMultiple = 1; p.lineSpacing = size*0.3; p.paragraphSpacing = 18
+        let p = NSMutableParagraphStyle(); p.alignment = nativeAlignment(block.alignment); p.lineHeightMultiple = 1; p.lineSpacing = size*0.3; p.paragraphSpacing = 18
         var textSize = size
         if block.kind == "heading" {
             textSize = size*(block.level == 1 ? 1.89 : block.level == 2 ? 1.33 : 1.056)
@@ -339,7 +361,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             return
         }
         let at = selectedRange().location, index = session.buffer.projection.blockIndex(at:at)
-        codeInputPreferences = session.buffer.projection.blocks[index].kind == "source"
+        codeInputPreferences = ["source","raw"].contains(session.buffer.projection.blocks[index].kind) || caretStyle().code
         inputDefaults?.apply(to:self,source:codeInputPreferences)
         var attributes = blockAttributes(index)
         if session.buffer.projection.tableCell(at:selectedRange()) != nil, at < (textStorage?.length ?? 0) {
@@ -364,9 +386,14 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             native.setWidth(10,type:.absoluteValueType,for:.padding)
             let style = NSMutableParagraphStyle(); style.textBlocks = [native]
             style.lineSpacing = 3; style.paragraphSpacing = 8
+            style.alignment = nativeAlignment(block.cellProjections[index].blocks.first?.alignment)
             let range = NSRange(location:block.display.location+cell.location,length:cell.length+1)
             result.addAttributes([.paragraphStyle:style,.font:readingFont(size:size*0.85,bold:index < block.columns),.foregroundColor:session.inkColor],range:range)
             for part in block.cellProjections[index].blocks {
+                if part.display.length > 0 {
+                    let paragraph = style.mutableCopy() as! NSMutableParagraphStyle; paragraph.alignment = nativeAlignment(part.alignment)
+                    result.addAttribute(.paragraphStyle,value:paragraph,range:NSRange(location:range.location+part.display.location,length:part.display.length))
+                }
                 var at = range.location+part.display.location
                 for run in part.inlines.flatMap(\.runs) {
                     let r = NSRange(location:at,length:run.text.utf16.count)
@@ -374,7 +401,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                         result.addAttribute(.font,value:run.style.code ? NSFont.monospacedSystemFont(ofSize:size*0.8,weight:.regular) : readingFont(size:size*0.85,bold:run.style.bold || index < block.columns,italic:run.style.italic),range:r)
                         if run.style.underline { result.addAttribute(.underlineStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
                         if run.style.strikethrough { result.addAttribute(.strikethroughStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
-                        if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:NSColor.linkColor],range:r) }
+                        applyInlineAppearance(run.style,to:result,range:r)
+                        if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:run.style.color.flatMap(nativeHexColor) ?? NSColor.linkColor],range:r) }
                     }
                     at += r.length
                 }
@@ -386,11 +414,12 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         layoutManager?.ensureLayout(forBoundingRect:visibleRect.offsetBy(dx:-textContainerOrigin.x,dy:-textContainerOrigin.y),in:textContainer)
     }
     func refresh(reveal: Bool = false) {
+        if session?.mode != .write || session?.contactSheet == true { selectionPanel?.orderOut(nil) }
         if let session, blockPopover?.isShown == true,
            session.buffer.revision != blockMenuRevision || session.active != blockMenuPath { blockPopover?.close() }
 
         effectiveAppearance.performAsCurrentDrawingAppearance { refreshContent(reveal:reveal) }
-        session?.scheduleReferencePreview()
+        scheduleSelectionPanel(); session?.scheduleReferencePreview()
     }
     private func refreshContent(reveal: Bool) {
         guard !composing, !hasMarkedText(), let session, session.mode != .preview else { return }
@@ -473,7 +502,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             }
         }
     }
-    override func layout() { super.layout(); positionObjects(); positionCodeControls() }
+    override func layout() { super.layout(); positionObjects(); positionCodeControls(); scheduleSelectionPanel() }
     func positionObjects() {
         guard !positioningObjects, let session, session.mode == .write, window != nil else { return }
         positioningObjects = true; defer { positioningObjects = false }
@@ -530,7 +559,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         return result
     }
     func textViewDidChangeSelection(_ notification: Notification) {
-        captureSelection(); if !refreshing { updateTypingAttributes(); needsDisplay = true }; if session?.paragraphFocus == true { lastAppearance = ""; refresh() }
+        captureSelection(); scheduleSelectionPanel(); if !refreshing { updateTypingAttributes(); needsDisplay = true }; if session?.paragraphFocus == true { lastAppearance = ""; refresh() }
         if !refreshing, session?.mode == .write {
             tableControlCell = session?.buffer.projection.tableCell(at:selectedRange()).map { ($0.block,$0.cell) }
             positionTableControls()
@@ -545,7 +574,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if session.mode == .write, text.isEmpty, affectedCharRange.length > 0 {
             let blocks = session.buffer.projection.blocks
             var selection = affectedCharRange
-            for index in blocks.indices where blocks[index].kind == "source" {
+            for index in blocks.indices where ["source","raw"].contains(blocks[index].kind) {
                 let block = blocks[index]
                 guard NSIntersectionRange(affectedCharRange,block.display) != block.display else { continue }
                 let before = index > 0 && NSLocationInRange(block.display.location-1,affectedCharRange)
@@ -639,6 +668,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         session.changed()
     }
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, selectionPanel?.isVisible == true { selectionPanel?.orderOut(nil); return }
         if let session, session.sheet == .commands {
             // SwiftUI attaches the sheet on the next run-loop turn. Preserve
             // early key events for its native field, never the document.
@@ -682,11 +712,15 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             case .italic: insertionItalic = enabled
             case .underline: insertionUnderline = enabled
             case .strikethrough: insertionStrikethrough = enabled
+            case .superscript, .subscripted, .code:
+                var style = typingStyle(); style[keyPath:mark.keyPath] = enabled
+                if mark == .superscript { style.subscripted = false }; if mark == .subscripted { style.superscript = false }
+                insertionExtra = style
             }
             session.buffer.breakUndoGroup(); return
         }
         session.format(mark:mark)
-        let style = caretStyle(); insertionBold = style.bold; insertionItalic = style.italic
+        let style = caretStyle(); insertionExtra = style; insertionBold = style.bold; insertionItalic = style.italic
         insertionUnderline = style.underline; insertionStrikethrough = style.strikethrough
     }
     override func changeFont(_ sender: Any?) {
@@ -755,9 +789,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         // Select the complete object before deleting, as for native tables.
         guard session.buffer.projection.tableCell(at:range) == nil else { return false }
         let object: ProjectedBlock?
-        if backward, index > 0, range.location == block.display.location, ["table","source"].contains(blocks[index-1].kind) { object = blocks[index-1] }
-        else if !backward, index+1 < blocks.count, range.location == NSMaxRange(block.display), ["table","source"].contains(blocks[index+1].kind) { object = blocks[index+1] }
-        else if block.kind == "source", backward ? range.location == block.display.location && index > 0 : range.location == NSMaxRange(block.display) && index+1 < blocks.count { object = block }
+        if backward, index > 0, range.location == block.display.location, ["table","source","raw"].contains(blocks[index-1].kind) { object = blocks[index-1] }
+        else if !backward, index+1 < blocks.count, range.location == NSMaxRange(block.display), ["table","source","raw"].contains(blocks[index+1].kind) { object = blocks[index+1] }
+        else if ["source","raw"].contains(block.kind), backward ? range.location == block.display.location && index > 0 : range.location == NSMaxRange(block.display) && index+1 < blocks.count { object = block }
         else if block.kind == "table", range.location == NSMaxRange(block.display) { object = block }
         else { object = nil }
         guard let object else { return false }
@@ -952,6 +986,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         return true
     }
     override func mouseDown(with event: NSEvent) {
+        selectionPanel?.orderOut(nil)
+        selectingText = true; defer { selectingText = false; scheduleSelectionPanel() }
         let point = convert(event.locationInWindow,from:nil)
         if grabbed == nil { hoverBlock = hoveredBlock(at:point); needsDisplay = true }
         if let hoverBlock = hoveredBlock(at:point), isOverBlockHandle(point,index:hoverBlock) {
@@ -999,7 +1035,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         needsDisplay = true
     }
     override func mouseUp(with event: NSEvent) {
-        guard let index = grabbed else { super.mouseUp(with:event); return }
+        guard let index = grabbed else { super.mouseUp(with:event); scheduleSelectionPanel(); return }
         blockDragTimer?.invalidate(); blockDragTimer = nil; blockDragEvent = nil
         NSCursor.pop(); grabbed = nil; needsDisplay = true
         if draggingBlock { if session?.requestEditing() == true { session?.buffer.moveBlock(index,before:dragTarget); session?.changed() } }
@@ -1020,7 +1056,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let block = session.buffer.projection.blocks[index]
         let menu = NSMenu()
         if block.editable {
-            for command in SlashCommand.all.prefix(7) where command.kind != block.kind || command.level != block.level {
+            for command in SlashCommand.blockStyles where command.kind != block.kind || command.level != block.level {
                 let item = BlockMenuItem(title:command.label,action:#selector(blockMenuAction(_:)),keyEquivalent:""); item.target = self; item.blockIndex = index; item.command = command; menu.addItem(item)
             }
             menu.addItem(.separator())

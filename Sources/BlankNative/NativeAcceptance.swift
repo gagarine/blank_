@@ -34,6 +34,7 @@ import BlankCore
         NativeReferenceAcceptance.run(controller:controller)
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
+        NativeSelectionStyleAcceptance.run(controller:controller)
         NativeGoAcceptance.text(original:controller)
         NativeCitationAcceptance.run(controller:controller)
         NativeTemplateAcceptance.run(original:controller)
@@ -382,7 +383,7 @@ import BlankCore
         editor.showBlockMenu(0,event:pointer(.leftMouseUp,handle))
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let handleMenu = (editor.blockPopover?.contentViewController as? NSHostingController<BlockActionMenu>)?.rootView
-        check(editor.blockPopover?.isShown == true && handleMenu?.currentType == "Paragraph" && handleMenu?.items.map { $0.item.title } == ["Heading 1","Heading 2","Heading 3","Bulleted list","Numbered list","Quotation","Edit source…","Duplicate","Delete"],"Block handle identifies the current type and exposes conversion choices immediately")
+        check(editor.blockPopover?.isShown == true && handleMenu?.currentType == "Paragraph" && handleMenu?.items.map { $0.item.title } == ["Heading 1","Heading 2","Heading 3","Bulleted list","Numbered list","Quotation","Code block","Edit source…","Duplicate","Delete"],"Block handle identifies the current type and exposes conversion choices immediately")
         check(handleMenu?.items.allSatisfy { ($0.item as? BlockMenuItem)?.command?.kind != "paragraph" && $0.children.isEmpty } == true,"Direct conversion choices omit the current block type")
         if let content = editor.blockPopover?.contentViewController?.view {
             func menuButtons(_ view: NSView) -> [MenuActionButton] {

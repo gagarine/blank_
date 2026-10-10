@@ -33,7 +33,8 @@ import BlankCore
             ("#let value = 42\n#let other = \"日本😀\"",false),
             ("#{\n  // keep this comment\n  let value = \"日本😀\"\n}",true),
             ("#{\n  // keep this comment\n  let value = \"日本😀\"\n}",false),
-            ("#table(columns: 2, inset: 8pt, [日本], [], [Café], [])",false)
+            ("#table(columns: 2, inset: 8pt, [日本], [], [Café], [])",false),
+            (rawTypst("#let value = 42\n日本😀",block:true),false)
         ]
         for (object,folded) in objects {
             for backward in [false,true] {

@@ -53,6 +53,10 @@ with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
         assert expected <= font_names, font_names
         assert not any(b'LastResort' in name for name in font_names), font_names
         print('PASS: PDF compiles underline/strikethrough and combined styles, using bundled regular/bold/italic text and math fonts without LastResort glyph fallback')
+        styles = '#align(center)[= Centered heading]\n\n#par(justify: true)[Justified paragraph. Another sentence to demonstrate alignment.]\n\n#super[1] #sub[2] #text(fill: rgb("#247cb7"))[Blue] #highlight(fill: rgb("#fff2a6"))[Yellow] #link("https://example.com")[Link] `#let x = 2`\n\n```\n#let literal = 2\n```'
+        result = call('compile',{'root':str(root),'entry':'styles.typ','files':{'styles.typ':styles},'revision':4})
+        assert not result['diagnostics'] and result['pages'] >= 1, result
+        print('PASS: alignment, justification, superscript/subscript, text/highlight colors, links and displayed code compile to PDF')
         result = call('compile',{'root':str(root),'entry':'main.typ','files':{'main.typ':'#nonexistent()'},'revision':4})
         assert result['diagnostics'] and 'pdf' not in result
         print('PASS: invalid Typst returns diagnostics without a replacement PDF')

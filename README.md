@@ -12,6 +12,10 @@ A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI a
 
 **Format** and the text’s **Font** context menu offer Bold, Italic, Underline (⌘U) and Strikethrough. Styles combine, toggle on selected text or subsequent typing, and work in native table cells. Underline and Strikethrough use Typst’s `#underline[…]` and `#strike[…]`; Write renders native text decorations, and Source retains the complete expressions. Structured clipboard and RTF paste preserve these styles, with shared Undo across views.
 
+Selecting editable text in Write opens a native style panel beside the selection without taking the caret’s focus. It uses the same popover style as slash and handle menus, with hover-only button backgrounds and pointing-hand cursors. It offers supported whole-block conversions, Bold/Italic/Underline/Strikethrough, inline code, links, text and highlight palettes, and superscript/subscript. Alignment applies to whole blocks; justification is available for paragraphs. The same additions appear in **Format**. Links use a native URL sheet with Apply and Remove Link. Panel actions use canonical source/history and work in native table cells; block conversion is omitted in cells.
+
+**Code block** in `/`, Format, the handle menu, or the selection panel turns the whole block into a displayed Typst raw-code example. Write shows literal code in monospace and keeps Return inside it; source fences and language tags survive ordinary edits. Inline code is a separate style. The existing **Code** command still inserts executable Typst source. Source exposes every character of both forms. Colors, links, super/subscript and alignment compile through standard Typst functions. Structured clipboard retains their source; external RTF import currently preserves bold/italic/underline/strikethrough only.
+
 Citation search filters while you type. References already cited in the project appear first with an **Already cited** marker and can be reused without contacting Zotero. Inline citations have a subtle gray background; click to edit their reference, locator and display. Rich or computed citations retain an exact-source editor. The document’s style controls formatting; Citation display chooses a standard citation, one within a sentence, author only or year only. Write shows Typst’s formatted citations and bibliography, while Source retains their exact expressions. New insertions consistently use `#cite`.
 
 Slash commands also appear in the macOS **Format** (paragraph styles) and **Insert** (objects) menus. **Code** creates an empty collapsible Typst source block with the caret inside. Write colors its Typst syntax, keeps Return inside the block with indentation, and protects its outer `#{` / `}` from partial edits; select the whole block to delete it. Source permits editing every delimiter. Code input disables prose substitutions and restores them when returning to prose.
@@ -42,6 +46,8 @@ Save As preflights dependency collisions and copies literal dependencies plus fi
 
 Checks cover external projects, nested/root paths, embedded/external references, Zotero refresh with isolated responses, custom CSL, assets, Unicode, selection/clipboard, Undo and Save As. Compiler checks compare reference presentation with and without the metadata fields. Native checks also cover citation clicks and local edits, table-cell fields, already-cited search/reuse, menu parity, Code insertion/colors, delimiter protection, indented Return, composition and exact-source Undo. Disposable app inspection verifies the gray fields, citation controls, picker markers and native menu layout; live Zotero insertion/refresh remain unverified.
 
+Selection-panel checks cover combined Unicode styles, whole-block conversion/alignment, native link-sheet focus, table cells, literal code editing, composition and shared Undo. Disposable app inspection verifies the popover layout and formatting actions. Ten unchanged panel updates in a small debug fixture measured 0.2 ms wall time and 0.3 ms CPU; the acceptance process used 153.3 MiB RSS. This excludes initial panel creation and the compiler process, and does not establish long-document performance.
+
 ## Download
 
 Download the last release from https://github.com/gagarine/blank_/releases (no auto-update yet)
@@ -68,7 +74,7 @@ The Cargo workspace shares a lockfile/cache for the in-process parser and separa
 
 ## Remaining work
 
-- Rich controls for editing existing links, footnotes, grouped/complex citations and custom figures; PDF-page selection and broader image-format validation.
+- Rich controls for editing footnotes, grouped/complex citations and custom figures; PDF-page selection and broader image-format validation.
 - Zotero group discovery and citation-picker keyboard navigation. Custom citation show rules and note-style footnote presentation in Write remain unverified.
 - Continuous editing across included files and repeated includes.
 - Settings synchronization, disjoint external-change merging and broader recovery checks.

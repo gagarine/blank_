@@ -1,13 +1,16 @@
 import Foundation
 
 public enum InlineMark: Int {
-    case bold = 1, italic, underline, strikethrough
+    case bold = 1, italic, underline, strikethrough, superscript, subscripted, code
     public var keyPath: WritableKeyPath<TextStyle,Bool> {
         switch self {
         case .bold: return \.bold
         case .italic: return \.italic
         case .underline: return \.underline
         case .strikethrough: return \.strikethrough
+        case .superscript: return \.superscript
+        case .subscripted: return \.subscripted
+        case .code: return \.code
         }
     }
     public var function: String {
@@ -16,6 +19,9 @@ public enum InlineMark: Int {
         case .italic: return "emph"
         case .underline: return "underline"
         case .strikethrough: return "strike"
+        case .superscript: return "super"
+        case .subscripted: return "sub"
+        case .code: return "raw"
         }
     }
     var wrapper: String { self == .bold ? "*" : self == .italic ? "_" : "#"+function+"[" }
@@ -26,16 +32,24 @@ public struct TextStyle: Codable, Equatable {
     public var italic = false
     public var underline = false
     public var strikethrough = false
+    public var superscript = false
+    public var subscripted = false
+    public var color: String? = nil
+    public var highlight: String? = nil
     public var code = false
     public var link: String? = nil
     public init() {}
-    private enum CodingKeys: String, CodingKey { case bold, italic, underline, strikethrough, code, link }
+    private enum CodingKeys: String, CodingKey { case bold, italic, underline, strikethrough, superscript, subscripted, color, highlight, code, link }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy:CodingKeys.self)
         bold = try values.decodeIfPresent(Bool.self,forKey:.bold) ?? false
         italic = try values.decodeIfPresent(Bool.self,forKey:.italic) ?? false
         underline = try values.decodeIfPresent(Bool.self,forKey:.underline) ?? false
         strikethrough = try values.decodeIfPresent(Bool.self,forKey:.strikethrough) ?? false
+        superscript = try values.decodeIfPresent(Bool.self,forKey:.superscript) ?? false
+        subscripted = try values.decodeIfPresent(Bool.self,forKey:.subscripted) ?? false
+        color = try values.decodeIfPresent(String.self,forKey:.color)
+        highlight = try values.decodeIfPresent(String.self,forKey:.highlight)
         code = try values.decodeIfPresent(Bool.self,forKey:.code) ?? false
         link = try values.decodeIfPresent(String.self,forKey:.link)
     }
@@ -101,10 +115,10 @@ public indirect enum Inline {
             if start == 0 && end == length && removingMark == nil && !explicitMarks { return source.bytes(span) }
             let body = sliceInlines(nodes, start, end, source: source, removingMark: removingMark,explicitMarks:explicitMarks)
             let mark = removingMark.flatMap(InlineMark.init(rawValue:))
-            let remove = mark.map { prefix == $0.wrapper || prefix.hasPrefix("#"+$0.function) } ?? false
+            let remove = mark.map { $0 == .code ? prefix.hasPrefix("`") : prefix == $0.wrapper || prefix.hasPrefix("#"+$0.function+"[") || prefix.hasPrefix("#"+$0.function+"(") } ?? (removingMark == 100 ? isNativeColorWrapper(prefix,function:"text") : removingMark == 101 ? isNativeColorWrapper(prefix,function:"highlight") : removingMark == 102 ? prefix.hasPrefix("#link(") : false)
             let head = explicitMarks && prefix == "*" ? "#strong[" : explicitMarks && prefix == "_" ? "#emph[" : prefix
             let tail = explicitMarks && (prefix == "*" || prefix == "_") ? "]" : suffix
-            return body.isEmpty ? "" : remove ? body : head + body + tail
+            return body.isEmpty ? "" : remove ? (mark == .code ? escapeTypst((nodes.flatMap(\.runs).map(\.text).joined() as NSString).substring(with:NSRange(location:start,length:end-start))) : body) : head + body + tail
         }
     }
 }
@@ -120,6 +134,8 @@ public func sliceInlines(_ nodes: [Inline], _ start: Int, _ end: Int, source: St
 public struct ProjectedBlock {
     public var kind: String
     public var level: Int = 0
+    public var alignment: String? = nil
+    public var unalignedSource: ByteSpan? = nil
     public var source: ByteSpan
     public var body: ByteSpan
     public var inlines: [Inline]
@@ -138,6 +154,7 @@ public struct ProjectedBlock {
         var copy = self
         copy.source = ByteSpan(source.start+delta,source.end+delta)
         copy.body = ByteSpan(body.start+delta,body.end+delta)
+        if let unalignedSource { copy.unalignedSource = ByteSpan(unalignedSource.start+delta,unalignedSource.end+delta) }
         copy.inlines = inlines.map { $0.shifted(by:delta) }
         copy.labelSpans = labelSpans.map { ByteSpan($0.start+delta,$0.end+delta) }
         copy.tableCells = tableCells.map { ByteSpan($0.start+delta,$0.end+delta) }
@@ -241,10 +258,26 @@ public struct Projection {
                 flush(); result.append(ProjectedBlock(kind: "source", source: n.span, body: n.span,
                     inlines: [.text(source.bytes(n.span), n.span, TextStyle(), true)])); i += 1; continue
             }
+            if n.kind == "Raw", source.bytes(n.span).hasPrefix("```"), source.bytes(n.span).contains("\n"), let body = rawBody(n,source:source) {
+                flush(); var style = TextStyle(); style.code = true
+                result.append(ProjectedBlock(kind:"raw",source:n.span,body:body,inlines:[.text(source.bytes(body),body,style,true)]))
+                i += 1; continue
+            }
             if n.kind == "Hash", i+1 < nodes.count {
                 let next = nodes[i+1]
                 let span = ByteSpan(n.start, next.end)
-                if next.kind == "FuncCall", let name = next.children.first, ["strong","emph","underline","strike","link","footnote","cite","ref"].contains(source.bytes(name.span)) {
+                if next.kind == "FuncCall", let name = next.children.first, ["align","par"].contains(source.bytes(name.span)), let content = next.descendants("ContentBlock").first?.markup {
+                    let prefix = source.bytes(ByteSpan(n.start,content.start))
+                    let alignment = ["left","center","right"].first { prefix == "#align("+$0+")[" } ?? (prefix == "#par(justify: true)[" ? "justified" : nil)
+                    if let alignment {
+                        let inner = source.bytes(content.span), projected = Projection(source:inner,parsed:ParsedSource.parse(inner),references:references.filter { $0.source.start >= content.start && $0.source.end <= content.end }.map { $0.shifted(by:-content.start) })
+                        if projected.blocks.count == 1, var b = projected.blocks.first, b.editable {
+                            flush(); b = b.shifted(by:content.start); b.unalignedSource = b.source; b.source = span; b.alignment = alignment
+                            result.append(b); i += 2; continue
+                        }
+                    }
+                }
+                if next.kind == "FuncCall", let name = next.children.first, ["strong","emph","underline","strike","super","sub","text","highlight","link","footnote","cite","ref"].contains(source.bytes(name.span)) {
                     pending += [n,next]; i += 2; continue
                 }
                 let before = source.bytes(ByteSpan(0, n.start)).components(separatedBy: "\n").last ?? ""
@@ -382,13 +415,21 @@ private func inline(_ nodes: [SyntaxNode], source: String, style: TextStyle = Te
             if next.kind == "FuncCall", next.children.first.map({ source.bytes($0.span) }) == "cite" {
                 out.append(.reference("Citation",span,style))
             } else if let content = next.descendants("ContentBlock").first?.markup,
-               ["link", "footnote", "strong", "emph", "underline", "strike"].contains(function ?? "") {
+               ["link", "footnote", "strong", "emph", "underline", "strike", "super", "sub", "text", "highlight"].contains(function ?? "") {
                 var s = style
                 if raw.hasPrefix("#strong") { s.bold = true }
                 if raw.hasPrefix("#emph") { s.italic = true }
                 if function == "underline" { s.underline = true }
                 if function == "strike" { s.strikethrough = true }
-                if raw.hasPrefix("#link"), let a = raw.firstIndex(of: "\""), let b = raw[raw.index(after: a)...].firstIndex(of: "\"") { s.link = String(raw[raw.index(after: a)..<b]) }
+                if function == "super" { s.superscript = true; s.subscripted = false }
+                if function == "sub" { s.subscripted = true; s.superscript = false }
+                if function == "text" || function == "highlight" {
+                    let prefix = source.bytes(ByteSpan(span.start,content.start))
+                    if isNativeColorWrapper(prefix,function:function!), let match = prefix.range(of:"#[0-9a-fA-F]{6}",options:.regularExpression) {
+                        if function == "text" { s.color = String(prefix[match]) } else { s.highlight = String(prefix[match]) }
+                    }
+                }
+                if function == "link", let url = next.descendants("Str").first?.stringValue { s.link = url }
                 out.append(.group(span, source.bytes(ByteSpan(span.start, content.start)), source.bytes(ByteSpan(content.end, span.end)), inline(content.children, source: source, style: s, references:references)))
             } else { out.append(.text(raw, span, style, true)) }
             i += 1
@@ -401,11 +442,40 @@ private func inline(_ nodes: [SyntaxNode], source: String, style: TextStyle = Te
             // projected block boundaries and receive paragraph spacing.
             out.append(.text("\u{2028}", span, style, false))
         }
-        else if n.kind == "Raw", raw.hasPrefix("`"), !raw.hasPrefix("```") {
+        else if n.kind == "Raw", let body = rawBody(n,source:source) {
             var s = style; s.code = true
-            out.append(.group(n.span, "`", "`", [.text(String(raw.dropFirst().dropLast()), ByteSpan(n.start+1, n.end-1), s, true)]))
+            out.append(.group(n.span, source.bytes(ByteSpan(n.start,body.start)), source.bytes(ByteSpan(body.end,n.end)), [.text(source.bytes(body),body,s,true)]))
         } else { out.append(.text(raw, n.span, style, true)) }
         i += 1
     }
     return out
+}
+
+// Fences grow to retain literal backticks, Unicode and newlines without escaping.
+public func rawTypst(_ text: String, block: Bool = false) -> String {
+    var longest = 0, current = 0
+    for character in text { if character == "`" { current += 1; longest = max(longest,current) } else { current = 0 } }
+    let count = block || longest > 0 ? max(3,longest+1) : 1
+    let fence = String(repeating:"`",count:count)
+    return block ? fence+"\n"+text+"\n"+fence : count == 1 ? fence+text+fence : fence+" "+text+(text.trimmingCharacters(in:.whitespacesAndNewlines).hasSuffix("`") ? " " : "")+fence
+}
+
+private func rawBody(_ node: SyntaxNode,source: String) -> ByteSpan? {
+    guard let text = node.rawText, let first = node.children.first(where:{ $0.kind == "RawDelim" }), let last = node.children.last(where:{ $0.kind == "RawDelim" }) else { return nil }
+    let start = node.descendants("RawLang").last?.end ?? first.end
+    let region = ByteSpan(start,max(start,last.start)), body = source.bytes(region)
+    if text.isEmpty {
+        let padding = body.hasPrefix("\r\n") ? 2 : body.hasPrefix("\n") || body.hasPrefix(" ") ? 1 : 0
+        return ByteSpan(start+padding,start+padding)
+    }
+    // Official raw text trims fence padding. Retain its exact contiguous body
+    // for native mapping; dedented/custom raw remains available as source.
+    let match = (body as NSString).range(of:text,options:.literal)
+    guard match.location != NSNotFound else { return nil }
+    let a = start+body.byteOffset(utf16:match.location), z = start+body.byteOffset(utf16:NSMaxRange(match))
+    return source.bytes(ByteSpan(a,z)) == text ? ByteSpan(a,z) : nil
+}
+
+private func isNativeColorWrapper(_ prefix: String,function: String) -> Bool {
+    prefix.range(of:"^#"+function+"\\(fill: rgb\\(\"#[0-9a-fA-F]{6}\"\\)\\)\\[$",options:.regularExpression) != nil
 }
