@@ -225,10 +225,7 @@ struct ContentsView: View {
     var visibleHeadings: [(Int,ProjectedBlock)] {
         var hiddenLevel: Int?
         let headings = session.headings
-        // Omit a single document-title wrapper, matching Go's outline.
-        let omitTitle = headings.filter { $0.1.level == 1 }.count == 1 && headings.count > 1
         return headings.filter { index,b in
-            if omitTitle && b.level == 1 { return false }
             if let level = hiddenLevel { if b.level > level { return false }; hiddenLevel = nil }
             if contentsDrag.collapsed.contains(index) { hiddenLevel = b.level }
             return true
@@ -236,11 +233,6 @@ struct ContentsView: View {
     }
     var contents: some View {
         VStack(alignment:.leading,spacing:0) {
-            HStack {
-                Text(session.headings.first { $0.1.level == 1 }?.1.text ?? session.title)
-                    .font(.system(size:13,weight:.semibold)).lineLimit(1).truncationMode(.tail)
-                Spacer(minLength:0)
-            }.padding(.horizontal,16).padding(.top,18).padding(.bottom,10)
             ScrollView {
                 VStack(alignment:.leading,spacing:3) {
                     if session.includes.count > 1 {
@@ -257,9 +249,9 @@ struct ContentsView: View {
                             let hasChildren = session.headings.contains { $0.0 > index && $0.1.level > b.level && $0.0 < (session.headings.first { $0.0 > index && $0.1.level <= b.level }?.0 ?? Int.max) }
                             Button { if contentsDrag.collapsed.contains(index) { contentsDrag.collapsed.remove(index) } else { contentsDrag.collapsed.insert(index) } } label: { Image(systemName:contentsDrag.collapsed.contains(index) ? "chevron.right" : "chevron.down").font(.system(size:8)).opacity(hasChildren ? 0.6 : 0).frame(width:20,height:28).contentShape(Rectangle()) }.buttonStyle(.plain).disabled(!hasChildren).accessibilityLabel((contentsDrag.collapsed.contains(index) ? "Expand " : "Collapse ")+b.text).accessibilityHidden(!hasChildren)
                             ContentsRow(session:session,drag:contentsDrag,item:.heading(index),title:b.text,activate:{ session.navigateToSource(path:session.active,selection:EditSelection(b.body.start,b.body.start)) })
-                        }.padding(.leading,CGFloat(max(0,b.level-(session.headings.filter { $0.1.level == 1 }.count == 1 ? 2 : 1)))*12).frame(height:28)
+                        }.padding(.leading,CGFloat(max(0,b.level-1))*12).frame(height:28)
                     }
-                }.padding(.horizontal,16)
+                }.padding(.horizontal,16).padding(.top,16)
             }
             Spacer(minLength:0)
         }

@@ -8,6 +8,7 @@ import BlankCore
         func check(_ condition: @autoclosure () -> Bool,_ label: String) { guard condition() else { fatalError("FAIL: \(label) | sidebar=\(session.sidebar), visible=\(session.searchVisible), query=\(session.searchQuery), matches=\(session.searchController.matches.count)") }; print("PASS: \(label)") }
         let source = "= First\n\nCafé 👩🏽‍💻 alpha\n\n== Child\n\nsecond ALPHA\n\n#let literal = \"needle\"\n\n#table(columns: 2, [alpha], [keep])\n\n= Last\n\n"+(0..<65).map { "Paragraph \($0). "+String(repeating:"A long native editing sample. ",count:8) }.joined(separator:"\n\n")
         session.buffer.loadExternal(source); session.revision += 1; editor.refresh()
+        contentsHierarchy(controller:controller)
         toolbarCursor(controller:controller)
         guard let sidebar = controller.sidebarItem as? NSMenuToolbarItem else { fatalError("Sidebar must use the native split menu control") }
         controller.menuNeedsUpdate(sidebar.menu)
@@ -71,6 +72,57 @@ import BlankCore
         session.searchQuery = ""; session.hideSearch(); session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         session.sidebarMode = .contents; session.sidebar = false; session.buffer.loadExternal(""); session.revision += 1; editor.refresh(); editor.setSelectedRange(NSRange(location:0,length:0)); editor.captureSelection()
         check(session.buffer.source.isEmpty && controller.window?.firstResponder === editor,"Sidebar tests leave a clean focused disposable document")
+    }
+    static func contentsHierarchy(controller original: DocumentWindow) {
+        // Keep fixture navigation, thumbnail layout and sidebar transitions
+        // independent of the original window's later acceptance scenarios.
+        let session = DocumentSession(), controller = DocumentWindow(session:session)
+        controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
+        defer { controller.window?.close(); original.window?.makeKeyAndOrderFront(nil) }
+        RunLoop.main.run(until:Date().addingTimeInterval(0.25))
+        guard let editor = session.editor else { fatalError("No hierarchy fixture editor") }
+        let drag = controller.splitController.contentsDrag
+        func check(_ condition: @autoclosure () -> Bool,_ label: String) {
+            guard condition() else { fatalError("FAIL: \(label)") }; print("PASS: \(label)")
+        }
+        func settle() {
+            RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+            controller.splitController.contentsItem.viewController.view.layoutSubtreeIfNeeded()
+        }
+        func load(_ source: String) {
+            session.buffer.loadExternal(source); session.revision += 1; editor.refresh(); drag.collapsed.removeAll(); settle()
+        }
+        func rows(_ view: NSView) -> [ContentsRowView] {
+            (view as? ContentsRowView).map { [$0] } ?? view.subviews.flatMap(rows)
+        }
+        func visibleRows() -> [ContentsRowView] {
+            rows(controller.splitController.contentsItem.viewController.view).filter { !$0.isHiddenOrHasHiddenAncestor && !$0.bounds.isEmpty }
+        }
+        session.sidebarMode = .contents; session.sidebar = true; settle()
+        let single = "= Root café\n\n== Child\n\n=== Nested\n\n日本😀"
+        load(single)
+        check(visibleRows().map { $0.label.stringValue } == ["Root café","Child","Nested"],"A sole H1 is a normal native Contents row with its complete hierarchy")
+        let first = visibleRows()[0], childX = visibleRows()[1].convert(.zero,to:controller.splitController.contentsItem.viewController.view).x
+        check(first.accessibilityPerformPress(),"The first H1 retains native row activation")
+        settle()
+        check(session.buffer.selection.anchor == session.headings[0].1.body.start && session.buffer.source.utf8.elementsEqual(single.utf8),"First-H1 navigation selects its exact source position without editing")
+        drag.collapsed.insert(session.headings[0].0); settle()
+        check(visibleRows().map { $0.label.stringValue } == ["Root café"],"Collapsing a sole H1 keeps its row and hides only descendants")
+        load(single+"\n\n= Other\n\n== Other child")
+        let childWithOther = visibleRows().first { $0.label.stringValue == "Child" }!
+        check(abs(childWithOther.convert(.zero,to:controller.splitController.contentsItem.viewController.view).x-childX) < 1,"Adding another H1 does not shift an existing child's indentation")
+        load("= Same\n\n== Child\n\n= Same\n\n== Child")
+        let roots = session.headings.filter { $0.1.level == 1 }
+        check(visibleRows().map { $0.label.stringValue } == ["Same","Child","Same","Child"],"Repeated H1 titles each have exactly one native hierarchy row")
+        drag.collapsed.insert(roots[0].0); settle()
+        check(visibleRows().map { $0.label.stringValue } == ["Same","Same","Child"],"Repeated-title sections collapse independently by source identity")
+        let second = visibleRows().first { $0.item == .heading(roots[1].0) }!
+        _ = second.accessibilityPerformPress(); settle()
+        check(session.buffer.selection.anchor == roots[1].1.body.start,"Repeated-title navigation targets the selected heading's source")
+        load("== Child\n\n=== Nested\n\nBody")
+        check(visibleRows().map { $0.label.stringValue } == ["Child","Nested"],"Contents without an H1 retains its complete native heading rows")
+        load("Just prose")
+        check(visibleRows().isEmpty,"Contents without headings has no placeholder heading row")
     }
     static func wait(_ session: DocumentSession) {
         let deadline = Date().addingTimeInterval(5)
