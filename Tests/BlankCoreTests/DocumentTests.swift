@@ -2,6 +2,57 @@ import Foundation
 import BlankCore
 
 final class DocumentTests {
+    func testUnderlineAndStrikethrough() {
+        let original = "// Keep café\nBefore *café 👩🏽‍💻* and _日本_ after\n\n#let custom = 42"
+        let b = DocumentBuffer(original), text = b.projection.text
+        let range = (text as NSString).range(of:"café 👩🏽‍💻")
+        b.selection = EditSelection(b.projection.sourceOffset(at:range.location),b.projection.sourceOffset(at:NSMaxRange(range)))
+        let selection = b.selection
+        b.format(range,mark:.underline)
+        XCTAssertEqual(b.source,original.replacingOccurrences(of:"*café 👩🏽‍💻*",with:"#underline[*café 👩🏽‍💻*]"))
+        b.format(range,mark:.strikethrough)
+        XCTAssertEqual(b.projection.text,text); XCTAssertFalse(b.parsed.erroneous)
+        XCTAssertEqual(b.projection.blocks.flatMap(\.inlines).flatMap(\.runs).filter { $0.style.bold && $0.style.underline && $0.style.strikethrough }.map(\.text).joined(),"café 👩🏽‍💻")
+        let decorated = b.source, afterSelection = b.selection
+        let fragment = b.copy(range)
+        let pasted = DocumentBuffer("Start end")
+        pasted.paste(fragment,range:NSRange(location:6,length:0))
+        XCTAssertTrue(pasted.projection.blocks.flatMap(\.inlines).flatMap(\.runs).contains { $0.style.underline && $0.style.strikethrough && $0.style.bold })
+        b.undo(); b.undo(); XCTAssertEqual(Array(b.source.utf8),Array(original.utf8)); XCTAssertEqual(b.selection,selection)
+        b.redo(); b.redo(); XCTAssertEqual(b.source,decorated); XCTAssertEqual(b.selection,afterSelection)
+        b.format(range,mark:.underline); b.format(range,mark:.strikethrough)
+        XCTAssertEqual(Array(b.source.utf8),Array(original.utf8))
+
+        let custom = DocumentBuffer("Before #underline(stroke: red, /* Keep */ offset: 2pt)[*Café 日本*] after")
+        let interior = (custom.projection.text as NSString).range(of:"日本")
+        custom.editWrite(interior,text:"👩🏽‍💻",group:"")
+        XCTAssertEqual(custom.source,"Before #underline(stroke: red, /* Keep */ offset: 2pt)[*Café 👩🏽‍💻*] after")
+        custom.undo()
+        custom.format(interior,mark:.underline)
+        XCTAssertEqual(custom.projection.text,"Before Café 日本 after")
+        XCTAssertTrue(custom.projection.blocks[0].inlines.flatMap(\.runs).contains { $0.text.contains("日本") && $0.style.bold && !$0.style.underline })
+        XCTAssertTrue(custom.source.contains("/* Keep */")); XCTAssertFalse(custom.parsed.erroneous)
+        let mixed = DocumentBuffer("#underline[A]B #strike[C]D")
+        mixed.format(NSRange(location:0,length:2),mark:.underline)
+        XCTAssertEqual(mixed.projection.text,"AB CD"); XCTAssertEqual(mixed.projection.blocks[0].inlines.flatMap(\.runs).filter { $0.style.underline }.map(\.text).joined(),"AB")
+        mixed.format(NSRange(location:0,length:2),mark:.underline)
+        XCTAssertEqual(mixed.source,"AB #strike[C]D")
+
+        let cellSource = "#table(columns: 2, inset: 8pt, /*Keep*/ [日本 👋], [Other])\n\nAfter"
+        let table = DocumentBuffer(cellSource), cell = table.projection.blocks[0].cellRanges[0]
+        table.format(cell,mark:.underline); table.format(cell,mark:.strikethrough)
+        XCTAssertEqual(table.source,cellSource.replacingOccurrences(of:"[日本 👋]",with:"[#strike[#underline[日本 👋]]]"))
+        XCTAssertTrue(table.projection.blocks[0].cellProjections[0].blocks[0].inlines.flatMap(\.runs).allSatisfy { $0.style.underline && $0.style.strikethrough })
+        table.undo(); table.undo(); XCTAssertEqual(table.source,cellSource)
+        for mark in [InlineMark.underline,.strikethrough] {
+            let empty = DocumentBuffer("#"+mark.function+"[é👩🏽‍💻]")
+            empty.editWrite(NSRange(location:0,length:empty.projection.text.utf16.count),text:"")
+            XCTAssertEqual(empty.source,""); empty.undo()
+            XCTAssertTrue(empty.projection.blocks[0].inlines.flatMap(\.runs).allSatisfy { $0.style[keyPath:mark.keyPath] })
+        }
+        let oldStyle = try! JSONDecoder().decode(TextStyle.self,from:Data("{\"bold\":true,\"italic\":false,\"code\":false}".utf8))
+        XCTAssertTrue(oldStyle.bold); XCTAssertFalse(oldStyle.underline || oldStyle.strikethrough)
+    }
     func testLabelPresentationSpans() {
         let source = "Café 👩🏽‍💻 <first>\n\n日本 <later>\n\n#table(columns: 1, [Cell <cell>], [Other])\n\n#let value = <code-value>\n// <comment>\n`<raw>`"
         let buffer = DocumentBuffer(source)
@@ -765,6 +816,7 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Section movement",t.testMoveSectionPreservesNestedSource),
             ("Section parent movement",t.testMoveSectionAcrossParents),
             ("Formatting toggles",t.testFormatTogglePreservesOtherMarks),
+            ("Underline and strikethrough source, Unicode, clipboard and history",t.testUnderlineAndStrikethrough),
             ("Incremental spaces and Unicode",t.testIncrementalSpacesAndUnicode),
             ("Local projection equals full parsing",t.testLocalProjectionMatchesFullParse),
             ("Typing inside formatting",t.testTypingInsideFormattingKeepsWrappers),

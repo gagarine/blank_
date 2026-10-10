@@ -302,7 +302,7 @@ public final class DocumentBuffer {
             var offset = 0
             for run in a.inlines.flatMap(\.runs) {
                 let end = offset+run.text.utf16.count
-                if run.literal, from >= offset, to <= end, styleOverride == nil || (styleOverride!.bold == run.style.bold && styleOverride!.italic == run.style.italic) {
+                if run.literal, from >= offset, to <= end, styleOverride == nil || (styleOverride!.bold == run.style.bold && styleOverride!.italic == run.style.italic && styleOverride!.underline == run.style.underline && styleOverride!.strikethrough == run.style.strikethrough) {
                     let start = run.source.start+run.text.byteOffset(utf16:from-offset)
                     let finish = run.source.start+run.text.byteOffset(utf16:to-offset), inserted = escapeTypst(text)
                     let caret = start+inserted.utf8.count
@@ -323,6 +323,8 @@ public final class DocumentBuffer {
             if !text.contains("\n"), let style = styleOverride ?? styleAt(a, offset: from), !text.isEmpty {
                 if style.italic { inserted = styleOverride == nil ? "_"+inserted+"_" : "#emph["+inserted+"]" }
                 if style.bold { inserted = styleOverride == nil ? "*"+inserted+"*" : "#strong["+inserted+"]" }
+                if style.underline { inserted = "#underline["+inserted+"]" }
+                if style.strikethrough { inserted = "#strike["+inserted+"]" }
             }
         }
         var replacement = prefix + inserted + suffix
@@ -341,7 +343,7 @@ public final class DocumentBuffer {
             if case let .group(span,prefix,_,children) = node,
                from >= offset, to <= offset+node.length {
                 if from == offset, to == offset+node.length,
-                   ["*","_","`","#strong[","#emph["].contains(prefix) { return span }
+                   ["*","_","`","#strong[","#emph[","#underline[","#strike["].contains(prefix) { return span }
                 if let span = emptiedMarkSpan(children,from:from-offset,to:to-offset) { return span }
             }
             offset += node.length
@@ -395,16 +397,19 @@ public final class DocumentBuffer {
         editWrite(range,text:"\\ ",raw:true,group:"")
     }
     public func format(_ range: NSRange, italic: Bool) {
+        format(range,mark:italic ? .italic : .bold)
+    }
+    public func format(_ range: NSRange, mark: InlineMark) {
         let range = projection.atomicRange(range)
         guard range.length > 0 else { return }
-        if editCell(range,operation:{ $0.format($1,italic:italic) }) { return }
+        if editCell(range,operation:{ $0.format($1,mark:mark) }) { return }
         if projection.blocks.contains(where:{ !$0.cellRanges.isEmpty && NSIntersectionRange($0.display,range).length > 0 }) {
             let draft = editingCopy()
             for block in projection.blocks.reversed() {
                 let regions = block.cellRanges.isEmpty ? [block.display] : block.cellRanges.map { NSRange(location:block.display.location+$0.location,length:$0.length) }
                 for region in regions.reversed() {
                     let intersection = NSIntersectionRange(region,range)
-                    if intersection.length > 0 { draft.format(intersection,italic:italic) }
+                    if intersection.length > 0 { draft.format(intersection,mark:mark) }
                 }
             }
             commit(draft.source,selection:selection)
@@ -418,19 +423,18 @@ public final class DocumentBuffer {
             let b = projection.blocks[index]; guard b.editable else { continue }
             let a = max(0,range.location-b.display.location), z = min(b.display.length,NSMaxRange(range)-b.display.location)
             guard z > a else { continue }
-            let wrapper = italic ? "_" : "*"
             var offset = 0
             let selectedRuns = b.inlines.flatMap(\.runs).filter { run in
                 defer { offset += run.text.utf16.count }
                 return offset < z && offset+run.text.utf16.count > a
             }
-            let remove = !selectedRuns.isEmpty && selectedRuns.allSatisfy { italic ? $0.style.italic : $0.style.bold }
-            let unmarked = sliceInlines(b.inlines,a,z,source:source,removingMark:italic ? 2 : 1)
-            let styled = remove ? unmarked : wrapper+unmarked+wrapper
+            let remove = !selectedRuns.isEmpty && selectedRuns.allSatisfy { $0.style[keyPath:mark.keyPath] }
+            let unmarked = sliceInlines(b.inlines,a,z,source:source,removingMark:mark.rawValue)
+            let styled = remove ? unmarked : mark.wrapper+unmarked+mark.suffix
             var replacement = sliceInlines(b.inlines,0,a,source:source)+styled+sliceInlines(b.inlines,z,b.display.length,source:source)
             let styledParsed = ParsedSource.parse(replacement)
             if styledParsed.erroneous || Projection(source:replacement,parsed:styledParsed).text != b.text {
-                let explicit = remove ? unmarked : (italic ? "#emph[" : "#strong[")+unmarked+"]"
+                let explicit = remove ? unmarked : "#"+mark.function+"["+unmarked+"]"
                 replacement = sliceInlines(b.inlines,0,a,source:source,explicitMarks:true)+explicit+sliceInlines(b.inlines,z,b.display.length,source:source,explicitMarks:true)
             }
             text = text.replacingBytes(b.body,with:replacement)

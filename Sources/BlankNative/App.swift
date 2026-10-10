@@ -153,6 +153,8 @@ import Combine
     @objc func redo(_ sender: Any?) { current?.undo(true) }
     @objc func bold(_ sender: Any?) { current?.editor?.formatNative(false) }
     @objc func italic(_ sender: Any?) { current?.editor?.formatNative(true) }
+    @objc func underline(_ sender: Any?) { current?.editor?.formatNative(.underline) }
+    @objc func strikethrough(_ sender: Any?) { current?.editor?.formatNative(.strikethrough) }
     @objc func blockCommand(_ sender: NSMenuItem) {
         guard let command = sender.representedObject as? SlashCommand else { return }
         current?.performBlockCommand(command)
@@ -163,6 +165,9 @@ import Combine
         current?.navigate(action)
     }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if [#selector(bold(_:)),#selector(italic(_:)),#selector(underline(_:)),#selector(strikethrough(_:))].contains(where:{ $0 == menuItem.action }) {
+            return current?.mode == .write
+        }
         if menuItem.action == #selector(blockCommand(_:)), let command = menuItem.representedObject as? SlashCommand {
             return current?.canPerformBlockCommand(command) == true
         }
@@ -231,6 +236,7 @@ import Combine
         let insert = menu("Insert")
         for command in SlashCommand.all where command.insertion { blockItem(insert,command) }
         let format = menu("Format"); add(format,"Bold",#selector(bold(_:)),"b",target:self); add(format,"Italic",#selector(italic(_:)),"i",target:self)
+        add(format,"Underline",#selector(underline(_:)),"u",target:self); add(format,"Strikethrough",#selector(strikethrough(_:)),target:self)
         format.addItem(.separator())
         for command in SlashCommand.all where !command.insertion { blockItem(format,command) }
         let view = menu("View"); add(view,"Write",#selector(writeMode(_:)),"1",target:self); add(view,"Source",#selector(sourceMode(_:)),"2",target:self); add(view,"Preview",#selector(previewMode(_:)),"3",target:self)

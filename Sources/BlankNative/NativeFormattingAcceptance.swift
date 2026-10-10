@@ -10,7 +10,7 @@ import BlankCore
         }
         func load(_ source: String) {
             session.buffer.loadExternal(source); session.revision += 1; editor.refresh()
-            editor.insertionBold = nil; editor.insertionItalic = nil
+            editor.clearInsertionStyle()
             controller.window?.makeFirstResponder(editor)
         }
         func contextMenu() -> NSMenu {
@@ -33,7 +33,7 @@ import BlankCore
         let range = (editor.string as NSString).range(of:"café 👩🏽‍💻")
         editor.setSelectedRange(range)
         let fontMenu = contextMenu().items.compactMap(\.submenu).first { $0.items.contains { $0.action == #selector(NativeTextView.blankBold(_:)) } }
-        check(fontMenu?.items.count == 2,"Native Font submenu exposes only source-backed Bold and Italic")
+        check(fontMenu?.items.count == 4,"Native Font submenu exposes source-backed Bold, Italic, Underline and Strikethrough")
         choose(false)
         check(session.buffer.source == "Before *café 👩🏽‍💻* after // keep this comment\n" && editor.selectedRange() == range,"Context-menu Bold preserves Unicode, selection and untouched source")
         let font = editor.textStorage!.attribute(.font,at:range.location,effectiveRange:nil) as! NSFont
@@ -97,8 +97,87 @@ import BlankCore
         check(session.buffer.source == "Manager action" && editor.textStorage!.attribute(.font,at:0,effectiveRange:nil) as? NSFont == renderedFont,"Unsupported font-manager size changes cannot diverge from the source")
         manager.target = oldTarget; manager.action = oldAction
         if let oldFont { manager.setSelectedFont(oldFont,isMultiple:oldMultiple) }
+        decorations(controller:controller)
         codeBlocks(controller:controller)
         load(""); editor.setSelectedRange(NSRange(location:0,length:0)); editor.captureSelection()
+    }
+    static func decorations(controller: DocumentWindow) {
+        let session = controller.session, editor = session.editor!
+        func check(_ condition: @autoclosure () -> Bool,_ label: String) {
+            guard condition() else { fatalError("FAIL: \(label) | source=\(session.buffer.source)") }; print("PASS: \(label)")
+        }
+        func load(_ source: String) { session.buffer.loadExternal(""); session.buffer.loadExternal(source); session.revision += 1; editor.clearInsertionStyle(); editor.refresh(); controller.window?.makeFirstResponder(editor) }
+        func items(_ menu: NSMenu) -> [NSMenuItem] { menu.items.flatMap { [$0]+($0.submenu.map(items) ?? []) } }
+        func context(_ action: Selector) {
+            editor.ensureNativeLayout()
+            let point = editor.convert(editor.rectFor(editor.selectedRange().location).origin,to:nil)
+            let event = NSEvent.mouseEvent(with:.rightMouseDown,location:point,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:0,clickCount:1,pressure:1)!
+            guard let menu = editor.menu(for:event), let item = items(menu).first(where:{ $0.action == action }) else { fatalError("Missing decoration context action") }
+            check(NSApp.sendAction(action,to:item.target,from:item),"Native decoration context menu dispatches its source action")
+        }
+        let underline = items(NSApp.mainMenu!).first { $0.action == #selector(AppController.underline(_:)) }!
+        let strike = items(NSApp.mainMenu!).first { $0.action == #selector(AppController.strikethrough(_:)) }!
+        check(underline.title == "Underline" && underline.keyEquivalent == "u" && strike.title == "Strikethrough","Format exposes both decorations with Command-U for Underline")
+        let original = "Before *café 👩🏽‍💻* and _日本_ after // Keep\n"
+        load(original)
+        let range = (editor.string as NSString).range(of:"café 👩🏽‍💻")
+        editor.setSelectedRange(range); editor.captureSelection()
+        context(#selector(NativeTextView.blankUnderline(_:)))
+        NSApp.sendAction(strike.action!,to:strike.target,from:strike)
+        let decorated = session.buffer.source
+        check(decorated == original.replacingOccurrences(of:"*café 👩🏽‍💻*",with:"#strike[#underline[*café 👩🏽‍💻*]]") && editor.selectedRange() == range,"Decoration menus compose with Bold and preserve Unicode selection and surrounding source")
+        func hasDecorations(_ at: Int) -> Bool {
+            editor.textStorage!.attribute(.underlineStyle,at:at,effectiveRange:nil) as? Int == NSUnderlineStyle.single.rawValue && editor.textStorage!.attribute(.strikethroughStyle,at:at,effectiveRange:nil) as? Int == NSUnderlineStyle.single.rawValue
+        }
+        check(hasDecorations(range.location),"Write renders real native underline and strikethrough attributes")
+        editor.copy(nil)
+        let board = NSPasteboard.general, rich = board.data(forType:.rtf)!, fragment = board.data(forType:NSPasteboard.PasteboardType("local.blank.typst-fragment"))!
+        load("Paste here")
+        editor.setSelectedRange(NSRange(location:5,length:0)); editor.captureSelection(); editor.paste(nil)
+        check(session.buffer.source.contains("#strike[#underline[*café 👩🏽‍💻*]]") && hasDecorations(5),"Structured native clipboard retains both decorations at a mid-paragraph caret")
+        load("")
+        board.clearContents(); board.setData(rich,forType:.rtf)
+        editor.setSelectedRange(NSRange(location:0,length:0)); editor.captureSelection(); editor.paste(nil)
+        check(editor.string == "café 👩🏽‍💻" && hasDecorations(0) && !session.buffer.parsed.erroneous,"External RTF paste preserves underline and strikethrough as Typst styles")
+        board.clearContents(); board.setData(fragment,forType:NSPasteboard.PasteboardType("local.blank.typst-fragment")); board.setData(rich,forType:.rtf)
+        load(original); editor.setSelectedRange(range); editor.captureSelection()
+        NSApp.sendAction(underline.action!,to:underline.target,from:underline)
+        context(#selector(NativeTextView.blankStrikethrough(_:)))
+        session.switchMode(.source); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(editor.string == decorated && hasDecorations((editor.string as NSString).range(of:"café").location),"Source retains every decoration expression with native style attributes")
+        session.undo(); session.undo(); check(session.buffer.source == original,"Decoration actions share exact-source Undo across modes")
+        session.undo(true); session.undo(true); check(session.buffer.source == decorated,"Decoration actions share Redo across modes")
+        NSApp.sendAction(underline.action!,to:underline.target,from:underline)
+        check(session.buffer.source == decorated && !AppController.shared.validateMenuItem(underline),"Source disables rich-format commands without changing source")
+        session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1)); editor.setSelectedRange(range)
+        context(#selector(NativeTextView.blankStrikethrough(_:))); context(#selector(NativeTextView.blankUnderline(_:)))
+        check(session.buffer.source == original,"Repeated decoration commands remove only their own marks")
+        load("Typing "); editor.setSelectedRange(NSRange(location:7,length:0)); editor.captureSelection()
+        let event = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:.command,timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:"u",charactersIgnoringModifiers:"u",isARepeat:false,keyCode:32)!
+        editor.keyDown(with:event); context(#selector(NativeTextView.blankStrikethrough(_:)))
+        editor.setMarkedText("日本👩🏽‍💻",selectedRange:NSRange(location:9,length:0),replacementRange:editor.selectedRange()); editor.unmarkText()
+        check(session.buffer.source == "Typing #strike[#underline[日本👩🏽‍💻]]" && hasDecorations(7),"Command-U and caret Strikethrough survive native marked-text composition")
+        context(#selector(NativeTextView.blankUnderline(_:))); context(#selector(NativeTextView.blankStrikethrough(_:)))
+        editor.insertText(" normal",replacementRange:editor.selectedRange())
+        check(session.buffer.projection.blocks[0].inlines.flatMap(\.runs).last.map { !$0.style.underline && !$0.style.strikethrough } == true,"Caret decorations toggle off before ordinary typing")
+        load("#table(columns: 2, inset: 8pt, [Café 👋], [Keep])\n\nAfter // Keep\n")
+        let tableSource = session.buffer.source
+        editor.focusTableCell(0,0); context(#selector(NativeTextView.blankUnderline(_:))); context(#selector(NativeTextView.blankStrikethrough(_:)))
+        check(session.buffer.source == tableSource.replacingOccurrences(of:"[Café 👋]",with:"[#strike[#underline[Café 👋]]]") && hasDecorations(0),"Native table menus decorate only the selected cell and retain table options")
+        session.undo(); session.undo(); check(session.buffer.source == tableSource,"Table decorations retain shared Undo and exact surrounding source")
+        for backward in [false,true] {
+            let source = "Before #strike[#underline[*Café 日本 👩🏽‍💻*]] after\n\nNext"
+            load(source)
+            let selected = (editor.string as NSString).range(of:"日本 👩🏽‍💻")
+            editor.setSelectedRange(selected); editor.captureSelection()
+            let before = session.buffer.selection
+            let key = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:backward ? "\u{7f}" : "\u{f728}",charactersIgnoringModifiers:backward ? "\u{7f}" : "\u{f728}",isARepeat:false,keyCode:backward ? 51 : 117)!
+            editor.keyDown(with:key)
+            let changed = source.replacingOccurrences(of:"日本 👩🏽‍💻",with:""), after = session.buffer.selection
+            check(session.buffer.source == changed && editor.selectedRange() == NSRange(location:selected.location,length:0),"Native Backspace/forward Delete inside decorated Unicode text preserves wrappers, neighbors and caret")
+            session.undo(); check(session.buffer.source == source && session.buffer.selection == before,"Decorated native Delete restores exact source and selection with Undo")
+            session.undo(true); check(session.buffer.source == changed && session.buffer.selection == after,"Decorated native Delete restores exact source and caret with Redo")
+        }
     }
     static func codeBlocks(controller: DocumentWindow) {
         let session = controller.session, editor = session.editor!

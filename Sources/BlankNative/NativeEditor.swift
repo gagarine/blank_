@@ -87,6 +87,17 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var fontCache: [String:NSFont] = [:]
     var insertionBold: Bool?
     var insertionItalic: Bool?
+    var insertionUnderline: Bool?
+    var insertionStrikethrough: Bool?
+    var compositionStyle: TextStyle?
+    var hasInsertionStyle: Bool { insertionBold != nil || insertionItalic != nil || insertionUnderline != nil || insertionStrikethrough != nil }
+    func clearInsertionStyle() { insertionBold = nil; insertionItalic = nil; insertionUnderline = nil; insertionStrikethrough = nil }
+    func typingStyle() -> TextStyle {
+        var style = caretStyle()
+        if let insertionBold { style.bold = insertionBold }; if let insertionItalic { style.italic = insertionItalic }
+        if let insertionUnderline { style.underline = insertionUnderline }; if let insertionStrikethrough { style.strikethrough = insertionStrikethrough }
+        return style
+    }
     private var undoProxy = UndoManager()
     override var undoManager: UndoManager? { undoProxy }
     override func accessibilityChildren() -> [Any]? {
@@ -194,6 +205,12 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             func visit(_ node: SyntaxNode, bold: Bool = false, italic: Bool = false, heading: Int = 0) {
                 let function = node.kind == "FuncCall" ? node.children.first.map { b.source.bytes($0.span) } : nil
                 let strong = bold || node.kind == "Strong" || function == "strong", emph = italic || node.kind == "Emph" || function == "emph"
+                if function == "underline" || function == "strike" {
+                    // The function range includes its whole content. Applying
+                    // decoration once avoids remapping every descendant.
+                    let a = b.source.utf16Offset(byte:node.start), z = b.source.utf16Offset(byte:node.end)
+                    if z > a { result.addAttribute(function == "underline" ? .underlineStyle : .strikethroughStyle,value:NSUnderlineStyle.single.rawValue,range:NSRange(location:a,length:z-a)) }
+                }
                 let level = node.kind == "Heading" ? b.source.bytes(node.span).prefix { $0 == "=" }.count : heading
                 if strong || emph || level > 0 {
                     var f = NSFont.monospacedSystemFont(ofSize:level == 1 ? 24 : level == 2 ? 20 : level > 0 ? 17 : 14,weight:strong || level > 0 ? .bold : .regular)
@@ -239,6 +256,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                         let r = NSRange(location:at,length:run.text.utf16.count)
                         if !raw && r.length > 0 {
                             result.addAttribute(.font,value:run.style.code ? NSFont.monospacedSystemFont(ofSize:size*0.83,weight:.regular) : readingFont(size:textSize,bold:run.style.bold || block.kind == "heading",italic:run.style.italic || block.kind == "quote"),range:r)
+                            if run.style.underline { result.addAttribute(.underlineStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
+                            if run.style.strikethrough { result.addAttribute(.strikethroughStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
                             if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:NSColor.linkColor],range:r) }
                         }
                         at += r.length
@@ -353,6 +372,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                     let r = NSRange(location:at,length:run.text.utf16.count)
                     if r.length > 0 {
                         result.addAttribute(.font,value:run.style.code ? NSFont.monospacedSystemFont(ofSize:size*0.8,weight:.regular) : readingFont(size:size*0.85,bold:run.style.bold || index < block.columns,italic:run.style.italic),range:r)
+                        if run.style.underline { result.addAttribute(.underlineStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
+                        if run.style.strikethrough { result.addAttribute(.strikethroughStyle,value:NSUnderlineStyle.single.rawValue,range:r) }
                         if let link = run.style.link { result.addAttributes([.link:link,.foregroundColor:NSColor.linkColor],range:r) }
                     }
                     at += r.length
@@ -477,7 +498,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if session.mode == .write {
             let old = session.buffer.selection, projection = session.buffer.projection
             if projection.displayOffset(at:old.anchor) == r.location && projection.displayOffset(at:old.focus) == NSMaxRange(r) { return }
-            insertionBold = nil; insertionItalic = nil
+            clearInsertionStyle()
         }
         let a = session.mode == .source ? string.byteOffset(utf16:r.location) : session.buffer.projection.sourceOffset(at:r.location)
         let z = session.mode == .source ? string.byteOffset(utf16:NSMaxRange(r)) : session.buffer.projection.sourceOffset(at:NSMaxRange(r))
@@ -540,7 +561,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let block = session.buffer.projection.blocks[session.buffer.projection.blockIndex(at:editRange.location)]
         let emptyingBlock = session.mode == .write && block.editable && text.isEmpty && editRange.length > 0 && editRange == block.display
         let startsPlainSlash = session.mode == .write && text == "/" && block.editable && (block.text.isEmpty || editRange == block.display)
-        if startsPlainSlash { insertionBold = nil; insertionItalic = nil; session.buffer.breakUndoGroup() }
+        if startsPlainSlash { clearInsertionStyle(); session.buffer.breakUndoGroup() }
         if session.mode == .write {
             let folded = session.buffer.projection.blocks.indices.filter { session.buffer.projection.blocks[$0].collapsed && NSIntersectionRange(session.buffer.projection.blocks[$0].display,NSRange(location:affectedCharRange.location,length:max(1,affectedCharRange.length))).length > 0 }
             // A folded summary is one atomic block, including boundary deletes.
@@ -553,11 +574,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
         if session.mode == .source { session.buffer.editSource(editRange,text:text) }
         else {
-            var style = caretStyle()
-            if let insertionBold { style.bold = insertionBold }; if let insertionItalic { style.italic = insertionItalic }
-            session.buffer.editWrite(editRange,text:text,styleOverride:startsPlainSlash ? TextStyle() : insertionBold != nil || insertionItalic != nil ? style : nil)
+            session.buffer.editWrite(editRange,text:text,styleOverride:startsPlainSlash ? TextStyle() : hasInsertionStyle ? typingStyle() : nil)
         }
-        if emptyingBlock { insertionBold = nil; insertionItalic = nil }
+        if emptyingBlock { clearInsertionStyle() }
         session.changed(); scrollRangeToVisible(selectedRange())
         if text == "/", session.mode == .write {
             slashStart = selectedRange().location-1; slashIndex = 0; plainSlashQuery = startsPlainSlash
@@ -605,17 +624,18 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         guard session?.requestEditing() != false else { return }
         if !composing, let session, session.mode == .write,
            !session.buffer.canEditWrite(replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange) { return }
-        if !composing { captureSelection(); compositionOriginal = self.string; composing = true; session?.buffer.breakUndoGroup() }
+        if !composing { captureSelection(); compositionStyle = hasInsertionStyle ? typingStyle() : nil; compositionOriginal = self.string; composing = true; session?.buffer.breakUndoGroup() }
         super.setMarkedText(string,selectedRange:selectedRange,replacementRange:replacementRange)
     }
     override func unmarkText() { super.unmarkText(); if composing { composing = false; commitComposition() } }
     func finishComposition() { if hasMarkedText() || composing { unmarkText() } }
     func commitComposition() {
+        defer { compositionStyle = nil }
         guard let session, let patch = SourcePatch.difference(compositionOriginal,string) else { refresh(); return }
         let range = NSRange(location:compositionOriginal.utf16Offset(byte:patch.start),length:patch.removed.utf16.count)
         if session.mode == .write, !session.buffer.canEditWrite(range) { lastRevision = -1; refresh(); return }
         if session.mode == .source { session.buffer.editSource(range,text:patch.inserted,group:"") }
-        else { session.buffer.editWrite(range,text:patch.inserted,group:"") }
+        else { session.buffer.editWrite(range,text:patch.inserted,group:"",styleOverride:compositionStyle) }
         session.changed()
     }
     override func keyDown(with event: NSEvent) {
@@ -640,6 +660,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             if event.charactersIgnoringModifiers == "z" { session?.undo(event.modifierFlags.contains(.shift)); return }
             if event.charactersIgnoringModifiers == "b" { formatNative(false); return }
             if event.charactersIgnoringModifiers == "i" { formatNative(true); return }
+            if event.charactersIgnoringModifiers == "u" { formatNative(.underline); return }
         }
         if event.modifierFlags.intersection([.command,.option,.control,.shift]) == [.option], [125,126].contains(event.keyCode), session?.mode == .write, let session {
             guard session.requestEditing() else { return }
@@ -649,11 +670,24 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         super.keyDown(with:event)
     }
     func formatNative(_ italic: Bool) {
+        formatNative(italic ? .italic : .bold)
+    }
+    func formatNative(_ mark: InlineMark) {
         guard let session, session.mode == .write, session.requestEditing() else { return }
         finishComposition()
-        if selectedRange().length == 0 { let style = caretStyle(); if italic { insertionItalic = !(insertionItalic ?? style.italic) } else { insertionBold = !(insertionBold ?? style.bold) }; return }
-        session.format(italic:italic)
+        if selectedRange().length == 0 {
+            let enabled = !typingStyle()[keyPath:mark.keyPath]
+            switch mark {
+            case .bold: insertionBold = enabled
+            case .italic: insertionItalic = enabled
+            case .underline: insertionUnderline = enabled
+            case .strikethrough: insertionStrikethrough = enabled
+            }
+            session.buffer.breakUndoGroup(); return
+        }
+        session.format(mark:mark)
         let style = caretStyle(); insertionBold = style.bold; insertionItalic = style.italic
+        insertionUnderline = style.underline; insertionStrikethrough = style.strikethrough
     }
     override func changeFont(_ sender: Any?) {
         // Font-manager actions must use the canonical history, never mutate
@@ -793,6 +827,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                     let traits = NSFontManager.shared.traits(of:font)
                     if traits.contains(.italicFontMask) { piece = "_"+piece+"_" }; if traits.contains(.boldFontMask) { piece = "*"+piece+"*" }
                 }
+                if (attrs[.underlineStyle] as? NSNumber)?.intValue ?? 0 != 0 { piece = "#underline["+piece+"]" }
+                if (attrs[.strikethroughStyle] as? NSNumber)?.intValue ?? 0 != 0 { piece = "#strike["+piece+"]" }
                 source += piece
             }
             captureSelection(); session.buffer.editWrite(selectedRange(),text:source,raw:true,group:""); session.changed(); return
@@ -803,6 +839,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     @objc func blankRedo(_ sender: Any?) { session?.undo(true) }
     @objc func blankBold(_ sender: Any?) { formatNative(false) }
     @objc func blankItalic(_ sender: Any?) { formatNative(true) }
+    @objc func blankUnderline(_ sender: Any?) { formatNative(.underline) }
+    @objc func blankStrikethrough(_ sender: Any?) { formatNative(.strikethrough) }
     func rectFor(_ offset: Int) -> NSRect {
         guard let window else { return .zero }
         var actual = NSRange()
@@ -1262,7 +1300,7 @@ extension NativeTextView {
                 $0.action == #selector(NSFontManager.addFontTrait(_:)) || $0.action == #selector(NSFontManager.removeFontTrait(_:))
             }
             if traitItems.isEmpty { configureFontMenu(submenu); continue }
-            // Keep AppKit's localized, styled Bold/Italic items. Other native
+            // Keep AppKit's localized, styled formatting items. Other native
             // font controls have no lossless Typst transaction in this editor.
             guard session?.mode == .write else { menu.removeItem(item); continue }
             for option in submenu.items {
@@ -1270,8 +1308,14 @@ extension NativeTextView {
                     option.target = self; option.action = #selector(blankBold(_:))
                 } else if traitItems.contains(option), option.tag == Int(NSFontTraitMask.italicFontMask.rawValue) {
                     option.target = self; option.action = #selector(blankItalic(_:))
+                } else if option.action == NSSelectorFromString("underline:") {
+                    option.target = self; option.action = #selector(blankUnderline(_:))
                 } else { submenu.removeItem(option) }
             }
+            if !submenu.items.contains(where:{ $0.action == #selector(blankUnderline(_:)) }) {
+                let underline = NSMenuItem(title:"Underline",action:#selector(blankUnderline(_:)),keyEquivalent:""); underline.target = self; submenu.addItem(underline)
+            }
+            let strike = NSMenuItem(title:"Strikethrough",action:#selector(blankStrikethrough(_:)),keyEquivalent:""); strike.target = self; submenu.addItem(strike)
         }
     }
     @objc func changeTable(_ item: TableMenuItem) {
