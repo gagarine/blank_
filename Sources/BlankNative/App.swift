@@ -37,7 +37,7 @@ import Combine
         templates(sender); templateGallery?.addDocument(session)
     }
     var current: DocumentSession? {
-        if let key = NSApp.keyWindow { return controllers.first { $0.window === (key.sheetParent ?? key) }?.session }
+        if let key = NSApp.keyWindow { return controllers.first { $0.window === (key.sheetParent ?? key) || $0.session.editor?.ownsInlinePanelFocus == true }?.session }
         return controllers.last?.session
     }
     func applicationWillFinishLaunching(_ notification: Notification) {

@@ -15,11 +15,13 @@ let inlinePalette: [(String,String,String)] = [
     ("Purple","#8758bb","#e8d9ff"),("Pink","#b74787","#f9dced"),("Red","#c83e3e","#ffd6d6")
 ]
 final class SelectionStylePanel: NSPopover {
+    var child: SelectionStylePanel?
     var isVisible: Bool { isShown }
     override init() {
         super.init(); behavior = .applicationDefined; animates = false
     }
     required init?(coder: NSCoder) { fatalError() }
+    override func close() { child?.close(); child = nil; super.close() }
     func orderOut(_ sender: Any?) { close() }
 }
 @MainActor final class SelectionPanelTarget {
@@ -32,64 +34,62 @@ final class SelectionStylePanel: NSPopover {
         return view
     }
 }
-private enum SelectionPage { case bar, blocks, colors, more }
+private enum SelectionPage { case blocks, colors, more }
 struct SelectionStyleBar: View {
     let target: SelectionPanelTarget
     var editor: NativeTextView? { target.editor }
     let style: TextStyle
     let block: ProjectedBlock
     let inTable: Bool
-    var resize: (NSSize)->Void = { _ in }
-    @NativeState private var page = SelectionPage.bar
-    var size: NSSize {
+    @NativeState private var page: SelectionPage?
+    private func size(_ page: SelectionPage) -> NSSize {
         switch page {
-        case .bar: return NSSize(width:inTable ? 330 : 450,height:44)
         case .colors: return NSSize(width:280,height:294)
         case .more: return NSSize(width:240,height:326)
         case .blocks: return NSSize(width:240,height:CGFloat(SlashCommand.blockStyles.count)*34+52)
         }
     }
     var body: some View {
-        Group {
-            switch page {
-            case .bar: bar
-            case .colors: colors
-            case .more: more
-            case .blocks: blocks
-            }
-        }.frame(width:size.width,height:size.height)
+        bar.frame(width:inTable ? 330 : 450,height:44)
             .font(.system(size:12)).background(.background)
-            .onChange(of:page) { _,_ in resize(size) }
     }
     var bar: some View {
         HStack(spacing:5) {
             if !inTable {
-                Button { page = .blocks } label: { Text(blockTitle).lineLimit(1) }
-                    .buttonStyle(.plain).modifier(SelectionMenuFace(width:110)).accessibilityLabel("Block style: "+blockTitle)
+                SelectionButton(width:110) { toggle(.blocks) } label: { Text(blockTitle).lineLimit(1) }
+                    .accessibilityLabel("Block style: "+blockTitle)
+                    .background(subpanel(.blocks,contents:AnyView(blocks)))
                 Divider().frame(height:22)
             }
             mark("Bold","bold",.bold); mark("Italic","italic",.italic)
             mark("Underline","underline",.underline); mark("Strikethrough","strikethrough",.strikethrough)
             mark("Inline code","chevron.left.forwardslash.chevron.right",.code)
-            Button { editor?.selectionLink() } label: { Image(systemName:"link") }.help("Link…").accessibilityLabel("Link").disabled(block.kind == "raw")
-            Button { page = .colors } label: { Image(systemName:"textformat.alt").foregroundStyle(Color(nsColor:style.color.flatMap(nativeHexColor) ?? .labelColor)) }
+            SelectionButton { editor?.selectionLink() } label: { Image(systemName:"link") }.help("Link…").accessibilityLabel("Link").disabled(block.kind == "raw")
+            SelectionButton { toggle(.colors) } label: { Image(systemName:"textformat.alt").foregroundStyle(Color(nsColor:style.color.flatMap(nativeHexColor) ?? .labelColor)) }
                 .help("Text and highlight color").accessibilityLabel("Colors").disabled(block.kind == "raw")
-            Button { page = .more } label: { Image(systemName:"ellipsis") }.help("Superscript, subscript, and alignment").accessibilityLabel("More styles")
-        }.buttonStyle(SelectionHoverButtonStyle()).controlSize(.small).padding(6)
+                .background(subpanel(.colors,contents:AnyView(colors)))
+            SelectionButton { toggle(.more) } label: { Image(systemName:"ellipsis") }.help("Superscript, subscript, and alignment").accessibilityLabel("More styles")
+                .background(subpanel(.more,contents:AnyView(more)))
+        }.controlSize(.small).padding(6)
     }
     var blockTitle: String { block.kind == "heading" ? "Heading \(block.level)" : SlashCommand.blockStyles.first { $0.kind == block.kind }?.label ?? "Text" }
+    private func toggle(_ choice: SelectionPage) { page = page == choice ? nil : choice }
+    private func subpanel(_ choice: SelectionPage,contents: AnyView) -> some View {
+        SelectionSubpanelAnchor(editor:editor,isPresented:page == choice,size:size(choice),contents:AnyView(contents.frame(width:size(choice).width,height:size(choice).height).font(.system(size:12)).background(.background)),onClose:{ if page == choice { page = nil } })
+            .allowsHitTesting(false)
+    }
     func header(_ title: String) -> some View {
         HStack {
-            Button { page = .bar } label: { Label("Back",systemImage:"chevron.left") }
-                .buttonStyle(.plain).modifier(SelectionMenuFace(width:70)).accessibilityLabel("Back to inline styles")
+            SelectionButton(width:70) { page = nil } label: { Label("Close",systemImage:"xmark") }
+                .accessibilityLabel("Close formatting options")
             Spacer(); Text(title).fontWeight(.medium); Spacer()
         }.padding(.horizontal,8).frame(height:38)
     }
     func row(_ label: String,_ icon: String,selected: Bool = false,enabled: Bool = true,action: @escaping ()->Void) -> some View {
-        Button(action:action) {
+        SelectionButton(width:nil,action:action) {
             HStack(spacing:10) { Image(systemName:icon).frame(width:20); Text(label); Spacer(); if selected { Image(systemName:"checkmark").foregroundStyle(.secondary) } }
                 .padding(.horizontal,10).frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
-        }.buttonStyle(.plain).modifier(SelectionMenuFace(width:nil)).accessibilityLabel(label).disabled(!enabled)
+        }.accessibilityLabel(label).disabled(!enabled)
     }
     var blocks: some View {
         VStack(spacing:0) {
@@ -132,7 +132,7 @@ struct SelectionStyleBar: View {
             ForEach(entries,id:\.0) { name,hex in
                 let color = Color(nsColor:hex.flatMap(nativeHexColor) ?? .labelColor)
                 let selected = (highlight ? style.highlight : style.color) == hex
-                Button { editor?.selectionAttribute(highlight ? "highlight" : "color",hex) } label: {
+                SelectionButton(width:40) { editor?.selectionAttribute(highlight ? "highlight" : "color",hex) } label: {
                     ZStack {
                         Circle().fill(highlight && hex != nil ? color : .clear)
                         Circle().stroke(highlight ? Color.secondary.opacity(0.35) : color.opacity(0.6),lineWidth:1)
@@ -140,12 +140,12 @@ struct SelectionStyleBar: View {
                         else if hex == nil { Image(systemName:"slash.circle").foregroundStyle(.secondary) }
                         if selected { Circle().stroke(Color.accentColor,lineWidth:2).padding(-3) }
                     }.frame(width:24,height:24)
-                }.buttonStyle(.plain).modifier(SelectionMenuFace(width:40)).help(name+(highlight ? " highlight" : " text color")).accessibilityLabel(name+(highlight ? " highlight" : " text color"))
+                }.help(name+(highlight ? " highlight" : " text color")).accessibilityLabel(name+(highlight ? " highlight" : " text color"))
             }
         }
     }
     func mark(_ title: String,_ icon: String,_ mark: InlineMark) -> some View {
-        Button { editor?.formatNative(mark) } label: { Image(systemName:icon).foregroundStyle(style[keyPath:mark.keyPath] ? Color.accentColor : Color.primary) }
+        SelectionButton { editor?.formatNative(mark) } label: { Image(systemName:icon).foregroundStyle(style[keyPath:mark.keyPath] ? Color.accentColor : Color.primary) }
             .help(title).accessibilityLabel(title).disabled(block.kind == "raw")
     }
 }
@@ -160,8 +160,69 @@ struct SelectionMenuFace: ViewModifier {
             .onHover { hovered = $0 }.background(SelectionButtonCursor().allowsHitTesting(false))
     }
 }
-struct SelectionHoverButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View { configuration.label.modifier(SelectionMenuFace(width:32)) }
+struct SelectionButton<Label: View>: View {
+    let width: CGFloat?
+    let action: ()->Void
+    let label: Label
+    init(width: CGFloat? = 32,action: @escaping ()->Void,@ViewBuilder label: ()->Label) {
+        self.width = width; self.action = action; self.label = label()
+    }
+    var body: some View {
+        // The padded rectangle must belong to the actual Button label, rather
+        // than an outer decoration or just its visible glyphs.
+        Button(action:action) { label.modifier(SelectionMenuFace(width:width)) }.buttonStyle(.plain)
+    }
+}
+// Anchor secondary native popovers to their toolbar buttons. Keeping the bar's
+// hosting view mounted preserves its position and the editor's native selection.
+private struct SelectionSubpanelAnchor: NSViewRepresentable {
+    weak var editor: NativeTextView?
+    let isPresented: Bool
+    let size: NSSize
+    let contents: AnyView
+    let onClose: ()->Void
+    func makeNSView(context: Context) -> SelectionSubpanelAnchorView { SelectionSubpanelAnchorView() }
+    func updateNSView(_ view: SelectionSubpanelAnchorView,context: Context) {
+        view.editor = editor; view.isPresented = isPresented; view.size = size; view.contents = contents; view.onClose = onClose
+        view.updatePresentation()
+    }
+    static func dismantleNSView(_ view: SelectionSubpanelAnchorView,coordinator: ()) { view.dismiss() }
+}
+private final class SelectionSubpanelAnchorView: NSView, NSPopoverDelegate {
+    weak var editor: NativeTextView?
+    var isPresented = false
+    var size = NSSize.zero
+    var contents: AnyView?
+    var onClose: (()->Void)?
+    var popover: SelectionStylePanel?
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); updatePresentation() }
+    override func layout() { super.layout(); if isPresented && popover?.isShown != true { updatePresentation() } }
+    func updatePresentation() {
+        guard isPresented else { dismiss(); return }
+        guard window != nil, !bounds.isEmpty, let contents, let editor, let parent = editor.selectionPanel, parent.isShown else { return }
+        let panel = popover ?? SelectionStylePanel(); popover = panel
+        panel.delegate = self
+        if parent.child !== panel { parent.child?.close(); parent.child = panel }
+        panel.contentViewController = NSHostingController(rootView:contents); panel.contentSize = size
+        panel.show(relativeTo:bounds,of:self,preferredEdge:.maxY)
+        editor.window?.makeFirstResponder(editor)
+    }
+    func dismiss() {
+        isPresented = false
+        popover?.close()
+        if editor?.selectionPanel?.child === popover { editor?.selectionPanel?.child = nil }
+        popover = nil
+    }
+    func popoverDidClose(_ notification: Notification) {
+        if editor?.selectionPanel?.child === notification.object as? SelectionStylePanel { editor?.selectionPanel?.child = nil }
+        if isPresented {
+            isPresented = false
+            let closed = onClose
+            DispatchQueue.main.async { closed?() }
+        }
+    }
 }
 struct SelectionButtonCursor: NSViewRepresentable {
     @Environment(\.isEnabled) var enabled
@@ -184,9 +245,21 @@ final class SelectionButtonCursorView: NSView {
     override func mouseExited(with event: NSEvent) { NSCursor.arrow.set() }
 }
 extension NativeTextView {
+    func scheduleInlinePanelFocusCheck() {
+        // Resign-key arrives before the new key window is known. Wait for that
+        // transition so the editor's own popovers can accept native clicks.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.ownsInlinePanelFocus else { return }
+            self.selectionPanel?.orderOut(nil); self.dismissLinkHover()
+        }
+    }
+    var ownsInlinePanelFocus: Bool {
+        guard let key = NSApp.keyWindow else { return false }
+        return key === window || [selectionPanel,selectionPanel?.child,linkPanel].compactMap({ $0 }).contains { $0.isShown && $0.contentViewController?.view.window === key }
+    }
     func updateSelectionPanelCursor(for event: NSEvent) -> Bool {
         guard let eventWindow = event.window ?? window,
-              let panel = [selectionPanel,linkPanel].compactMap({ $0 }).first(where:{ panel in
+              let panel = [selectionPanel?.child,selectionPanel,linkPanel].compactMap({ $0 }).first(where:{ panel in
                   guard panel.isShown, let panelWindow = panel.contentViewController?.view.window else { return false }
                   return panelWindow.frame.contains(eventWindow.convertPoint(toScreen:event.locationInWindow))
               }), let content = panel.contentViewController?.view, let panelWindow = content.window else { return false }
@@ -222,7 +295,7 @@ extension NativeTextView {
         if selectedRange().length > 0 { dismissLinkHover() }
         guard let session, session.mode == .write, !session.contactSheet, session.sheet == nil,
               !composing, !hasMarkedText(), !selectingText, !draggingBlock, slashPopover?.isShown != true, blockPopover?.isShown != true,
-              selectedRange().length > 0, let window, (!requireKeyWindow || window.isKeyWindow || CommandLine.arguments.contains("--selection-style-ui-test")), window.firstResponder === self,
+              selectedRange().length > 0, let window, (!requireKeyWindow || ownsInlinePanelFocus || selectionPanel?.isShown == true || CommandLine.arguments.contains("--selection-style-ui-test")), window.firstResponder === self,
               let manager = layoutManager, let container = textContainer else { selectionPanel?.orderOut(nil); return }
         let range = selectedRange(), projection = session.buffer.projection
         let block = projection.blocks[projection.blockIndex(at:range.location)]
@@ -237,7 +310,8 @@ extension NativeTextView {
         let panel = selectionPanel ?? SelectionStylePanel(); selectionPanel = panel
         let width: CGFloat = inTable ? 330 : 450
         if !panel.isShown || selectionPanelIdentity != identity {
-            panel.contentViewController = NSHostingController(rootView:SelectionStyleBar(target:SelectionPanelTarget(self),style:caretStyle(),block:block,inTable:inTable,resize:{ [weak panel] size in panel?.contentSize = size }))
+            panel.child?.close(); panel.child = nil
+            panel.contentViewController = NSHostingController(rootView:SelectionStyleBar(target:SelectionPanelTarget(self),style:caretStyle(),block:block,inTable:inTable))
         }
         selectionPanelIdentity = identity; selectionPanelAnchor = rect
         panel.contentSize = NSSize(width:width,height:44)

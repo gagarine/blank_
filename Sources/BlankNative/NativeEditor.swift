@@ -74,8 +74,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         super.viewDidMoveToWindow()
         selectionPanelObservers.forEach(NotificationCenter.default.removeObserver); selectionPanelObservers.removeAll()
         if let window {
-            for name in [NSWindow.didResignKeyNotification,NSWindow.willCloseNotification] {
-                selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:name,object:window,queue:.main) { [weak self] _ in self?.selectionPanel?.orderOut(nil); self?.dismissLinkHover() })
+            selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:NSWindow.willCloseNotification,object:window,queue:.main) { [weak self] _ in self?.selectionPanel?.orderOut(nil); self?.dismissLinkHover() })
+            selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:NSApplication.didResignActiveNotification,object:NSApp,queue:.main) { [weak self] _ in self?.selectionPanel?.orderOut(nil); self?.dismissLinkHover() })
+            let focusNotifications: [(Notification.Name,Any?)] = [(NSWindow.didResignKeyNotification,window),(NSWindow.didBecomeKeyNotification,nil)]
+            for (name,object) in focusNotifications {
+                selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:name,object:object,queue:.main) { [weak self] _ in self?.scheduleInlinePanelFocusCheck() })
             }
             if let clip = enclosingScrollView?.contentView {
                 clip.postsBoundsChangedNotifications = true
@@ -673,6 +676,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     }
     override func keyDown(with event: NSEvent) {
         dismissLinkHover()
+        if event.keyCode == 53, selectionPanel?.child?.isShown == true { selectionPanel?.child?.close(); return }
         if event.keyCode == 53, selectionPanel?.isVisible == true { selectionPanel?.orderOut(nil); return }
         if let session, session.sheet == .commands {
             // SwiftUI attaches the sheet on the next run-loop turn. Preserve
