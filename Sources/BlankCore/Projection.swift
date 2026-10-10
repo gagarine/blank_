@@ -1,11 +1,44 @@
 import Foundation
 
+public enum InlineMark: Int {
+    case bold = 1, italic, underline, strikethrough
+    public var keyPath: WritableKeyPath<TextStyle,Bool> {
+        switch self {
+        case .bold: return \.bold
+        case .italic: return \.italic
+        case .underline: return \.underline
+        case .strikethrough: return \.strikethrough
+        }
+    }
+    public var function: String {
+        switch self {
+        case .bold: return "strong"
+        case .italic: return "emph"
+        case .underline: return "underline"
+        case .strikethrough: return "strike"
+        }
+    }
+    var wrapper: String { self == .bold ? "*" : self == .italic ? "_" : "#"+function+"[" }
+    var suffix: String { self == .bold ? "*" : self == .italic ? "_" : "]" }
+}
 public struct TextStyle: Codable, Equatable {
     public var bold = false
     public var italic = false
+    public var underline = false
+    public var strikethrough = false
     public var code = false
     public var link: String? = nil
     public init() {}
+    private enum CodingKeys: String, CodingKey { case bold, italic, underline, strikethrough, code, link }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy:CodingKeys.self)
+        bold = try values.decodeIfPresent(Bool.self,forKey:.bold) ?? false
+        italic = try values.decodeIfPresent(Bool.self,forKey:.italic) ?? false
+        underline = try values.decodeIfPresent(Bool.self,forKey:.underline) ?? false
+        strikethrough = try values.decodeIfPresent(Bool.self,forKey:.strikethrough) ?? false
+        code = try values.decodeIfPresent(Bool.self,forKey:.code) ?? false
+        link = try values.decodeIfPresent(String.self,forKey:.link)
+    }
 }
 public struct ReferenceFormat: Equatable {
     public var range: NSRange
@@ -67,7 +100,8 @@ public indirect enum Inline {
         case let .group(span, prefix, suffix, nodes):
             if start == 0 && end == length && removingMark == nil && !explicitMarks { return source.bytes(span) }
             let body = sliceInlines(nodes, start, end, source: source, removingMark: removingMark,explicitMarks:explicitMarks)
-            let remove = removingMark == 1 && (prefix == "*" || prefix.hasPrefix("#strong")) || removingMark == 2 && (prefix == "_" || prefix.hasPrefix("#emph"))
+            let mark = removingMark.flatMap(InlineMark.init(rawValue:))
+            let remove = mark.map { prefix == $0.wrapper || prefix.hasPrefix("#"+$0.function) } ?? false
             let head = explicitMarks && prefix == "*" ? "#strong[" : explicitMarks && prefix == "_" ? "#emph[" : prefix
             let tail = explicitMarks && (prefix == "*" || prefix == "_") ? "]" : suffix
             return body.isEmpty ? "" : remove ? body : head + body + tail
@@ -210,7 +244,7 @@ public struct Projection {
             if n.kind == "Hash", i+1 < nodes.count {
                 let next = nodes[i+1]
                 let span = ByteSpan(n.start, next.end)
-                if next.kind == "FuncCall", let name = next.children.first, ["strong","emph","link","footnote","cite","ref"].contains(source.bytes(name.span)) {
+                if next.kind == "FuncCall", let name = next.children.first, ["strong","emph","underline","strike","link","footnote","cite","ref"].contains(source.bytes(name.span)) {
                     pending += [n,next]; i += 2; continue
                 }
                 let before = source.bytes(ByteSpan(0, n.start)).components(separatedBy: "\n").last ?? ""
@@ -343,14 +377,17 @@ private func inline(_ nodes: [SyntaxNode], source: String, style: TextStyle = Te
             out.append(.group(n.span, source.bytes(ByteSpan(n.start, body.start)), source.bytes(ByteSpan(body.end, n.end)), inline(body.children, source: source, style: s, references:references)))
         } else if n.kind == "Hash", i+1 < nodes.count {
             let next = nodes[i+1], span = ByteSpan(n.start, nodes[i+1].end), raw = source.bytes(span)
-            // Literal content of native link/footnote/strong/emphasis expressions.
+            // Literal content of native links, footnotes and inline styles.
+            let function = next.kind == "FuncCall" ? next.children.first.map { source.bytes($0.span) } : nil
             if next.kind == "FuncCall", next.children.first.map({ source.bytes($0.span) }) == "cite" {
                 out.append(.reference("Citation",span,style))
             } else if let content = next.descendants("ContentBlock").first?.markup,
-               ["#link", "#footnote", "#strong", "#emph"].contains(where: { raw.hasPrefix($0) }) {
+               ["link", "footnote", "strong", "emph", "underline", "strike"].contains(function ?? "") {
                 var s = style
                 if raw.hasPrefix("#strong") { s.bold = true }
                 if raw.hasPrefix("#emph") { s.italic = true }
+                if function == "underline" { s.underline = true }
+                if function == "strike" { s.strikethrough = true }
                 if raw.hasPrefix("#link"), let a = raw.firstIndex(of: "\""), let b = raw[raw.index(after: a)...].firstIndex(of: "\"") { s.link = String(raw[raw.index(after: a)..<b]) }
                 out.append(.group(span, source.bytes(ByteSpan(span.start, content.start)), source.bytes(ByteSpan(content.end, span.end)), inline(content.children, source: source, style: s, references:references)))
             } else { out.append(.text(raw, span, style, true)) }

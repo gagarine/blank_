@@ -200,8 +200,11 @@ struct Recovery: Codable {
     }
 
     func format(italic: Bool) {
+        format(mark:italic ? .italic : .bold)
+    }
+    func format(mark: InlineMark) {
         guard mode == .write, requestEditing() else { return }; synchronizeSelection()
-        if let editor { buffer.format(editor.selectedRange(),italic:italic); changed() }
+        if let editor { buffer.format(editor.selectedRange(),mark:mark); changed() }
     }
     func open(_ url: URL, selectedEntry: String? = nil) throws {
         let fm = FileManager.default
