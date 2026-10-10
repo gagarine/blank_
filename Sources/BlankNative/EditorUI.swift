@@ -78,18 +78,20 @@ struct SlashMenu: View {
 // Decoration never participates in hit testing, including empty row space.
 struct MenuRowButton<Content: View>: View {
     var label: String
+    var height: CGFloat = 44
     var action: ()->Void
     var hover: (Bool)->Void = { _ in }
     @ViewBuilder var content: Content
     var body: some View {
-        MenuButtonTarget(label:label,action:action,hover:hover)
+        MenuButtonTarget(label:label,height:height,action:action,hover:hover)
             .frame(maxWidth:.infinity)
             .overlay { content.allowsHitTesting(false).accessibilityHidden(true) }
-            .frame(height:44)
+            .frame(height:height)
     }
 }
 struct MenuButtonTarget: NSViewRepresentable {
     var label: String
+    var height: CGFloat
     var action: ()->Void
     var hover: (Bool)->Void = { _ in }
     func makeNSView(context: Context) -> MenuActionButton {
@@ -99,7 +101,7 @@ struct MenuButtonTarget: NSViewRepresentable {
         return button
     }
     func sizeThatFits(_ proposal: ProposedViewSize,nsView: MenuActionButton,context: Context) -> CGSize? {
-        CGSize(width:proposal.width ?? 200,height:44)
+        CGSize(width:proposal.width ?? 200,height:height)
     }
     func updateNSView(_ button: MenuActionButton,context: Context) {
         button.setAccessibilityLabel(label); button.perform = action; button.hover = hover

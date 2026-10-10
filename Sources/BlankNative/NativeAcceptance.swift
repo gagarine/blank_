@@ -382,8 +382,8 @@ import BlankCore
         editor.showBlockMenu(0,event:pointer(.leftMouseUp,handle))
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let handleMenu = (editor.blockPopover?.contentViewController as? NSHostingController<BlockActionMenu>)?.rootView
-        check(editor.blockPopover?.isShown == true && handleMenu?.items.map { $0.item.title } == ["Turn into","Edit source…","Duplicate","Delete"],"Block handle uses the compact app popover with source access and no injected text-context actions")
-        check(handleMenu?.items.first?.children.allSatisfy { ($0.item as? BlockMenuItem)?.command?.kind != "paragraph" } == true,"Turn into omits the current block type")
+        check(editor.blockPopover?.isShown == true && handleMenu?.currentType == "Paragraph" && handleMenu?.items.map { $0.item.title } == ["Heading 1","Heading 2","Heading 3","Bulleted list","Numbered list","Quotation","Edit source…","Duplicate","Delete"],"Block handle identifies the current type and exposes conversion choices immediately")
+        check(handleMenu?.items.allSatisfy { ($0.item as? BlockMenuItem)?.command?.kind != "paragraph" && $0.children.isEmpty } == true,"Direct conversion choices omit the current block type")
         if let content = editor.blockPopover?.contentViewController?.view {
             func menuButtons(_ view: NSView) -> [MenuActionButton] {
                 (view as? MenuActionButton).map { [$0] } ?? view.subviews.flatMap(menuButtons)
@@ -402,6 +402,15 @@ import BlankCore
         if let duplicate = handleMenu?.items.first(where:{ $0.item.title == "Duplicate" }) { handleMenu?.choose(duplicate.item) }
         check(session.buffer.projection.blocks.count == 4 && controller.window?.firstResponder === editor,"Popover Duplicate uses the document transaction and restores editing focus")
         session.undo(); check(session.buffer.source == menuSource,"Popover block actions share exact-source undo")
+        editor.showBlockMenu(0,event:pointer(.leftMouseUp,handle))
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        if let content = editor.blockPopover?.contentViewController?.view {
+            func buttons(_ view: NSView) -> [MenuActionButton] { (view as? MenuActionButton).map { [$0] } ?? view.subviews.flatMap(buttons) }
+            guard let conversion = buttons(content).first(where:{ $0.accessibilityLabel() == "Heading 2" }) else { fatalError("Missing direct Heading 2 button") }
+            conversion.performClick(nil)
+        }
+        check(session.buffer.source == "== "+menuSource && session.buffer.projection.blocks[0].level == 2 && controller.window?.firstResponder === editor,"One native handle-menu click converts the block and restores editing focus")
+        session.undo(); check(session.buffer.source == menuSource,"Direct handle conversion retains exact source Undo")
         let selectionBeforeSidebar = editor.selectedRange(), editorBeforeSidebar = session.editor
         controller.toggleContents(nil)
         RunLoop.main.run(until:Date().addingTimeInterval(0.3))

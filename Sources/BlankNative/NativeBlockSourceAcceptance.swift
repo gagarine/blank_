@@ -57,12 +57,15 @@ import BlankCore
             let menu = editor.makeBlockMenu(at); _ = rawItem(menu)
             let titles = menu.items.map(\.title)
             check(titles.contains("Duplicate") && titles.contains("Delete"),"Source access retains block operations for \(kind)")
-            if block.editable { check(titles.contains("Turn into"),"Source access retains Turn into for \(kind)") }
+            if block.editable { check(menu.items.contains { ($0 as? BlockMenuItem)?.command != nil && $0.submenu == nil },"Source access retains direct conversions for \(kind)") }
             if kind == "table" && !block.cellRanges.isEmpty { check(titles.contains("Row") && titles.contains("Column"),"Source access retains native table controls") }
             if kind == "image" && FigureFieldEdit(session.buffer.source.bytes(block.source)) != nil { check(titles.contains("Edit image…"),"Literal figures retain semantic Edit image") }
             if kind == "table" && block.cellRanges.isEmpty { check(titles.contains("Edit table…"),"Unsupported tables retain their existing edit action") }
             let source = session.buffer.source, revision = session.buffer.revision, selection = session.buffer.selection
-            choose(at)
+            let (view,item) = open(at)
+            let typeNames = ["paragraph":"Paragraph","heading":"Heading 2","bullet":"Bulleted list","number":"Numbered list","quote":"Quotation","table":"Table","image":"Image and caption","bibliography":"Bibliography","equation":"Equation","source":"Code"]
+            check(view.currentType == typeNames[kind],"Actual \(kind) handle identifies its current type")
+            view.choose(item)
             check(session.sheet == .object && session.objectTitle == "Edit source" && session.objectOriginal.utf8.elementsEqual(source.bytes(block.source).utf8),"Actual \(kind) handle dispatch opens exact canonical block source")
             check(session.buffer.source == source && session.buffer.revision == revision && session.buffer.selection == selection && !session.buffer.canUndo && !session.dirty,"Opening source leaves source/history/selection/dirty state unchanged")
             check(session.applyObjectSource(session.objectOriginal) && session.buffer.source == source && !session.buffer.canUndo && !session.dirty,"Unchanged Apply is a no-op for \(kind)")

@@ -982,11 +982,10 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let block = session.buffer.projection.blocks[index]
         let menu = NSMenu()
         if block.editable {
-            let turn = NSMenuItem(title:"Turn into",action:nil,keyEquivalent:""); let submenu = NSMenu()
             for command in SlashCommand.all.prefix(7) where command.kind != block.kind || command.level != block.level {
-                let item = BlockMenuItem(title:command.label,action:#selector(blockMenuAction(_:)),keyEquivalent:""); item.target = self; item.blockIndex = index; item.command = command; submenu.addItem(item)
+                let item = BlockMenuItem(title:command.label,action:#selector(blockMenuAction(_:)),keyEquivalent:""); item.target = self; item.blockIndex = index; item.command = command; menu.addItem(item)
             }
-            turn.submenu = submenu; menu.addItem(turn)
+            menu.addItem(.separator())
         } else if block.kind == "table", !block.cellRanges.isEmpty {
             addTableMenus(to:menu,block:index,cell:0)
         } else {
@@ -1020,7 +1019,9 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         blockMenuRevision = session.buffer.revision; blockMenuPath = session.active
         let popover = NSPopover(); popover.behavior = .transient; popover.animates = false
         blockPopover = popover
-        let content = BlockActionMenu(items:BlockAction.items(from:menu),choose:{ [weak self] item in
+        let type = SlashCommand.all.first { $0.kind == (block.kind == "source" ? "code" : block.kind) }
+        let title = block.kind == "heading" ? "Heading \(block.level)" : type?.label ?? block.kind.capitalized
+        let content = BlockActionMenu(currentType:title,currentSymbol:type?.systemSymbol ?? "books.vertical",items:BlockAction.items(from:menu),choose:{ [weak self] item in
             self?.chooseBlockMenuItem(item,path:path,revision:revision)
         },resize:{ [weak popover] size in popover?.contentSize = size })
         popover.contentViewController = NSHostingController(rootView:content)
