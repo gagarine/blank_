@@ -123,6 +123,7 @@ struct CommandsSheet: View {
 }
 struct SettingsSheet: View {
     @ObservedObject var session: DocumentSession
+    @AppStorage("reopenUnsavedDocuments") private var reopensUnsavedDocuments = true
     var fonts: [String] { EditorPreferences.installedEditorFamilies }
     var body: some View {
         SheetFrame(title:"Settings",dismiss:{ session.sheet = nil }) {
@@ -135,7 +136,11 @@ struct SettingsSheet: View {
                 Toggle("Dark appearance",isOn:$session.dark)
                 Toggle("Paragraph focus",isOn:$session.paragraphFocus)
                 Toggle("Typewriter scrolling",isOn:$session.typewriter)
-            }.formStyle(.grouped).scrollContentBackground(.hidden).frame(height:370)
+                Section {
+                    Toggle("Reopen unsaved documents on launch",isOn:$reopensUnsavedDocuments)
+                    Text("Restore available drafts when blank_ starts. Saving and closing use macOS’s standard behavior.").font(.system(size:11)).foregroundStyle(.secondary)
+                }
+            }.formStyle(.grouped).scrollContentBackground(.hidden).frame(height:455)
             Text("Source uses the system monospace face. PDF typography is controlled by your Typst source.").font(.system(size:11)).foregroundStyle(.secondary)
             HStack { Spacer(); Button("Done") { session.sheet = nil }.keyboardShortcut(.defaultAction) }
         }.onDisappear { session.storeEditorPreferences() }

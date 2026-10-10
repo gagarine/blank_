@@ -936,6 +936,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         NSCursor.arrow.set(); return true
     }
     override func cursorUpdate(with event: NSEvent) {
+        if updateSelectionPanelCursor(for:event) { return }
         if updateSlashMenuCursor(for:event) { return }
         if updateToolbarCursor(for:event) { return }
         if updateSidebarResizeCursor(for:event) { return }
@@ -944,6 +945,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         else { mouseMoved(with:event) }
     }
     override func mouseMoved(with event: NSEvent) {
+        if updateSelectionPanelCursor(for:event) { return }
         if updateSlashMenuCursor(for:event) { return }
         if updateToolbarCursor(for:event) { return }
         if updateSidebarResizeCursor(for:event) { return }
@@ -961,6 +963,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         else { (bounds.contains(point) ? NSCursor.iBeam : NSCursor.arrow).set() }
     }
     override func mouseExited(with event: NSEvent) {
+        if updateSelectionPanelCursor(for:event) { return }
         if updateToolbarCursor(for:event) { return }
         if updateSidebarResizeCursor(for:event) { return }
         if grabbed == nil { hoverBlock = nil; needsDisplay = true; NSCursor.arrow.set() }

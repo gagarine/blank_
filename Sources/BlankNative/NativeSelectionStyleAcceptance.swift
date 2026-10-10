@@ -30,6 +30,19 @@ import BlankCore
         for _ in 0..<10 { editor.updateSelectionPanel(requireKeyWindow:false) }
         print(String(format:"Selection panel: 10 small-document updates %.1f ms wall, %.1f ms CPU; acceptance-process RSS %.1f MiB",Date().timeIntervalSince(start)*1000,(ResourceMetrics.cpuSeconds()-cpu)*1000,ResourceMetrics.residentMiB()))
         check(editor.selectionPanel?.isVisible == true && controller.window?.firstResponder === editor,"Selection panel appears without stealing native text focus")
+        if let content = editor.selectionPanel?.contentViewController?.view, let panelWindow = content.window {
+            func controls(_ view: NSView) -> [SelectionButtonCursorView] { (view as? SelectionButtonCursorView).map { [$0] } ?? view.subviews.flatMap(controls) }
+            let buttons = controls(content)
+            check(!buttons.isEmpty,"Selection panel exposes native cursor regions for its controls")
+            let source = session.buffer.source, selection = editor.selectedRange()
+            for button in buttons where button.enabled {
+                let rect = panelWindow.convertToScreen(button.convert(button.bounds,to:nil)), screen = NSPoint(x:rect.midX,y:rect.midY)
+                let event = NSEvent.mouseEvent(with:.mouseMoved,location:controller.window!.convertPoint(fromScreen:screen),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
+                NSCursor.iBeam.set(); editor.mouseMoved(with:event); check(NSCursor.current == .pointingHand,"Selection buttons own the pointing-hand cursor over underlying editor text")
+                NSCursor.iBeam.set(); editor.cursorUpdate(with:event); check(NSCursor.current == .pointingHand,"Editor cursor updates respect selection-panel controls")
+            }
+            check(session.buffer.source == source && editor.selectedRange() == selection,"Selection-panel pointer tracking preserves source and selection")
+        }
         editor.formatNative(.superscript); editor.selectionAttribute("color","#247cb7"); editor.selectionAttribute("highlight","#fff2a6"); editor.selectionAttribute("link","https://example.com")
         check(editor.selectedRange() == range && editor.string.hasPrefix("Before café 👩🏽‍💻 after"),"Panel actions preserve the selected Unicode text")
         check((editor.textStorage?.attribute(.baselineOffset,at:range.location,effectiveRange:nil) as? Double ?? 0) > 0 && editor.textStorage?.attribute(.backgroundColor,at:range.location,effectiveRange:nil) != nil,"Superscript and source-backed highlight render in native text")
@@ -40,6 +53,11 @@ import BlankCore
         check(session.buffer.source == styled,"Panel inline styles share source Redo")
         editor.selectionAlignment("center")
         check(session.buffer.projection.blocks[0].alignment == "center" && (editor.textStorage?.attribute(.paragraphStyle,at:range.location,effectiveRange:nil) as? NSParagraphStyle)?.alignment == .center,"Panel alignment applies to the complete native paragraph")
+        editor.selectionAlignment(nil)
+        check(session.buffer.projection.blocks[0].alignment == nil && session.buffer.source == styled && editor.selectedRange() == range,"Default alignment removes the Typst wrapper while preserving Unicode selection and inline styles")
+        session.undo(); check(session.buffer.projection.blocks[0].alignment == "center","Default alignment shares source Undo")
+        session.undo(true); check(session.buffer.source == styled,"Default alignment shares source Redo")
+        editor.selectionAlignment("center")
         editor.selectionBlockStyle(SlashCommand.blockStyles.first { $0.kind == "heading" && $0.level == 2 }!)
         check(session.buffer.projection.blocks[0].kind == "heading" && session.buffer.projection.blocks[0].text == "Before café 👩🏽‍💻 after" && session.buffer.projection.blocks[0].alignment == "center","Panel Turn into converts the whole block and retains alignment")
         editor.setSelectedRange(NSRange(location:0,length:0)); editor.updateSelectionPanel(requireKeyWindow:false)
