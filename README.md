@@ -2,6 +2,8 @@
 
 A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI and AppKit. Documents stay ordinary local `.typ` projects.
 
+Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3** for Write / Source / Preview.
+
 ![blank_ with a garden photograph, heading outline, inline formatting and color palettes](Resources/Screenshots/editor.jpg)
 
 ## Download
@@ -19,7 +21,7 @@ Releases are not notarized. If macOS blocks blank_, click **Done**, then **Syste
 - **Document tools** — PDF export/sharing, statistics, recovery and native macOS save/move controls.
 - **Templates** — Standard, Thesis, Paper, Letter A4, Book and Slides, plus your own editable templates.
 
-Use `/` for blocks, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3** to switch views. Try [Field notes](examples/Field%20notes.typ) or **Help → Tutorial**.
+Try [Field notes](examples/Field%20notes.typ) or **Help → Tutorial**.
 
 ## Projects and references
 
