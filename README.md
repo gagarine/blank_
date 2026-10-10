@@ -2,6 +2,8 @@
 
 A quiet native macOS editor for [Typst](https://typst.app), built with SwiftUI and AppKit. Documents stay ordinary local `.typ` projects.
 
+Automatic draft saving helps keep your work safe.
+
 Zotero integration supports reference insertion and refresh, BibLaTeX and Hayagriva bibliographies, custom CSL styles and bibliography conversion.
 
 Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3** for Write / Source / Preview.
