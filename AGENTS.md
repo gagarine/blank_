@@ -74,6 +74,8 @@ GitHub Actions builds/checks macOS 26 and Xcode 27 and uploads app archives. Pub
 
 ## Remaining work and working style
 
+Write GitHub issue bodies like a developer's note: concise, plain and easy to understand. State the concrete problem or requested behavior; short bullets and arrows are fine. Avoid formal, verbose or canned prose.
+
 Keep the functionality backlog and user-facing development documentation in the README, concise and current; do not recreate a separate docs folder. Real IME candidate panels, VoiceOver, bidirectional navigation, live Zotero and several broader file/window/object scenarios remain unverified; synthetic/native acceptance does not establish physical-session coverage. Large-table editing and full Source reprojection still need performance work. Keep these distinctions accurate.
 
 Favor small, native improvements and fixes over adding UI complexity. Proceed with authorized local edits, builds and disposable testing; do not repeatedly ask for permission already given. Preserve user changes, make reviewable milestone commits, and merge/push only within the user's authorized scope. Do not infer permission to message others. Use independent review or parallel agents when the user requests it, rather than automatically delegating every task.
