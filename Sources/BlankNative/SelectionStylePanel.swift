@@ -185,10 +185,13 @@ final class SelectionButtonCursorView: NSView {
 }
 extension NativeTextView {
     func updateSelectionPanelCursor(for event: NSEvent) -> Bool {
-        guard let panel = selectionPanel, panel.isShown, let content = panel.contentViewController?.view,
-              let panelWindow = content.window, let eventWindow = event.window ?? window else { return false }
+        guard let eventWindow = event.window ?? window,
+              let panel = [selectionPanel,linkPanel].compactMap({ $0 }).first(where:{ panel in
+                  guard panel.isShown, let panelWindow = panel.contentViewController?.view.window else { return false }
+                  return panelWindow.frame.contains(eventWindow.convertPoint(toScreen:event.locationInWindow))
+              }), let content = panel.contentViewController?.view, let panelWindow = content.window else { return false }
         let screen = eventWindow.convertPoint(toScreen:event.locationInWindow)
-        guard panelWindow.frame.contains(screen) else { return false }
+        if panel === linkPanel { linkDismissWork?.cancel() }
         func controls(_ view: NSView) -> [SelectionButtonCursorView] {
             (view as? SelectionButtonCursorView).map { [$0] } ?? view.subviews.flatMap(controls)
         }
@@ -199,7 +202,9 @@ extension NativeTextView {
         return true
     }
     func applyInlineAppearance(_ style: TextStyle,to text: NSMutableAttributedString,range: NSRange) {
-        if let color = style.color.flatMap(nativeHexColor) { text.addAttribute(.foregroundColor,value:color,range:range) }
+        // Link appearance is source-backed; AppKit's actionable .link attribute
+        // would intercept the clicks needed to place a caret or select text.
+        if let color = style.color.flatMap(nativeHexColor) ?? (style.link == nil ? nil : NSColor.linkColor) { text.addAttribute(.foregroundColor,value:color,range:range) }
         if let color = style.highlight.flatMap(nativeHexColor) {
             let background = effectiveAppearance.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua ? color.withAlphaComponent(0.25) : color
             text.addAttribute(.backgroundColor,value:background,range:range)
@@ -214,6 +219,7 @@ extension NativeTextView {
         DispatchQueue.main.async { [weak self] in self?.selectionPanelUpdatePending = false; self?.updateSelectionPanel() }
     }
     func updateSelectionPanel(requireKeyWindow: Bool = true) {
+        if selectedRange().length > 0 { dismissLinkHover() }
         guard let session, session.mode == .write, !session.contactSheet, session.sheet == nil,
               !composing, !hasMarkedText(), !selectingText, !draggingBlock, slashPopover?.isShown != true, blockPopover?.isShown != true,
               selectedRange().length > 0, let window, (!requireKeyWindow || window.isKeyWindow || CommandLine.arguments.contains("--selection-style-ui-test")), window.firstResponder === self,
