@@ -49,15 +49,4 @@ The Rust parser and separate PDF compiler share a Cargo workspace, lockfile and 
 
 [CI](.github/workflows/build-macos.yml) checks macOS 26/27. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after both builds pass. Apps are ad-hoc signed; Intel support is unverified.
 
-## Remaining work
-
-- Rich controls for footnotes, complex citations and custom figures; PDF-page selection and broader image-format validation.
-- Zotero group discovery and citation-picker keyboard navigation.
-- Continuous editing across included files and repeated includes.
-- Settings synchronization, disjoint external-change merging and broader recovery checks.
-- Large-table/Source performance and long-document resource measurements.
-- Opt-in MCP/agent access with revision checks and selective undo.
-
-Live Zotero, physical IME candidates, bidirectional editing, VoiceOver and Writing Tools remain unverified, as do custom citation show rules and note-style footnotes in Write.
-
-[MIT](LICENSE) · Built with OpenAI Codex.
+[Issues](https://github.com/gagarine/blank_/issues) · [MIT](LICENSE) · Built with OpenAI Codex.
