@@ -24,8 +24,6 @@ Releases are not notarized. If macOS blocks blank_, click **Done**, then **Syste
 
 Supports `.typ` files and multi-file projects with includes, imports and assets. Packages must already be cached or vendored in `packages/`.
 
-Drafts autosave privately, with optional restoration on launch in Settings.
-
 ## Development
 
 Requires Swift 6 with a macOS 26/27 SDK, Rust 1.98.1 (pinned) and Python 3.
