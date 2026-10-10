@@ -14,12 +14,7 @@ Releases are not notarized. If macOS blocks blank_, click **Done**, then **Syste
 
 ## Writing
 
-- **Write, Source and Preview** — native rich text, exact Typst source and typeset PDFs, with shared Undo and formatted clipboard.
-- **Blocks** — headings, lists, native tables, figures, footnotes, citations, bibliographies and collapsible Typst source. Displayed code blocks and inline code are also supported.
-- **Text styles** — bold, italic, underline, strikethrough, links, text/highlight colors, superscript/subscript and alignment.
-- **Navigation** — movable heading outline, thumbnails, contact sheet and live project search.
-- **Document tools** — PDF export/sharing, statistics, recovery and native macOS save/move controls.
-- **Templates** — Standard, Thesis, Paper, Letter A4, Book and Slides, plus your own editable templates.
+**Write** lets you edit formatted text, **Source** gives you direct access to the underlying Typst, and **Preview** shows the typeset PDF. These are three views of the same document, so you can move between drafting, adjusting the source and checking the result.
 
 Try [Field notes](examples/Field%20notes.typ) or **Help → Tutorial**.
 
