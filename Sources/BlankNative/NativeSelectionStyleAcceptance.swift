@@ -185,10 +185,20 @@ import BlankCore
             let hoverPreconditions = "selectionPanel=\(editor.selectionPanel?.isShown == true) slash=\(editor.slashPopover?.isShown == true) block=\(editor.blockPopover?.isShown == true) selecting=\(editor.selectingText) dragging=\(editor.draggingBlock) focus=\(controller.window?.firstResponder === editor)"
             editor.mouseMoved(with:hoverEvent)
             let hoverScheduled = editor.hoveredLink == target && editor.linkHoverWork?.isCancelled == false
+            check(hoverScheduled,"Native pointer movement schedules the delayed link hover")
             check(editor.linkPanel?.isShown != true,"Brief pointer movement over a link does not immediately show a panel")
-            RunLoop.main.run(until:Date().addingTimeInterval(0.4))
+            // Await the asynchronous presentation, not a 50 ms scheduler margin.
+            // Keep the production delay and native input path unchanged.
+            var hoverQueueReached = false
+            let hoverMarker = DispatchWorkItem { hoverQueueReached = true }
+            DispatchQueue.main.asyncAfter(deadline:.now()+0.35,execute:hoverMarker)
+            defer { hoverMarker.cancel() }
+            let hoverWaitStart = Date(), hoverDeadline = Date().addingTimeInterval(3)
+            while editor.linkPanel?.isShown != true && Date() < hoverDeadline {
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+            }
             if editor.linkPanel?.isShown != true || editor.selectedRange() != caret || controller.window?.firstResponder !== editor {
-                print("Link hover diagnostic: before=\(hoverPreconditions) scheduled=\(hoverScheduled) panelExists=\(editor.linkPanel != nil) panel=\(editor.linkPanel?.isShown == true) caret=\(editor.selectedRange()) expected=\(caret) focus=\(controller.window?.firstResponder === editor) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) target=\(editor.hoveredLink == target) valid=\(editor.validLinkTarget(target)) hoverCancelled=\(editor.linkHoverWork?.isCancelled as Any) dismissCancelled=\(editor.linkDismissWork?.isCancelled as Any) visible=\(editor.visibleRect) hit=\(hit)")
+                print("Link hover diagnostic: before=\(hoverPreconditions) scheduled=\(hoverScheduled) waited=\(Date().timeIntervalSince(hoverWaitStart)) queueReached=\(hoverQueueReached) panelExists=\(editor.linkPanel != nil) panel=\(editor.linkPanel?.isShown == true) caret=\(editor.selectedRange()) expected=\(caret) focus=\(controller.window?.firstResponder === editor) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) target=\(editor.hoveredLink == target) valid=\(editor.validLinkTarget(target)) hoverCancelled=\(editor.linkHoverWork?.isCancelled as Any) dismissCancelled=\(editor.linkDismissWork?.isCancelled as Any) visible=\(editor.visibleRect) hit=\(hit)")
                 fflush(stdout)
             }
             check(editor.linkPanel?.isShown == true && editor.selectedRange() == caret && controller.window?.firstResponder === editor,"Link hover presents native actions without moving the caret or taking editing focus")
