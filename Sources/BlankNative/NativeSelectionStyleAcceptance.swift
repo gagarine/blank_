@@ -164,11 +164,24 @@ import BlankCore
             // Establish the native foreground state before testing delayed hover.
             NSApp.activate(ignoringOtherApps:true); controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(editor)
             let focusDeadline = Date().addingTimeInterval(3)
+            let foregroundBefore = "active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true)"
+            var foregroundEvents: [UInt] = []
             while !(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor) && Date() < focusDeadline {
+                // The synchronous suite suspends NSApplication's event loop.
+                // Dispatch its queued activation/window events as AppKit normally does.
+                for _ in 0..<32 {
+                    guard Date() < focusDeadline, let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    foregroundEvents.append(event.type.rawValue); NSApp.sendEvent(event)
+                }
                 RunLoop.main.run(until:Date().addingTimeInterval(0.01))
             }
+            print("Link hover foreground: before=\(foregroundBefore) events=\(foregroundEvents) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true)")
             check(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor,"Link-hover fixture has an active app and key native editor window")
-            let hoverEvent = NSEvent.mouseEvent(with:.mouseMoved,location:editor.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
+            check(editor.selectedRange() == caret && session.buffer.source == linkedSource,"Native foreground setup preserves the hover fixture's exact source and caret")
+            editor.ensureNativeLayout()
+            let hoverHit = editor.documentGlyphRect(NSRange(location:linkedText.location+1,length:1)), hoverPoint = NSPoint(x:hoverHit.midX,y:hoverHit.midY)
+            check(editor.linkTarget(at:hoverPoint) == target,"Native foreground setup retains the exact Unicode hover target")
+            let hoverEvent = NSEvent.mouseEvent(with:.mouseMoved,location:editor.convert(hoverPoint,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
             let hoverPreconditions = "selectionPanel=\(editor.selectionPanel?.isShown == true) slash=\(editor.slashPopover?.isShown == true) block=\(editor.blockPopover?.isShown == true) selecting=\(editor.selectingText) dragging=\(editor.draggingBlock) focus=\(controller.window?.firstResponder === editor)"
             editor.mouseMoved(with:hoverEvent)
             let hoverScheduled = editor.hoveredLink == target && editor.linkHoverWork?.isCancelled == false
