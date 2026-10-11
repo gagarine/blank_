@@ -20,7 +20,7 @@ if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; the
     echo 'BLANK_VERSION must be X.Y.Z or vX.Y.Z, optionally with a prerelease/build suffix' >&2; exit 2
 fi
 app_version=${app_version%%[-+]*}
-export MACOSX_DEPLOYMENT_TARGET=26.0
+export MACOSX_DEPLOYMENT_TARGET=27.0
 # Swift linking and app packaging use this shared workspace output directory.
 export CARGO_TARGET_DIR="$PWD/target"
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
@@ -64,7 +64,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleShortVersionString</key><string>0.3.1</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>
-<key>LSMinimumSystemVersion</key><string>26.0</string>
+<key>LSMinimumSystemVersion</key><string>27.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 <key>UTImportedTypeDeclarations</key><array><dict><key>UTTypeIdentifier</key><string>org.typst.source</string><key>UTTypeDescription</key><string>Typst document</string><key>UTTypeConformsTo</key><array><string>public.plain-text</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>typ</string></array><key>public.mime-type</key><string>text/x-typst</string></dict></dict></array>
 <key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Typst document</string><key>CFBundleTypeRole</key><string>Editor</string><key>NSDocumentClass</key><string>BlankDocument</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>org.typst.source</string></array></dict></array>

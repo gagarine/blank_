@@ -12,8 +12,13 @@ trap 'rm -rf "$portable"' EXIT
 relocated="$portable/Relocated app/blank_.app"
 ditto "$app" "$relocated"
 codesign --verify --deep --strict "$relocated"
+test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$relocated/Contents/Info.plist")" = 27.0
 for binary in blank_ libblank_syntax.dylib typst-compiler; do
     lipo "$relocated/Contents/MacOS/$binary" -verify_arch arm64
+    xcrun vtool -show-build "$relocated/Contents/MacOS/$binary" | awk '
+        $1 == "minos" { seen = 1; split($2, version, "."); if (version[1] < 27) invalid = 1 }
+        END { exit (!seen || invalid) }
+    ' || { echo "Packaged $binary must target macOS 27 or newer" >&2; exit 1; }
 done
 test ! -e "$relocated/Contents/MacOS/writer-helper"
 otool -L "$relocated/Contents/MacOS/blank_" | grep -q '@rpath/libblank_syntax.dylib'

@@ -14,7 +14,7 @@ sdk_major=${sdk_version%%.*}
 if [[ ! "$sdk_major" =~ ^[0-9]+$ ]] || (( 10#$sdk_major < 27 )); then
     echo "Checks require a macOS 27 or newer SDK (found $sdk_version at $BLANK_SDK_PATH)" >&2; exit 2
 fi
-export MACOSX_DEPLOYMENT_TARGET=26.0
+export MACOSX_DEPLOYMENT_TARGET=27.0
 # Swift linking and app packaging use this shared workspace output directory.
 export CARGO_TARGET_DIR="$PWD/target"
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"

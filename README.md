@@ -12,7 +12,7 @@ Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3**
 
 ## Download
 
-Get the [latest release](https://github.com/gagarine/blank_/releases) for Apple Silicon. macOS 27 is the supported target; the app retains a macOS 26 deployment minimum, but compatibility with macOS 26 is unverified. Automatic updates are not available yet.
+Get the [latest release](https://github.com/gagarine/blank_/releases) for Apple Silicon. Current development builds require macOS 27 or newer; earlier releases may support older versions. Automatic updates are not available yet.
 
 Releases are not notarized. If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. [Apple’s instructions](https://support.apple.com/en-us/102445).
 
