@@ -101,7 +101,13 @@ import BlankCore
         check(findEditor?.isFieldEditor == true && findEditor?.string == "Find again","Repeated Cmd-F returns to the existing search field")
         session.hideSearch(); session.searchQuery = ""
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        let closeFindDeadline = Date().addingTimeInterval(3)
+        while controller.window?.firstResponder !== view && Date() < closeFindDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.01)) }
+        if controller.window?.firstResponder !== view {
+            print("Close Find diagnostic: visible=\(session.searchVisible) query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) fieldOwnsFocus=\(nativeFindEditor() != nil) responder=\(String(describing:controller.window?.firstResponder)) current=\(AppController.shared.current === session)")
+        }
         check(controller.window?.firstResponder === view && view.string.isEmpty,"Closing search restores the untouched editor and caret")
+        check(!session.searchVisible && session.searchQuery.isEmpty && session.buffer.source.isEmpty,"Closing native Find keeps search closed and canonical source untouched")
         check(controller.window?.styleMask.contains(.fullSizeContentView) == true && controller.window?.titlebarAppearsTransparent == false,"Document extends beneath the native material toolbar")
         for scalar in "Hello café 👩🏽‍💻".unicodeScalars { view.insertText(String(scalar),replacementRange:view.selectedRange()) }
         check(session.buffer.projection.text == "Hello café 👩🏽‍💻","Native typing and Unicode")
