@@ -71,10 +71,15 @@ import BlankCore
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         check((controller.window?.firstResponder as? NSTextView)?.isFieldEditor == true,"Cmd-F focuses the native Find field instead of the document")
         session.searchQuery = "Find again"
+        let findBefore = "query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) editor=\((controller.window?.firstResponder as? NSTextView)?.string as Any) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) current=\(AppController.shared.current === session)"
         controller.window?.makeFirstResponder(view)
+        let findAfterBlur = "query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) current=\(AppController.shared.current === session)"
         AppController.shared.find(nil)
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         let findEditor = controller.window?.firstResponder as? NSTextView
+        if findEditor?.isFieldEditor != true || findEditor?.string != "Find again" {
+            print("Repeated Find diagnostic: before=\(findBefore) afterBlur=\(findAfterBlur) query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) editor=\(findEditor?.string as Any) isField=\(findEditor?.isFieldEditor as Any) visible=\(session.searchVisible) request=\(session.searchFocusRequest) sheet=\(controller.window?.attachedSheet != nil) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) current=\(AppController.shared.current === session)")
+        }
         check(findEditor?.isFieldEditor == true && findEditor?.string == "Find again","Repeated Cmd-F returns to the existing search field")
         session.hideSearch(); session.searchQuery = ""
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
