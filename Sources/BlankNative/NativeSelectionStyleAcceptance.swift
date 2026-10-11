@@ -160,6 +160,14 @@ import BlankCore
         print(String(format:"Link hover: 100 small-document hit checks %.1f ms wall, %.1f ms CPU; acceptance-process RSS %.1f MiB",Date().timeIntervalSince(hoverStart)*1000,(ResourceMetrics.cpuSeconds()-hoverCPU)*1000,ResourceMetrics.residentMiB()))
         if let target = editor.linkTarget(at:point) {
             check(target.range == linkedText,"Link hover identifies the complete styled Unicode link independently of an adjacent identical URL")
+            // A synthetic mouse event does not activate an app like a real click.
+            // Establish the native foreground state before testing delayed hover.
+            NSApp.activate(); controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(editor)
+            let focusDeadline = Date().addingTimeInterval(3)
+            while !(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor) && Date() < focusDeadline {
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+            }
+            check(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor,"Link-hover fixture has an active app and key native editor window")
             let hoverEvent = NSEvent.mouseEvent(with:.mouseMoved,location:editor.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
             let hoverPreconditions = "selectionPanel=\(editor.selectionPanel?.isShown == true) slash=\(editor.slashPopover?.isShown == true) block=\(editor.blockPopover?.isShown == true) selecting=\(editor.selectingText) dragging=\(editor.draggingBlock) focus=\(controller.window?.firstResponder === editor)"
             editor.mouseMoved(with:hoverEvent)
@@ -167,7 +175,7 @@ import BlankCore
             check(editor.linkPanel?.isShown != true,"Brief pointer movement over a link does not immediately show a panel")
             RunLoop.main.run(until:Date().addingTimeInterval(0.4))
             if editor.linkPanel?.isShown != true || editor.selectedRange() != caret || controller.window?.firstResponder !== editor {
-                print("Link hover diagnostic: before=\(hoverPreconditions) scheduled=\(hoverScheduled) panel=\(editor.linkPanel?.isShown == true) caret=\(editor.selectedRange()) expected=\(caret) focus=\(controller.window?.firstResponder === editor) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) target=\(editor.hoveredLink == target) valid=\(editor.validLinkTarget(target)) hoverCancelled=\(editor.linkHoverWork?.isCancelled as Any) dismissCancelled=\(editor.linkDismissWork?.isCancelled as Any) visible=\(editor.visibleRect) hit=\(hit)")
+                print("Link hover diagnostic: before=\(hoverPreconditions) scheduled=\(hoverScheduled) panelExists=\(editor.linkPanel != nil) panel=\(editor.linkPanel?.isShown == true) caret=\(editor.selectedRange()) expected=\(caret) focus=\(controller.window?.firstResponder === editor) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) target=\(editor.hoveredLink == target) valid=\(editor.validLinkTarget(target)) hoverCancelled=\(editor.linkHoverWork?.isCancelled as Any) dismissCancelled=\(editor.linkDismissWork?.isCancelled as Any) visible=\(editor.visibleRect) hit=\(hit)")
                 fflush(stdout)
             }
             check(editor.linkPanel?.isShown == true && editor.selectedRange() == caret && controller.window?.firstResponder === editor,"Link hover presents native actions without moving the caret or taking editing focus")
