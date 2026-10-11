@@ -31,6 +31,9 @@ codesign --verify --deep --strict "$relocated"
 # Native acceptance also exercises Swift's bundled compiler lookup and PDF export.
 cd "$portable"
 env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH python3 "$repo/scripts/compiler-check.py" "$relocated"
+# Foreground/pointer checks have app-wide focus and event-queue effects. Keep
+# their full assertions in a separate process and disposable recovery directory.
+BLANK_DATA_DIR="$portable/selection-style-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --selection-style-self-test
 BLANK_DATA_DIR="$portable/data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --self-test
 # Lifecycle processes share one identity and data directory, independently of
 # editing fixtures whose hard-exit snapshots belong to a different data root.

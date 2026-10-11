@@ -50,7 +50,8 @@ import BlankCore
         NativeReferenceAcceptance.run(controller:controller)
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
-        NativeSelectionStyleAcceptance.run(controller:controller)
+        // Foreground/pointer fixtures run once in their own acceptance process.
+        // scripts/check-bundle.sh invokes --selection-style-self-test separately.
         NativeGoAcceptance.text(original:controller)
         NativeCitationAcceptance.run(controller:controller)
         NativeTemplateAcceptance.run(original:controller)
