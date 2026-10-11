@@ -162,7 +162,7 @@ import BlankCore
             check(target.range == linkedText,"Link hover identifies the complete styled Unicode link independently of an adjacent identical URL")
             // A synthetic mouse event does not activate an app like a real click.
             // Establish the native foreground state before testing delayed hover.
-            NSApp.activate(); controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(editor)
+            NSApp.activate(ignoringOtherApps:true); controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(editor)
             let focusDeadline = Date().addingTimeInterval(3)
             while !(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor) && Date() < focusDeadline {
                 RunLoop.main.run(until:Date().addingTimeInterval(0.01))
