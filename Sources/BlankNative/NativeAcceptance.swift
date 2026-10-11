@@ -67,19 +67,37 @@ import BlankCore
         check(session.commandQuery == "fast café" && commandField?.string == "fast café" && session.pendingCommandKeys.isEmpty,"Opening Commands delivers early Unicode keys to its native field editor")
         session.sheet = nil
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
-        AppController.shared.find(nil)
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
-        check((controller.window?.firstResponder as? NSTextView)?.isFieldEditor == true,"Cmd-F focuses the native Find field instead of the document")
-        session.searchQuery = "Find again"
-        let findBefore = "query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) editor=\((controller.window?.firstResponder as? NSTextView)?.string as Any) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) current=\(AppController.shared.current === session)"
-        controller.window?.makeFirstResponder(view)
-        let findAfterBlur = "query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) current=\(AppController.shared.current === session)"
-        AppController.shared.find(nil)
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
-        let findEditor = controller.window?.firstResponder as? NSTextView
-        if findEditor?.isFieldEditor != true || findEditor?.string != "Find again" {
-            print("Repeated Find diagnostic: before=\(findBefore) afterBlur=\(findAfterBlur) query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) editor=\(findEditor?.string as Any) isField=\(findEditor?.isFieldEditor as Any) visible=\(session.searchVisible) request=\(session.searchFocusRequest) sheet=\(controller.window?.attachedSheet != nil) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) current=\(AppController.shared.current === session)")
+        func nativeFindEditor() -> NSTextView? {
+            guard let fieldEditor = controller.searchItem?.searchField.currentEditor() as? NSTextView,
+                  fieldEditor.isFieldEditor, controller.window?.firstResponder === fieldEditor else { return nil }
+            return fieldEditor
         }
+        func awaitFind(_ query: String? = nil) {
+            let deadline = Date().addingTimeInterval(3)
+            while (nativeFindEditor() == nil || (query != nil && nativeFindEditor()?.string != query)) && Date() < deadline {
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+            }
+            if nativeFindEditor() == nil || (query != nil && nativeFindEditor()?.string != query) {
+                print("Find diagnostic: query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) editor=\((controller.window?.firstResponder as? NSTextView)?.string as Any) isField=\((controller.window?.firstResponder as? NSTextView)?.isFieldEditor as Any) visible=\(session.searchVisible) request=\(session.searchFocusRequest) sheet=\(controller.window?.attachedSheet != nil) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) current=\(AppController.shared.current === session)")
+            }
+        }
+        check(AppController.shared.current === session,"Cmd-F targets the original native document after Commands")
+        AppController.shared.find(nil)
+        awaitFind()
+        check(nativeFindEditor() != nil,"Cmd-F focuses the native Find field instead of the document")
+        // Exercise native field input before returning to the document, rather
+        // than assigning the model query while its field editor is active.
+        let initialFindEditor = nativeFindEditor()!
+        initialFindEditor.selectAll(nil)
+        initialFindEditor.insertText("Find again",replacementRange:initialFindEditor.selectedRange())
+        let queryDeadline = Date().addingTimeInterval(3)
+        while session.searchQuery != "Find again" && Date() < queryDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.01)) }
+        check(session.searchQuery == "Find again" && controller.searchItem?.searchField.stringValue == "Find again" && view.string.isEmpty && session.buffer.source.isEmpty,"Native Find input updates its query without editing the document")
+        check(controller.window?.makeFirstResponder(view) == true && controller.window?.firstResponder === view,"Returning from Find focuses the native document")
+        check(AppController.shared.current === session,"Repeated Cmd-F targets the original native document")
+        AppController.shared.find(nil)
+        awaitFind("Find again")
+        let findEditor = nativeFindEditor()
         check(findEditor?.isFieldEditor == true && findEditor?.string == "Find again","Repeated Cmd-F returns to the existing search field")
         session.hideSearch(); session.searchQuery = ""
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
