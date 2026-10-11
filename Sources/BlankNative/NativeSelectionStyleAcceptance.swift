@@ -164,6 +164,10 @@ import BlankCore
             editor.mouseMoved(with:hoverEvent)
             check(editor.linkPanel?.isShown != true,"Brief pointer movement over a link does not immediately show a panel")
             RunLoop.main.run(until:Date().addingTimeInterval(0.4))
+            if editor.linkPanel?.isShown != true || editor.selectedRange() != caret || controller.window?.firstResponder !== editor {
+                print("Link hover diagnostic: panel=\(editor.linkPanel?.isShown == true) caret=\(editor.selectedRange()) expected=\(caret) focus=\(controller.window?.firstResponder === editor) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) target=\(editor.hoveredLink == target) valid=\(editor.validLinkTarget(target)) hoverCancelled=\(editor.linkHoverWork?.isCancelled as Any) dismissCancelled=\(editor.linkDismissWork?.isCancelled as Any) visible=\(editor.visibleRect) hit=\(hit)")
+                fflush(stdout)
+            }
             check(editor.linkPanel?.isShown == true && editor.selectedRange() == caret && controller.window?.firstResponder === editor,"Link hover presents native actions without moving the caret or taking editing focus")
             if let content = editor.linkPanel?.contentViewController?.view, let panelWindow = content.window {
                 func buttons(_ view: NSView) -> [SelectionButtonCursorView] { (view as? SelectionButtonCursorView).map { [$0] } ?? view.subviews.flatMap(buttons) }
