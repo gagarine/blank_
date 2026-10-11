@@ -1,5 +1,10 @@
 #!/bin/bash
 set -euo pipefail
+os_version=$(sw_vers -productVersion)
+os_major=${os_version%%.*}
+if [[ ! "$os_major" =~ ^[0-9]+$ ]] || (( 10#$os_major < 27 )); then
+    echo "Bundle checks require macOS 27 or newer (found $os_version)" >&2; exit 2
+fi
 repo=$(cd "$(dirname "$0")/.." && pwd)
 app=${1:-"$repo/build/blank_.app"}
 portable=$(mktemp -d /tmp/blank-bundle-check.XXXXXX)

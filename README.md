@@ -18,7 +18,7 @@ Releases are not notarized. If macOS blocks blank_, click **Done**, then **Syste
 
 ## Development
 
-Built with SwiftUI, AppKit and the official Typst 0.15.1 parser and compiler. Requires Swift 6 with a macOS 26/27 SDK, Rust 1.98.1 (pinned) and Python 3.
+Built with SwiftUI, AppKit and the official Typst 0.15.1 parser and compiler. Local builds and checks require macOS 27 or newer, Swift 6 with a macOS 27 or newer SDK, Rust 1.98.1 (pinned) and Python 3.
 
 ```sh
 bash scripts/build.sh release  # omit release for debug

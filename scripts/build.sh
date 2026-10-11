@@ -3,6 +3,17 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 configuration=${1:-debug}
 case "$configuration" in debug|release) ;; *) echo "Usage: $0 [debug|release]" >&2; exit 2 ;; esac
+os_version=$(sw_vers -productVersion)
+os_major=${os_version%%.*}
+if [[ ! "$os_major" =~ ^[0-9]+$ ]] || (( 10#$os_major < 27 )); then
+    echo "Builds require macOS 27 or newer (found $os_version)" >&2; exit 2
+fi
+sdk_path=${BLANK_SDK_PATH:-$(xcrun --sdk macosx --show-sdk-path)}
+sdk_version=$(/usr/libexec/PlistBuddy -c 'Print :Version' "$sdk_path/SDKSettings.plist")
+sdk_major=${sdk_version%%.*}
+if [[ ! "$sdk_major" =~ ^[0-9]+$ ]] || (( 10#$sdk_major < 27 )); then
+    echo "Builds require a macOS 27 or newer SDK (found $sdk_version at $sdk_path)" >&2; exit 2
+fi
 app_version=${BLANK_VERSION:-0.3.1}
 app_version=${app_version#v}
 if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
@@ -18,10 +29,7 @@ mkdir -p "$CLANG_MODULE_CACHE_PATH" .build/cache
 cargo_options=(--locked)
 if [[ "${BLANK_OFFLINE:-0}" == 1 ]]; then cargo_options+=(--offline); fi
 cargo build --workspace --release "${cargo_options[@]}"
-sdk_path=${BLANK_SDK_PATH:-$(xcrun --sdk macosx --show-sdk-path)}
-sdk_version=$(/usr/libexec/PlistBuddy -c 'Print :Version' "$sdk_path/SDKSettings.plist")
-swift_options=(--sdk "$sdk_path")
-if (( ${sdk_version%%.*} >= 27 )); then swift_options+=(-Xswiftc -DBLANK_MACOS27_SDK); fi
+swift_options=(--sdk "$sdk_path" -Xswiftc -DBLANK_MACOS27_SDK)
 swift build --disable-sandbox --cache-path .build/cache -c "$configuration" "${swift_options[@]}"
 app="$PWD/build/blank_.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"

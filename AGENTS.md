@@ -58,7 +58,7 @@ open build/blank_.app
 bash scripts/check.sh          # release build and full acceptance suite
 ```
 
-Requirements: Swift 6 with a macOS 26 or 27 SDK, Rust 1.98.1 (root `rust-toolchain.toml`, including rustfmt) and Python 3 for checks. First builds download locked Rust dependencies; `BLANK_OFFLINE=1` requires cached dependencies. `BLANK_SDK_PATH` selects an installed SDK by absolute path. Both configurations update the **same** `build/blank_.app`; quit/reopen to test a newly built version. Keep `.build` and the shared root `target/` cache for iteration unless cleanup is needed; avoid accumulating alternate app bundles.
+Local builds and checks require macOS 27 or newer, Swift 6 with a macOS 27 or newer SDK, Rust 1.98.1 (root `rust-toolchain.toml`, including rustfmt) and Python 3. The scripts reject older hosts and SDKs before building or testing; do not run a macOS 26 comparison suite. First builds download locked Rust dependencies; `BLANK_OFFLINE=1` requires cached dependencies. `BLANK_SDK_PATH` selects an installed SDK by absolute path. Both configurations update the **same** `build/blank_.app`; quit/reopen to test a newly built version. Keep `.build` and the shared root `target/` cache for iteration unless cleanup is needed; avoid accumulating alternate app bundles.
 
 The build script guards SDK 27-only toolbar APIs at compile time and runtime, targets macOS 26, rewrites the parser dependency to the adjacent bundled dylib and verifies the ad-hoc signature. Do not bypass that packaging step by distributing the raw Swift executable. Verify relocated bundles when changing packaging; a build that works only with libraries in the checkout is not portable.
 
