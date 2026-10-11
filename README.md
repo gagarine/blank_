@@ -12,7 +12,7 @@ Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3**
 
 ## Download
 
-Get the [latest release](https://github.com/gagarine/blank_/releases) for Apple Silicon and macOS 26+. Automatic updates are not available yet.
+Get the [latest release](https://github.com/gagarine/blank_/releases) for Apple Silicon. macOS 27 is the supported target; the app retains a macOS 26 deployment minimum, but compatibility with macOS 26 is unverified. Automatic updates are not available yet.
 
 Releases are not notarized. If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. [Apple’s instructions](https://support.apple.com/en-us/102445).
 
@@ -28,6 +28,6 @@ bash scripts/check.sh
 
 Quit and reopen after rebuilding. Native checks need an unlocked desktop session. See [AGENTS.md](AGENTS.md) for architecture, build and verification conventions.
 
-[CI](.github/workflows/build-macos.yml) checks macOS 26/27. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after both builds pass. Apps are ad-hoc signed; Intel support is unverified.
+[CI](.github/workflows/build-macos.yml) checks macOS 27 using GitHub’s `xcode-27` runner. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after the build and checks pass. Apps are ad-hoc signed; Intel support is unverified.
 
 [Issues](https://github.com/gagarine/blank_/issues) · [MIT](LICENSE) · Built with OpenAI Codex.

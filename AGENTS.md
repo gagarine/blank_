@@ -8,7 +8,7 @@ The Go reference is preserved on `codex/legacy-go`. Inspect it with `git show` o
 
 ## Product direction
 
-- macOS 26 and 27 are the targets. Prefer modern Apple GUI defaults and native Liquid Glass controls over imitating an early prototype.
+- macOS 27 is the development and verification target. The app retains a macOS 26 deployment minimum, but macOS 26 compatibility is unverified. Prefer modern Apple GUI defaults and native Liquid Glass controls over imitating an early prototype.
 - SwiftUI supplies the interface. AppKit supplies native windows, menus, panels, scrolling and text editing. There is no web renderer, Go frontend or UIKit `UITextView` in this app.
 - When the default-enabled restoration setting is on, reopen retained unnamed drafts on launch; when none exist, launch directly into an empty editor with a focused, blinking native caret. New Document always stays empty. Do not restore a home/welcome screen.
 - Keep the interface quiet and minimal, with readable typography and dependable editing. Use system fonts and real bold/italic faces; the default editor font is the native macOS system font (San Francisco). Offer installed fonts only in the frontend. The Typst compiler process includes Typst’s standard bundled fonts for dependable PDF typography, alongside installed fonts.
@@ -70,7 +70,7 @@ Run checks appropriate to the change. Editing/model changes warrant meaningful U
 
 For computer-use UI checks, reuse the already authorized `local.blank.resize-ui` identity at `/tmp/blank-resize-ui/blank_.app`, with disposable `BLANK_DATA_DIR` data. Do not create a new UI-test bundle identity or request additional app access just to run another check.
 
-GitHub Actions builds/checks macOS 26 and Xcode 27 and uploads app archives. Publishing a release (including a prerelease) builds its tagged commit, then attaches `blank_-macos-arm64.zip` and `SHA256SUMS` after both jobs pass. Use tags `vX.Y.Z` (optional prerelease/build suffix); `BLANK_VERSION` sets the app's numeric bundle version before signing. The distributed SDK 27 build runs on macOS 26+ and enables the tab role on macOS 27. Release upload is retryable and replaces assets of the same names without changing release notes. It does not create or publish a release itself. These apps are ad-hoc signed; notarization and Intel support are not verified. GitHub caches are branch-scoped, so the first build on a new/default branch can be slow.
+GitHub Actions builds/checks macOS 27 using the `xcode-27` runner and uploads its app archive. Publishing a release (including a prerelease) builds its tagged commit, then attaches `blank_-macos-arm64.zip` and `SHA256SUMS` after that job passes. Use tags `vX.Y.Z` (optional prerelease/build suffix); `BLANK_VERSION` sets the app's numeric bundle version before signing. The distributed SDK 27 build retains a macOS 26 deployment minimum and enables the tab role on macOS 27; macOS 26 compatibility is unverified. Release upload is retryable and replaces assets of the same names without changing release notes. It does not create or publish a release itself. These apps are ad-hoc signed; notarization and Intel support are not verified. GitHub caches are branch-scoped, so the first build on a new/default branch can be slow.
 
 ## Remaining work and working style
 
