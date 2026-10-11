@@ -161,11 +161,13 @@ import BlankCore
         if let target = editor.linkTarget(at:point) {
             check(target.range == linkedText,"Link hover identifies the complete styled Unicode link independently of an adjacent identical URL")
             let hoverEvent = NSEvent.mouseEvent(with:.mouseMoved,location:editor.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
+            let hoverPreconditions = "selectionPanel=\(editor.selectionPanel?.isShown == true) slash=\(editor.slashPopover?.isShown == true) block=\(editor.blockPopover?.isShown == true) selecting=\(editor.selectingText) dragging=\(editor.draggingBlock) focus=\(controller.window?.firstResponder === editor)"
             editor.mouseMoved(with:hoverEvent)
+            let hoverScheduled = editor.hoveredLink == target && editor.linkHoverWork?.isCancelled == false
             check(editor.linkPanel?.isShown != true,"Brief pointer movement over a link does not immediately show a panel")
             RunLoop.main.run(until:Date().addingTimeInterval(0.4))
             if editor.linkPanel?.isShown != true || editor.selectedRange() != caret || controller.window?.firstResponder !== editor {
-                print("Link hover diagnostic: panel=\(editor.linkPanel?.isShown == true) caret=\(editor.selectedRange()) expected=\(caret) focus=\(controller.window?.firstResponder === editor) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) target=\(editor.hoveredLink == target) valid=\(editor.validLinkTarget(target)) hoverCancelled=\(editor.linkHoverWork?.isCancelled as Any) dismissCancelled=\(editor.linkDismissWork?.isCancelled as Any) visible=\(editor.visibleRect) hit=\(hit)")
+                print("Link hover diagnostic: before=\(hoverPreconditions) scheduled=\(hoverScheduled) panel=\(editor.linkPanel?.isShown == true) caret=\(editor.selectedRange()) expected=\(caret) focus=\(controller.window?.firstResponder === editor) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) target=\(editor.hoveredLink == target) valid=\(editor.validLinkTarget(target)) hoverCancelled=\(editor.linkHoverWork?.isCancelled as Any) dismissCancelled=\(editor.linkDismissWork?.isCancelled as Any) visible=\(editor.visibleRect) hit=\(hit)")
                 fflush(stdout)
             }
             check(editor.linkPanel?.isShown == true && editor.selectedRange() == caret && controller.window?.firstResponder === editor,"Link hover presents native actions without moving the caret or taking editing focus")
