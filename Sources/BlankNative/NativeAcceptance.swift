@@ -55,6 +55,20 @@ import BlankCore
         NativeGoAcceptance.text(original:controller)
         NativeCitationAcceptance.run(controller:controller)
         NativeTemplateAcceptance.run(original:controller)
+        func pumpNativeEvents(until deadline: Date) {
+            for _ in 0..<32 {
+                guard Date() < deadline, let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                NSApp.sendEvent(event)
+            }
+            RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+        }
+        // Commands and Find require real foreground interaction. The synchronous
+        // suite must dispatch AppKit events as well as service run-loop callbacks.
+        NSApp.activate(ignoringOtherApps:true); controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(view)
+        let interactionDeadline = Date().addingTimeInterval(3)
+        while !(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === view) && Date() < interactionDeadline { pumpNativeEvents(until:interactionDeadline) }
+        check(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === view && AppController.shared.current === session,"Commands and Find have an active original native document")
+        check(view.string.isEmpty && session.buffer.source.isEmpty,"Native foreground setup preserves the empty command/search fixture")
         AppController.shared.commands(nil)
         for character in "fast café" {
             let key = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:String(character),charactersIgnoringModifiers:String(character),isARepeat:false,keyCode:0)!
@@ -75,7 +89,7 @@ import BlankCore
         func awaitFind(_ query: String? = nil) {
             let deadline = Date().addingTimeInterval(3)
             while (nativeFindEditor() == nil || (query != nil && nativeFindEditor()?.string != query)) && Date() < deadline {
-                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+                pumpNativeEvents(until:deadline)
             }
             if nativeFindEditor() == nil || (query != nil && nativeFindEditor()?.string != query) {
                 print("Find diagnostic: query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) editor=\((controller.window?.firstResponder as? NSTextView)?.string as Any) isField=\((controller.window?.firstResponder as? NSTextView)?.isFieldEditor as Any) visible=\(session.searchVisible) request=\(session.searchFocusRequest) sheet=\(controller.window?.attachedSheet != nil) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) current=\(AppController.shared.current === session)")
@@ -91,7 +105,7 @@ import BlankCore
         initialFindEditor.selectAll(nil)
         initialFindEditor.insertText("Find again",replacementRange:initialFindEditor.selectedRange())
         let queryDeadline = Date().addingTimeInterval(3)
-        while session.searchQuery != "Find again" && Date() < queryDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.01)) }
+        while session.searchQuery != "Find again" && Date() < queryDeadline { pumpNativeEvents(until:queryDeadline) }
         check(session.searchQuery == "Find again" && controller.searchItem?.searchField.stringValue == "Find again" && view.string.isEmpty && session.buffer.source.isEmpty,"Native Find input updates its query without editing the document")
         check(controller.window?.makeFirstResponder(view) == true && controller.window?.firstResponder === view,"Returning from Find focuses the native document")
         check(AppController.shared.current === session,"Repeated Cmd-F targets the original native document")
@@ -102,9 +116,9 @@ import BlankCore
         session.hideSearch(); session.searchQuery = ""
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let closeFindDeadline = Date().addingTimeInterval(3)
-        while controller.window?.firstResponder !== view && Date() < closeFindDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.01)) }
+        while controller.window?.firstResponder !== view && Date() < closeFindDeadline { pumpNativeEvents(until:closeFindDeadline) }
         if controller.window?.firstResponder !== view {
-            print("Close Find diagnostic: visible=\(session.searchVisible) query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) fieldOwnsFocus=\(nativeFindEditor() != nil) responder=\(String(describing:controller.window?.firstResponder)) current=\(AppController.shared.current === session)")
+            print("Close Find diagnostic: active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) visible=\(session.searchVisible) query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) fieldOwnsFocus=\(nativeFindEditor() != nil) responder=\(String(describing:controller.window?.firstResponder)) current=\(AppController.shared.current === session)")
         }
         check(controller.window?.firstResponder === view && view.string.isEmpty,"Closing search restores the untouched editor and caret")
         check(!session.searchVisible && session.searchQuery.isEmpty && session.buffer.source.isEmpty,"Closing native Find keeps search closed and canonical source untouched")
