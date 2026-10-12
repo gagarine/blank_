@@ -113,7 +113,9 @@ import BlankCore
         awaitFind("Find again")
         let findEditor = nativeFindEditor()
         check(findEditor?.isFieldEditor == true && findEditor?.string == "Find again","Repeated Cmd-F returns to the existing search field")
-        session.hideSearch(); session.searchQuery = ""
+        // Ordinary Close retains the query. Complete native teardown before
+        // clearing it as test cleanup, so the two operations are verified separately.
+        session.hideSearch()
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         let closeFindDeadline = Date().addingTimeInterval(3)
         while controller.window?.firstResponder !== view && Date() < closeFindDeadline { pumpNativeEvents(until:closeFindDeadline) }
@@ -121,7 +123,10 @@ import BlankCore
             print("Close Find diagnostic: active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) visible=\(session.searchVisible) query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) fieldOwnsFocus=\(nativeFindEditor() != nil) responder=\(String(describing:controller.window?.firstResponder)) current=\(AppController.shared.current === session)")
         }
         check(controller.window?.firstResponder === view && view.string.isEmpty,"Closing search restores the untouched editor and caret")
-        check(!session.searchVisible && session.searchQuery.isEmpty && session.buffer.source.isEmpty,"Closing native Find keeps search closed and canonical source untouched")
+        check(!session.searchVisible && session.searchQuery == "Find again" && session.buffer.source.isEmpty,"Closing native Find retains its query and canonical source")
+        session.searchQuery = ""
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(controller.window?.firstResponder === view && session.buffer.source.isEmpty,"Clearing a hidden Find query preserves document focus and source")
         check(controller.window?.styleMask.contains(.fullSizeContentView) == true && controller.window?.titlebarAppearsTransparent == false,"Document extends beneath the native material toolbar")
         for scalar in "Hello café 👩🏽‍💻".unicodeScalars { view.insertText(String(scalar),replacementRange:view.selectedRange()) }
         check(session.buffer.projection.text == "Hello café 👩🏽‍💻","Native typing and Unicode")
@@ -684,6 +689,11 @@ import BlankCore
             }
         }
         session.buffer.loadExternal(tableBeforeDimensions); session.revision += 1; editor.refresh()
+        // A cell selection legitimately opens the formatting panel. Put a
+        // caret in the cell before checking unobstructed table controls/grips.
+        editor.setSelectedRange(NSRange(location:cellRange(2).location,length:0)); editor.captureSelection()
+        editor.updateSelectionPanel(); editor.ensureNativeLayout()
+        check(editor.selectedRange().length == 0 && editor.selectionPanel?.isShown != true && session.buffer.source == tableBeforeDimensions,"Table control fixture has a caret, no selection panel and unchanged source")
         editor.tableControlCell = (0,2); editor.positionTableControls()
         check(editor.tableButtons.count == 2 && editor.tableButtons.allSatisfy { !$0.isHidden },"Native row and column controls are visible beside table")
         let rowButton = editor.tableButtons[0], columnButton = editor.tableButtons[1]
@@ -696,7 +706,11 @@ import BlankCore
         let tableHandle = editor.tableBlockHandleRect(0)!
         check(!tableHandle.intersects(rowButton.frame) && !tableHandle.intersects(columnButton.frame),"Table block grip is separate from row and column action buttons")
         let tableHandlePoint = NSPoint(x:tableHandle.midX,y:tableHandle.midY)
+        check(editor.visibleRect.contains(tableHandlePoint) && editor.convert(tableHandlePoint,to:nil).y < controller.window!.contentLayoutRect.maxY,"Table grip target is visible below the native toolbar")
         editor.mouseEntered(with:pointer(.mouseMoved,tableHandlePoint))
+        if editor.hoverBlock != 0 || NSCursor.current != .openHand {
+            print("Table grip diagnostic: hover=\(editor.hoverBlock as Any) openHand=\(NSCursor.current == .openHand) arrow=\(NSCursor.current == .arrow) point=\(tableHandlePoint) visible=\(editor.visibleRect) bounds=\(editor.bounds) screen=\(controller.window!.convertPoint(toScreen:editor.convert(tableHandlePoint,to:nil))) buttons=\(editor.tableButtons.map { $0.frame }) panel=\(editor.selectionPanel?.isShown == true) slash=\(editor.slashPopover?.isShown == true) block=\(editor.blockPopover?.isShown == true) grabbed=\(editor.grabbed as Any) mode=\(session.mode) window=\(controller.window!.frame) selection=\(editor.selectedRange())")
+        }
         check(editor.hoverBlock == 0 && NSCursor.current == .openHand,"Table block grip remains reachable with an open-hand cursor")
         editor.mouseDown(with:pointer(.leftMouseDown,tableHandlePoint))
         check(editor.grabbed == 0 && NSCursor.current == .closedHand,"Separate table grip starts a block drag")
