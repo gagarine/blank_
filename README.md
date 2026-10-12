@@ -4,6 +4,8 @@ A quiet native macOS editor for [Typst](https://typst.app). **Write** lets you e
 
 Your work stays in ordinary local `.typ` files, including multi-file projects with includes, imports and assets. Automatic draft saving helps keep your work safe.
 
+Typst Universe packages download automatically on first use and remain available offline in `~/Library/Caches/blank_/typst/packages`. **Settings → Typst packages → Clear Package Cache** removes blank_’s downloads; packages are downloaded again when needed. Packages installed by the Typst CLI or bundled in a project's `packages` directory remain available and are not removed.
+
 Zotero integration supports reference insertion and refresh, BibLaTeX and Hayagriva bibliographies, custom CSL styles and bibliography conversion.
 
 Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3** to switch views. For a guided tour, open **Help → Tutorial**.

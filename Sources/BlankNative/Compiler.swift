@@ -18,6 +18,12 @@ final class TypstCompiler {
     private var buffer = Data()
     private var sequence = 0
     deinit { process?.terminate() }
+    func clearPackageCache(completion: @escaping (Result<Void, Error>) -> Void) {
+        queue.async {
+            let result = Result { _ = try self.call("clearPackageCache",params:[:]) }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
     func compile(root: URL, entry: String, files: [String: String], revision: Int, completion: @escaping (Result<CompileResult, Error>) -> Void) {
         queue.async {
             do {

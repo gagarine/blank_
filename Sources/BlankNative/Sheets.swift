@@ -124,6 +124,8 @@ struct CommandsSheet: View {
 struct SettingsSheet: View {
     @ObservedObject var session: DocumentSession
     @AppStorage("reopenUnsavedDocuments") private var reopensUnsavedDocuments = true
+    @NativeState private var clearingPackages = false
+    @NativeState private var packageCacheStatus = ""
     var fonts: [String] { EditorPreferences.installedEditorFamilies }
     var body: some View {
         SheetFrame(title:"Settings",dismiss:{ session.sheet = nil }) {
@@ -140,7 +142,24 @@ struct SettingsSheet: View {
                     Toggle("Reopen unsaved documents on launch",isOn:$reopensUnsavedDocuments)
                     Text("Restore available drafts when blank_ starts. Saving and closing use macOS’s standard behavior.").font(.system(size:11)).foregroundStyle(.secondary)
                 }
-            }.formStyle(.grouped).scrollContentBackground(.hidden).frame(height:455)
+                Section("Typst packages") {
+                    Text("Packages download automatically and stay available offline. Clearing the cache downloads them again when needed.").font(.system(size:11)).foregroundStyle(.secondary)
+                    HStack {
+                        Button("Clear Package Cache") {
+                            clearingPackages = true; packageCacheStatus = ""
+                            session.compiler.clearPackageCache { result in
+                                clearingPackages = false
+                                switch result {
+                                case .success: packageCacheStatus = "Package cache cleared."
+                                case let .failure(error): packageCacheStatus = error.localizedDescription
+                                }
+                            }
+                        }.disabled(clearingPackages)
+                        if clearingPackages { ProgressView().controlSize(.small); Text("Waiting for compilations…").font(.system(size:11)).foregroundStyle(.secondary) }
+                    }
+                    if !packageCacheStatus.isEmpty { Text(packageCacheStatus).font(.system(size:11)).foregroundStyle(.secondary).textSelection(.enabled) }
+                }
+            }.formStyle(.grouped).scrollContentBackground(.hidden).frame(height:540)
             Text("Source uses the system monospace face. PDF typography is controlled by your Typst source.").font(.system(size:11)).foregroundStyle(.secondary)
             HStack { Spacer(); Button("Done") { session.sheet = nil }.keyboardShortcut(.defaultAction) }
         }.onDisappear { session.storeEditorPreferences() }

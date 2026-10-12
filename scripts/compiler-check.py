@@ -3,6 +3,7 @@
 import argparse
 import base64
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -16,7 +17,9 @@ app = parser.parse_args().app.resolve()
 compiler = app / 'Contents/MacOS/typst-compiler'
 with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
     root = pathlib.Path(temp)
-    process = subprocess.Popen([str(compiler)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=root)
+    package_cache = root/'package-cache/packages'
+    process = subprocess.Popen([str(compiler)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=root,
+                               env={**os.environ, 'BLANK_PACKAGE_CACHE':str(package_cache)})
     seq = 0
     def call(method, params):
         global seq
@@ -28,6 +31,37 @@ with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
         return reply['result']
     try:
         assert call('initialize', {})['typstVersion'] == '0.15.1'
+        # Cached imports and their assets work without network access. Clearing
+        # removes only app downloads, and the next compile reads fresh contents.
+        def package(base, namespace, text):
+            folder = base/namespace/'blank-bundle-fixture/1.0.0'
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder/'typst.toml').write_text('[package]\nname = "blank-bundle-fixture"\nversion = "1.0.0"\nentrypoint = "lib.typ"\n')
+            (folder/'lib.typ').write_text('#let message = read("asset.txt")\n')
+            (folder/'asset.txt').write_text(text)
+            return folder
+        cached = package(package_cache, 'preview', 'Downloaded package')
+        vendored = package(root/'packages', 'local', 'Vendored package')
+        def package_compile(namespace, revision):
+            source = f'#import "@{namespace}/blank-bundle-fixture:1.0.0": message\n#message'
+            result = call('compile', {'root':str(root),'entry':'packages.typ','files':{'packages.typ':source},'revision':revision})
+            assert not result['diagnostics'] and result.get('pdf'), result
+            assert 'asset.txt' not in result['dependencies'], result
+            return result['pdf']
+        before = package_compile('preview', 10)
+        package_compile('local', 11)
+        call('clearPackageCache', {})
+        assert not package_cache.exists() and vendored.exists()
+        call('clearPackageCache', {})
+        package_compile('local', 12)
+        package(package_cache, 'preview', 'Fresh package contents')
+        assert before != package_compile('preview', 13)
+        # A package asset symlink cannot escape the package's own directory.
+        outside = root/'outside.txt'; outside.write_text('Private project data')
+        (cached/'asset.txt').unlink(); (cached/'asset.txt').symlink_to(outside)
+        result = call('compile', {'root':str(root),'entry':'escape.typ','files':{'escape.typ':'#import "@preview/blank-bundle-fixture:1.0.0": message\n#message'},'revision':14})
+        assert result['diagnostics'] and 'pdf' not in result, result
+        print('PASS: cached package imports/assets, exact vendored imports, cache clearing, fresh recompilation and package path confinement')
         tutorial = (app/'Contents/Resources/Tutorial.typ').read_text()
         start = time.monotonic()
         result = call('compile', {'root':str(root),'entry':'Tutorial.typ','files':{'Tutorial.typ':tutorial},'revision':1})

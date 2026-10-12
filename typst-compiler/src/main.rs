@@ -1,4 +1,5 @@
 mod conversion;
+mod packages;
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -42,21 +43,18 @@ struct Environment {
     sources: Mutex<HashMap<FileId, Source>>,
     binary: Mutex<HashMap<FileId, Bytes>>,
     time: typst_kit::datetime::Time,
+    packages: packages::Packages,
 }
 
 impl Environment {
     fn path(&self, id: FileId) -> FileResult<PathBuf> {
         if let VirtualRoot::Package(spec) = id.root() {
-            for packages in [typst_kit::packages::FsPackages::system_data(),typst_kit::packages::FsPackages::system_cache(),Some(typst_kit::packages::FsPackages::new(self.root.join("packages")))] {
-                if let Some(root)=packages.and_then(|p|p.obtain(spec)) {
-                    let path=root.resolve(id.vpath())?;
-                    let real=path.canonicalize().map_err(|e|FileError::from_io(e,&path))?;
-                    let base=root.path().canonicalize().map_err(|e|FileError::from_io(e,root.path()))?;
-                    if !real.starts_with(base) {return Err(FileError::AccessDenied)};
-                    return Ok(real);
-                }
-            }
-            return Err(FileError::Other(Some(format!("Package {spec} is not cached. Compile once with the Typst CLI to download it, or vendor it in the project's packages directory.").into())));
+            let root = self.packages.obtain(&self.root, spec)?;
+            let path=root.resolve(id.vpath())?;
+            let real=path.canonicalize().map_err(|e|FileError::from_io(e,&path))?;
+            let base=root.path().canonicalize().map_err(|e|FileError::from_io(e,root.path()))?;
+            if !real.starts_with(base) {return Err(FileError::AccessDenied)};
+            return Ok(real);
         }
         let path = id.vpath().realize(&self.root).map_err(|_|FileError::AccessDenied)?;
         // Existing paths must resolve inside the selected project.
@@ -232,7 +230,8 @@ fn compile(params: Value) -> Result<Value,String> {
     static FONTS: OnceLock<typst_kit::fonts::FontStore> = OnceLock::new();
     let fonts = FONTS.get_or_init(||{let mut store=typst_kit::fonts::FontStore::new();store.extend(typst_kit::fonts::embedded());store.extend(typst_kit::fonts::system());store});
     let path=VirtualPath::new(&p.entry).map_err(|e|e.to_string())?;
-    let world = Environment { root, main: FileId::new(RootedPath::new(VirtualRoot::Project,path)), library: LazyHash::new(Library::default()), fonts, files:p.files, sources:Mutex::new(HashMap::new()),binary:Mutex::new(HashMap::new()),time:typst_kit::datetime::Time::system() };
+    let packages = packages::Packages::new().map_err(|e|format!("Cannot access the package cache: {e}"))?;
+    let world = Environment { root, main: FileId::new(RootedPath::new(VirtualRoot::Project,path)), library: LazyHash::new(Library::default()), fonts, files:p.files, sources:Mutex::new(HashMap::new()),binary:Mutex::new(HashMap::new()),time:typst_kit::datetime::Time::system(),packages };
     let compiled = typst::compile::<typst_layout::PagedDocument>(&world);
     let result = match compiled.output {
         Ok(document) => {
@@ -295,6 +294,7 @@ fn main() {
                 respond(&output,id,result);
             },
             "compile"=>{let output=output.clone();std::thread::spawn(move||respond(&output,id,compile(params)));},
+            "clearPackageCache"=>{let output=output.clone();std::thread::spawn(move||respond(&output,id,packages::clear_cache().map(|()|json!({})).map_err(|e|format!("Cannot clear the package cache: {e}"))));},
             _=>respond(&output,id,Err("unknown method".into()))
         }
     }
