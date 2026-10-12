@@ -33,9 +33,7 @@ extension NSToolbarItem.Identifier {
             if self?.searchItem?.searchField.stringValue != query { self?.searchItem?.searchField.stringValue = query }
         }.store(in:&toolbarSubscriptions)
         session.$searchVisible.sink { [weak self] visible in
-            self?.session.traceSearch("visibility sink \(visible) enter")
             if !visible { self?.searchItem?.endSearchInteraction(); self?.searchWidth?.constant = 36 }
-            self?.session.traceSearch("visibility sink \(visible) exit")
         }.store(in:&toolbarSubscriptions)
         session.$sidebar.sink { [weak self] shown in self?.sidebarItem?.toolTip = shown ? "Hide Sidebar · ⌘⇧L" : "Show Sidebar · ⌘⇧L" }.store(in:&toolbarSubscriptions)
     }
@@ -45,17 +43,18 @@ extension NSToolbarItem.Identifier {
     }
     @objc func toggleContents(_ sender: Any?) { session.toggleSidebar() }
     func focusNativeSearch() {
-        session.traceSearch("focus enter")
         guard session.searchVisible, session.sheet == nil else { return }
         // Cmd-F must also work if the user removed Search during customization.
         if let toolbar = window?.toolbar, !toolbar.items.contains(where:{ $0.itemIdentifier == .blankSearch }) { toolbar.insertItem(withItemIdentifier:.blankSearch,at:toolbar.items.count) }
         searchItem?.searchField.stringValue = session.searchQuery
         searchWidth?.constant = 220
-        session.traceSearch("focus before begin")
-        searchItem?.beginSearchInteraction()
-        session.traceSearch("focus after begin")
-        searchItem?.searchField.selectText(nil)
-        session.traceSearch("focus after select")
+        window?.layoutIfNeeded()
+        // Native field focus expands NSSearchToolbarItem automatically. Starting
+        // a second search interaction can leave delayed focus after Find closes.
+        if let fieldEditor = searchItem?.searchField.currentEditor() as? NSTextView,
+           window?.firstResponder === fieldEditor {
+            fieldEditor.selectAll(nil)
+        } else { searchItem?.searchField.selectText(nil) }
     }
     @objc func searchDocument(_ sender: NSSearchField) { session.searchQuery = sender.stringValue }
     @objc func zoomPreview(_ sender: NSToolbarItemGroup) {
@@ -139,8 +138,8 @@ extension DocumentWindow: NSToolbarDelegate {
 }
 
 extension DocumentWindow: NSSearchFieldDelegate {
-    func searchFieldDidStartSearching(_ sender: NSSearchField) { session.traceSearch("delegate start enter"); session.editor?.finishComposition(); searchWidth?.constant = 220; session.beginSearch(); session.traceSearch("delegate start exit") }
-    func searchFieldDidEndSearching(_ sender: NSSearchField) { session.traceSearch("delegate end enter"); session.searchQuery = sender.stringValue; session.hideSearch(); session.traceSearch("delegate end exit") }
+    func searchFieldDidStartSearching(_ sender: NSSearchField) { session.editor?.finishComposition(); searchWidth?.constant = 220; session.beginSearch() }
+    func searchFieldDidEndSearching(_ sender: NSSearchField) { session.searchQuery = sender.stringValue; session.hideSearch() }
     func controlTextDidChange(_ notification: Notification) {
         guard let field = notification.object as? NSSearchField else { return }
         session.searchQuery = field.stringValue

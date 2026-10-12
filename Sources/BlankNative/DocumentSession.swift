@@ -73,19 +73,7 @@ struct Recovery: Codable {
     var sidebarBeforeSearch: Bool?
     func beginSearch() { closeContactSheet(); if !searchVisible { sidebarBeforeSearch = sidebar }; searchVisible = true; searchController.update() }
     func showSearch() { editor?.finishComposition(); beginSearch(); searchFocusRequest += 1 }
-    func traceSearch(_ event: String) {
-        guard CommandLine.arguments.contains("--self-test") else { return }
-        let field = (window?.windowController as? DocumentWindow)?.searchItem?.searchField
-        print("FIND TRACE \(event): visible=\(searchVisible) request=\(searchFocusRequest) query=\(searchQuery) documentFocus=\(window?.firstResponder === editor) fieldFocus=\(field?.currentEditor() != nil && field?.currentEditor() === window?.firstResponder)")
-    }
-    func hideSearch() {
-        traceSearch("hide enter")
-        searchVisible = false; traceSearch("hide state committed")
-        searchController.update(); searchController.clearHighlights(); if let prior = sidebarBeforeSearch { sidebar = prior }; sidebarBeforeSearch = nil
-        let target: NSResponder? = mode == .preview ? pdfView : editor
-        let restored = window?.makeFirstResponder(target)
-        traceSearch("hide restore \(restored as Any)")
-    }
+    func hideSearch() { searchVisible = false; searchController.update(); searchController.clearHighlights(); if let prior = sidebarBeforeSearch { sidebar = prior }; sidebarBeforeSearch = nil; let target: NSResponder? = mode == .preview ? pdfView : editor; window?.makeFirstResponder(target) }
     @Published var searchQuery = "" { didSet { if searchQuery != oldValue { searchController.update() } } }
     @Published var replaceText = ""
     @Published var caseSensitive = false { didSet { searchController.update() } }
