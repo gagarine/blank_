@@ -150,6 +150,7 @@ final class CitationAcceptanceProtocol: URLProtocol {
         writing.saveWork?.cancel(); writing.recoveryQueue.sync {}
         libraryAndKeyboard(controller:controller)
         fieldsAndCommands(controller:controller)
+        NativeParagraphSpaceAcceptance.run(original:controller)
         ProjectAcceptance.run()
         BibliographyConversionAcceptance.run()
         session.sheet = nil

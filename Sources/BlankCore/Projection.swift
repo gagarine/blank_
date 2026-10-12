@@ -198,21 +198,40 @@ public struct Projection {
             return ProjectedBlock(kind: kind, level: level, source: n.span, body: body.span,
                 inlines: body.span.count == 0 ? [] : inline(body.children.isEmpty ? [body] : body.children, source: source, references:references))
         }
-        func flush() {
-            if pending.allSatisfy({ source.bytes($0.span).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { pending.removeAll(); return }
-            while let n = pending.first, ["Text", "Space"].contains(n.kind), source.bytes(n.span).contains("\n") && source.bytes(n.span).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { pending.removeFirst() }
-            while let n = pending.last, ["Text", "Space"].contains(n.kind), source.bytes(n.span).contains("\n") && source.bytes(n.span).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { pending.removeLast() }
+        func flush(preserveInitialSpaces: Bool = false) {
+            let initialSpaces = preserveInitialSpaces && result.isEmpty && !pending.isEmpty && pending.allSatisfy {
+                source.bytes($0.span).allSatisfy { $0 == " " || $0 == "\t" }
+            }
+            if !initialSpaces && pending.allSatisfy({ source.bytes($0.span).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { pending.removeAll(); return }
+            while let n = pending.first, ["Text", "Space"].contains(n.kind), source.bytes(n.span).contains(where: \.isNewline) && source.bytes(n.span).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { pending.removeFirst() }
+            while let n = pending.last, ["Text", "Space"].contains(n.kind), source.bytes(n.span).contains(where: \.isNewline) && source.bytes(n.span).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                pending.removeLast()
+                if let prefix = horizontalPrefix(n) { pending.append(prefix); break }
+            }
             guard let first = pending.first, let last = pending.last else { return }
             let span = ByteSpan(first.start, last.end)
             result.append(ProjectedBlock(kind: "paragraph", source: span, body: span, inlines: inline(pending, source: source, references:references)))
             pending.removeAll()
+        }
+        func horizontalPrefix(_ node: SyntaxNode) -> SyntaxNode? {
+            let count = source.bytes(node.span).prefix { $0 == " " || $0 == "\t" }.utf8.count
+            guard count > 0 else { return nil }
+            return SyntaxNode(kind:"Space",start:node.start,end:node.start+count,children:[])
+        }
+        func appendEmptySlot(at start: Int,until limit: Int) {
+            let text = String(source.bytes(ByteSpan(start,limit)).prefix { $0 == " " || $0 == "\t" })
+            let span = ByteSpan(start,start+text.utf8.count)
+            result.append(ProjectedBlock(kind:"paragraph",source:span,body:span,inlines:text.isEmpty ? [] : [.text(text,span,TextStyle(),true)]))
         }
         let nodes = parsed.tree.children
         var i = 0
         while i < nodes.count {
             var n = nodes[i]
             if n.kind == "Parbreak" {
-                flush()
+                // Typst owns spaces before a paragraph break in Parbreak. Keep
+                // their literal source mapping in the preceding text block.
+                if !pending.isEmpty || result.isEmpty, let prefix = horizontalPrefix(n) { pending.append(prefix) }
+                flush(preserveInitialSpaces:true)
                 if result.isEmpty { result.append(ProjectedBlock(kind:"paragraph",source:ByteSpan(n.start,n.start),body:ByteSpan(n.start,n.start),inlines:[])) }
                 let whitespace = Array(source.bytes(n.span).utf8)
                 let newlines = whitespace.indices.filter { whitespace[$0] == 10 }
@@ -221,7 +240,19 @@ public struct Projection {
                 if newlines.count >= 4 {
                     for pair in 1..<(newlines.count/2) {
                         let at = n.start+newlines[pair*2-1]+1
-                        result.append(ProjectedBlock(kind:"paragraph",source:ByteSpan(at,at),body:ByteSpan(at,at),inlines:[]))
+                        appendEmptySlot(at:at,until:n.end)
+                    }
+                }
+                if let newline = newlines.last {
+                    let at = n.start+newline+1
+                    if at < n.end {
+                        if n.end == source.utf8.count { appendEmptySlot(at:at,until:n.end) }
+                        else if let suffix = horizontalPrefix(SyntaxNode(kind:"Space",start:at,end:n.end,children:[])) {
+                            // Keep typed spaces when an empty paragraph gains
+                            // prose. Structural blocks discard this padding in
+                            // their own flush, before creating their block.
+                            pending.append(suffix)
+                        }
                     }
                 }
                 i += 1; continue
@@ -237,7 +268,7 @@ public struct Projection {
                     let padding = source.bytes(ByteSpan(n.end,source.utf8.count)).prefix { $0 == " " || $0 == "\t" }.utf8.count
                     projected.source.end += padding
                     projected.body = ByteSpan(body.start+padding,body.end+padding)
-                } else if i+1 < nodes.count, nodes[i+1].kind == "Space" {
+                } else if i+1 < nodes.count, ["Space","Parbreak"].contains(nodes[i+1].kind) {
                     let spaces = String(source.bytes(nodes[i+1].span).prefix { $0 == " " || $0 == "\t" }), padding = spaces.utf8.count
                     projected.source.end += padding
                     if body.span.count == 0 { projected.body = ByteSpan(body.start+padding,body.end+padding) }
@@ -332,7 +363,7 @@ public struct Projection {
             }
             pending.append(n); i += 1
         }
-        flush()
+        flush(preserveInitialSpaces:true)
         // Preserve real insertion slots after Return, including a document ending in code.
         if result.isEmpty { result = [ProjectedBlock(kind: "paragraph", source: ByteSpan(0, source.utf8.count), body: ByteSpan(0, source.utf8.count), inlines: [])] }
         else if source.hasSuffix("\n\n") {

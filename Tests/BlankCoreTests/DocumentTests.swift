@@ -310,12 +310,24 @@ final class DocumentTests {
         let b = DocumentBuffer("First *bold* second")
         let at = "First bold".utf16.count
         b.selection = EditSelection(b.projection.sourceOffset(at:at),b.projection.sourceOffset(at:at))
+        let originalSelection = b.selection
         b.split(NSRange(location:at,length:0))
         XCTAssertEqual(b.projection.blocks.count,2)
         XCTAssertEqual(b.projection.blocks[0].text,"First bold")
-        XCTAssertEqual(b.projection.blocks[1].text,"second")
-        XCTAssertTrue(b.source.contains("*bold*\n\n"))
+        // Return preserves the existing word separator as literal prose.
+        XCTAssertEqual(b.projection.blocks[1].text," second")
+        let splitSource = "First *bold*\n\n second", splitSelection = b.selection
+        XCTAssertEqual(b.source,splitSource)
+        let splitCaret = "First *bold*\n\n".utf8.count
+        XCTAssertEqual(splitSelection,EditSelection(splitCaret,splitCaret))
+        XCTAssertEqual(b.projection.displayOffset(at:splitSelection.focus),b.projection.blocks[1].display.location)
+        XCTAssertEqual(b.projection.sourceOffset(at:b.projection.blocks[1].display.location),splitSelection.focus)
+        XCTAssertTrue(b.projection.blocks[0].inlines.flatMap(\.runs).last!.style.bold)
         b.undo(); XCTAssertEqual(b.source,"First *bold* second")
+        XCTAssertEqual(b.selection,originalSelection)
+        b.redo(); XCTAssertEqual(b.source,splitSource); XCTAssertEqual(b.selection,splitSelection)
+        XCTAssertEqual(b.projection.blocks.map(\.text),["First bold"," second"])
+        b.undo()
         b.lineBreak(NSRange(location:at,length:0))
         XCTAssertEqual(b.projection.blocks.count,1)
         XCTAssertEqual(b.projection.text,"First bold\u{2028}second")
@@ -565,6 +577,107 @@ final class DocumentTests {
         }
         XCTAssertEqual(b.projection.text,text)
         b.undo(); XCTAssertEqual(b.source,"")
+    }
+    func testParagraphEndWhitespace() {
+        for prefix in ["Café 👩🏽‍💻", "*Café 👩🏽‍💻*", "= Café 👩🏽‍💻", "- Café 👩🏽‍💻", "+ Café 👩🏽‍💻"] {
+            let original = DocumentBuffer(prefix)
+            for spaces in [" ","  ","\t"] {
+                for ending in ["","\n","\r\n","\n\nNext","\r\n\r\nNext"] {
+                    let source = prefix+spaces+ending, buffer = DocumentBuffer(source)
+                    let block = buffer.projection.blocks[0]
+                    XCTAssertEqual(block.kind,original.projection.blocks[0].kind)
+                    if block.text != original.projection.text+spaces { print("Whitespace fixture: prefix=\(prefix.debugDescription) ending=\(ending.debugDescription) kind=\(block.kind) actual=\(block.text.debugDescription)") }
+                    XCTAssertEqual(block.text,original.projection.text+spaces)
+                    let end = prefix.utf8.count+spaces.utf8.count
+                    XCTAssertEqual(buffer.projection.sourceOffset(at:NSMaxRange(block.display)),end)
+                    XCTAssertEqual(buffer.projection.displayOffset(at:end),NSMaxRange(block.display))
+                    XCTAssertEqual(buffer.source,source)
+                    if prefix.hasPrefix("*") {
+                        XCTAssertFalse(block.inlines.flatMap(\.runs).last!.style.bold)
+                    }
+                }
+            }
+        }
+        for deletedCitation in [false,true] {
+            let original = "Café 👩🏽‍💻\n\n#cite(<book>);\n\n#bibliography(\"references.yml\")\n\nNext"
+            let buffer = DocumentBuffer(original)
+            func reference(_ text: String,_ kind: String) -> ReferencePresentation {
+                let range = (original as NSString).range(of:text)
+                return ReferencePresentation(source:ByteSpan(original.byteOffset(utf16:range.location),original.byteOffset(utf16:NSMaxRange(range))),text:kind == "citation" ? "[1]" : "Book",kind:kind)
+            }
+            buffer.setReferencePresentations([reference("#cite(<book>);","citation"),reference("#bibliography(\"references.yml\")","bibliography")])
+            if deletedCitation {
+                let range = buffer.projection.atomicRanges.first!
+                buffer.selection = EditSelection(buffer.projection.sourceOffset(at:range.location),buffer.projection.sourceOffset(at:NSMaxRange(range)))
+                buffer.editWrite(range,text:"",group:"")
+                XCTAssertTrue(buffer.renderedReferences.contains { $0.kind == "bibliography" })
+            }
+            let before = buffer.source, block = buffer.projection.blocks[0]
+            let sourceEnd = buffer.projection.sourceOffset(at:NSMaxRange(block.display))
+            buffer.selection = EditSelection(sourceEnd,sourceEnd)
+            for (index,text) in [" "," ","suite 日本"].enumerated() {
+                let at = buffer.projection.displayOffset(at:buffer.selection.focus)
+                buffer.editWrite(NSRange(location:at,length:0),text:text,group:"")
+                let inserted = index == 0 ? " " : index == 1 ? "  " : "  suite 日本"
+                XCTAssertEqual(buffer.source,before.replacingBytes(ByteSpan(sourceEnd,sourceEnd),with:inserted))
+                XCTAssertEqual(buffer.projection.blocks[0].text,block.text+inserted)
+                XCTAssertEqual(buffer.projection.blockIndex(at:buffer.projection.displayOffset(at:buffer.selection.focus)),0)
+                XCTAssertEqual(buffer.selection,EditSelection(sourceEnd+inserted.utf8.count,sourceEnd+inserted.utf8.count))
+                let full = Projection(source:buffer.source,parsed:ParsedSource.parse(buffer.source),references:buffer.renderedReferences)
+                XCTAssertEqual(buffer.projection.text,full.text)
+                XCTAssertEqual(buffer.projection.blocks.map(\.source),full.blocks.map(\.source))
+                XCTAssertEqual(full.sourceOffset(at:full.displayOffset(at:buffer.selection.focus)),buffer.selection.focus)
+            }
+            buffer.undo(); buffer.undo(); buffer.undo()
+            XCTAssertEqual(buffer.source,before); XCTAssertEqual(buffer.selection,EditSelection(sourceEnd,sourceEnd))
+            buffer.redo(); buffer.redo(); buffer.redo()
+            XCTAssertEqual(buffer.source,before.replacingBytes(ByteSpan(sourceEnd,sourceEnd),with:"  suite 日本"))
+            XCTAssertEqual(buffer.projection.blocks[0].text,block.text+"  suite 日本")
+        }
+    }
+    func testEmptyParagraphWhitespace() {
+        for source in [" "," \n\n#bibliography(\"r.bib\")","Before\n\n ","Before\n\n \n\nNext","Before\r\n\r\n \r\n\r\nNext","#let x = 1\n\n \n\nNext"] {
+            let buffer = DocumentBuffer(source)
+            let index = buffer.projection.blocks.firstIndex { $0.kind == "paragraph" && $0.text == " " }!
+            let block = buffer.projection.blocks[index], end = NSMaxRange(block.display)
+            XCTAssertEqual(block.source.count,1); XCTAssertEqual(block.body,block.source)
+            let byte = buffer.projection.sourceOffset(at:end)
+            XCTAssertEqual(buffer.projection.displayOffset(at:byte),end)
+            buffer.selection = EditSelection(byte,byte)
+            buffer.editWrite(NSRange(location:end,length:0),text:"x",group:"")
+            XCTAssertEqual(buffer.source,source.replacingBytes(ByteSpan(byte,byte),with:"x"))
+            XCTAssertEqual(buffer.projection.blocks[index].text," x")
+            XCTAssertEqual(buffer.projection.text,DocumentBuffer(buffer.source).projection.text)
+            buffer.undo(); XCTAssertEqual(buffer.source,source); XCTAssertEqual(buffer.selection,EditSelection(byte,byte))
+            buffer.redo(); XCTAssertEqual(buffer.projection.blocks[index].text," x")
+        }
+        for source in ["= Title ","- Item ","+ Item ","#align(center)[Title]  ","#quote[Title]  ","#let x = 1  ","  #let x = 1"] {
+            let buffer = DocumentBuffer(source)
+            XCTAssertEqual(buffer.projection.blocks.count,1)
+            XCTAssertEqual(buffer.source,source)
+        }
+        let indented = DocumentBuffer("Before\n\n  Next")
+        XCTAssertEqual(indented.projection.blocks[1].text,"  Next")
+        for offset in 0...6 {
+            let block = indented.projection.blocks[1], display = block.display.location+offset
+            XCTAssertEqual(indented.projection.sourceOffset(at:display),block.body.start+offset)
+            XCTAssertEqual(indented.projection.displayOffset(at:block.body.start+offset),display)
+        }
+        for source in ["Before\n\n  #let x = 1","Before\n\n  // keep","Before\n\n  #align(center)[Title]","Before\n\n  #quote[Title]","Before\n\n  #figure[Title]","Before\n\n  #table(columns:1,[Title])","Before\n\n  = Heading","Before\n\n  - Item"] {
+            let buffer = DocumentBuffer(source)
+            XCTAssertEqual(buffer.projection.blocks.count,2)
+            XCTAssertEqual(buffer.source,source)
+            XCTAssertFalse(buffer.projection.blocks.contains { $0.text == "  " })
+        }
+        let source = "// Preserve options\n#table(columns:1,inset:8pt,[ ])\n\n#bibliography(\"r.bib\")"
+        let buffer = DocumentBuffer(source), table = buffer.projection.blocks.first { $0.kind == "table" }!
+        XCTAssertEqual(table.cellProjections[0].text," ")
+        let end = table.display.location+NSMaxRange(table.cellRanges[0]), byte = buffer.projection.sourceOffset(at:end)
+        buffer.selection = EditSelection(byte,byte); buffer.editWrite(NSRange(location:end,length:0),text:"日本",group:"")
+        XCTAssertEqual(buffer.source,source.replacingBytes(ByteSpan(byte,byte),with:"日本"))
+        XCTAssertEqual(buffer.projection.blocks.first { $0.kind == "table" }!.cellProjections[0].text," 日本")
+        buffer.undo(); XCTAssertEqual(buffer.source,source); XCTAssertEqual(buffer.selection,EditSelection(byte,byte))
+        buffer.redo(); XCTAssertEqual(buffer.source,source.replacingBytes(ByteSpan(byte,byte),with:"日本"))
     }
     func testLocalProjectionMatchesFullParse() {
         let original = "// keep\n#set text(size: 11pt)\n\n= Heading\n\nA *bold* paragraph.\n\n- An _item_\n\n#custom(1)\n\nLast 👋 paragraph."
@@ -898,6 +1011,8 @@ func XCTAssertLessThan<T: Comparable>(_ a: T,_ b: T,file: StaticString = #file,l
             ("Underline and strikethrough source, Unicode, clipboard and history",t.testUnderlineAndStrikethrough),
             ("Selection styles, raw code, alignment, tables and history",t.testSelectionStyles),
             ("Incremental spaces and Unicode",t.testIncrementalSpacesAndUnicode),
+            ("Paragraph-end whitespace with full parsing, citations and history",t.testParagraphEndWhitespace),
+            ("Empty paragraph whitespace, native cell mapping and structural trivia",t.testEmptyParagraphWhitespace),
             ("Local projection equals full parsing",t.testLocalProjectionMatchesFullParse),
             ("Typing inside formatting",t.testTypingInsideFormattingKeepsWrappers),
             ("Empty headings and lists",t.testEmptyStructuredBlockInsertion),
