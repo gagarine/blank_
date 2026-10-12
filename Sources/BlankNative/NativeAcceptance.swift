@@ -287,8 +287,11 @@ import BlankCore
         }
         resetParagraphs("Left selected right")
         editor.setSelectedRange(NSRange(location:5,length:8)); editor.captureSelection(); editor.insertNewline(nil)
-        check(session.buffer.projection.blocks.map(\.text) == ["Left","right"],"Return replaces selection and splits its paragraph")
+        check(session.buffer.source == "Left \n\n right" && session.buffer.projection.blocks.map(\.text) == ["Left "," right"] && session.buffer.projection.blocks.map(\.kind) == ["paragraph","paragraph"],"Return replaces only selected text and preserves surrounding spaces in both paragraphs")
+        check(editor.selectedRange() == NSRange(location:6,length:0) && session.buffer.selection == EditSelection(7,7),"Selected Return keeps its native and source caret before the existing space")
         session.undo(); check(session.buffer.source == "Left selected right","Selected Return is one undo transaction")
+        check(editor.selectedRange() == NSRange(location:5,length:8),"Selected Return Undo restores the original selection")
+        session.undo(true); check(session.buffer.source == "Left \n\n right" && editor.selectedRange() == NSRange(location:6,length:0),"Selected Return Redo preserves both spaces and the native caret")
         for (source,kind) in [("= _Heading 👋_","heading"),("== *_Heading_*","heading"),("- _Item_","bullet"),("#quote(block: true)[_Quote_]","quote")] {
             resetParagraphs(source); editor.insertionBold = nil; editor.insertionItalic = nil
             let block = session.buffer.projection.blocks[0]
