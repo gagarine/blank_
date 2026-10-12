@@ -27,6 +27,7 @@ import BlankCore
             guard value() else { fatalError("FAIL: Paragraph Space: \(label) | source=\(session.buffer.source) | native=\(session.editor?.string ?? "nil") | selection=\(String(describing:session.editor?.selectedRange()))") }
             print("PASS: Paragraph Space: \(label)")
         }
+        check(URLProtocol.registerClass(CitationAcceptanceProtocol.self),"fixture installs isolated Zotero responses")
         func pump(until deadline: Date) {
             for _ in 0..<32 {
                 guard Date() < deadline, let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
@@ -46,7 +47,13 @@ import BlankCore
         defer {
             session.revision += 1; session.saveWork?.cancel(); session.watchers.forEach { $0.cancel() }; session.recoveryQueue.sync {}
             session.dirty = false; controller.nativeDocument.updateChangeCount(.changeCleared)
-            controller.window?.close(); original.window?.makeKeyAndOrderFront(nil); original.window?.makeFirstResponder(original.session.editor)
+            controller.window?.close()
+            wait("fixture closes its controller and native document before later checks") {
+                !AppController.shared.controllers.contains { $0 === controller } &&
+                !NSDocumentController.shared.documents.contains { $0 === controller.nativeDocument }
+            }
+            original.window?.makeKeyAndOrderFront(nil); original.window?.makeFirstResponder(original.session.editor)
+            URLProtocol.unregisterClass(CitationAcceptanceProtocol.self)
         }
         NSApp.activate(ignoringOtherApps:true)
         wait("fixture is an active native document") { NSApp.isActive && controller.window?.isKeyWindow == true && session.editor != nil }

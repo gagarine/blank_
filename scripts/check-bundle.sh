@@ -36,6 +36,8 @@ env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH python3 "$repo/scripts/co
 BLANK_DATA_DIR="$portable/selection-style-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --selection-style-self-test
 # The complete Find lifecycle uses its own windows and native focus transitions.
 BLANK_DATA_DIR="$portable/find-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --find-self-test
+# Citation Space uses its own foreground keyboard/window fixture and mock API.
+BLANK_DATA_DIR="$portable/paragraph-space-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --paragraph-space-self-test
 BLANK_DATA_DIR="$portable/data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --self-test
 # Lifecycle processes share one identity and data directory, independently of
 # editing fixtures whose hard-exit snapshots belong to a different data root.
