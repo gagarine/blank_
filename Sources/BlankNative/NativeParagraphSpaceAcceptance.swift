@@ -93,6 +93,8 @@ import BlankCore
                     check(editor.selectedRange() == NSRange(location:at+suffix.utf16.count,length:0) && session.buffer.selection == EditSelection(sourceEnd+suffix.utf8.count,sourceEnd+suffix.utf8.count),"native Space caret advances within its paragraph")
                 }
                 settle()
+                session.compile()
+                wait("latest typed revision completes official formatting",seconds:20) { !session.compiling && session.compileRevision == session.revision }
                 let changed = session.buffer.source
                 check(editor.selectedRange() == NSRange(location:at+3,length:0) && session.buffer.projection.blocks[index].text == block.text+"  x","background reference formatting retains spaces and caret")
                 session.switchMode(.source)
@@ -121,6 +123,8 @@ import BlankCore
         check(editor.selectedRange() == NSRange(location:empty.display.location+1,length:0),"empty citation paragraph retains its Space caret after reformatting")
         key(7,"x")
         let changedEmpty = beforeEmpty.replacingBytes(emptySelection.span,with:" x")
+        session.compile()
+        wait("empty paragraph typing completes official formatting",seconds:20) { !session.compiling && session.compileRevision == session.revision }
         check(session.buffer.source == changedEmpty && session.buffer.projection.blocks.contains { $0.kind == "paragraph" && $0.text == " x" } && editor.selectedRange() == NSRange(location:empty.display.location+2,length:0),"Space followed by typing remains literal in the empty citation paragraph")
         session.undo(); check(session.buffer.source == beforeEmpty && session.buffer.selection == emptySelection,"empty paragraph Space has exact source and caret Undo")
         session.undo(true); check(session.buffer.source == changedEmpty && editor.selectedRange() == NSRange(location:empty.display.location+2,length:0),"empty paragraph Space and continued typing have exact Redo")
