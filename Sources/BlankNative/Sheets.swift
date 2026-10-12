@@ -178,6 +178,8 @@ struct InsertionSheet: View {
     @NativeState var columns = 2
     @NativeState var rows = 3
     @StateObject private var citationSearch = CitationSearch()
+    @StateObject private var citationLibraries = CitationLibraries()
+    @StateObject private var citationKeyboard = CitationKeyboard()
     @NativeState private var citationChoices = CitationChoices()
     @NativeState private var chosenReferences: [String:ZoteroReference] = [:]
     @NativeState var finding = false
@@ -254,33 +256,27 @@ struct InsertionSheet: View {
                     if let error { failure = error.localizedDescription }
                     else { session.loadBibliographies(); citationChoices = session.citationChoices(); session.objectWillChange.send() }
                 }
-                searchZotero()
+                citationLibraries.load(); searchZotero()
             }
-        }.onDisappear { citationSearch.cancel() }
+        }.onDisappear { citationSearch.cancel(); citationLibraries.cancel() }
     }
     var citation: some View {
         VStack(alignment:.leading,spacing:12) {
-            TextField("Title, author or year",text:$text).textFieldStyle(.roundedBorder).focused($focus)
+            CitationQueryField(text:$text,move:{ citationKeyboard.move($0) },submit:{ insert() },cancel:{ session.sheet = nil },focusLibrary:{ citationKeyboard.focusLibrary() }).frame(height:26)
                 .onChange(of:text) { _,_ in searchZotero() }
-            TextField("Library: personal or groups/123",text:$library).textFieldStyle(.roundedBorder)
-                .onChange(of:library) { _,_ in chosenReferences.removeAll(); searchZotero() }
+            HStack {
+                Text("Library")
+                CitationLibraryPicker(libraries:citationLibraries.libraries,selection:$library,keyboard:citationKeyboard).frame(height:26)
+                    .onChange(of:library) { _,_ in chosenReferences.removeAll(); citationKeyboard.table?.deselectAll(nil); searchZotero() }
+                    .onChange(of:citationLibraries.libraries.map(\.id)) { _,ids in if !ids.contains(library) { library = "personal" } }
+                CitationLibraryReload(loading:citationLibraries.loading,action:{ citationLibraries.load() }).frame(width:28,height:26)
+                if citationLibraries.loading { ProgressView().controlSize(.small) }
+            }
+            if !citationLibraries.error.isEmpty { Text(citationLibraries.error).font(.system(size:11)).foregroundStyle(.red) }
             if citationSearch.finding { ProgressView().controlSize(.small) }
-            if !citationSearch.error.isEmpty { Text(citationSearch.error).font(.system(size:11)).foregroundStyle(.red) }
-            ScrollView {
-                VStack(alignment:.leading,spacing:12) {
-                    ForEach(citationChoices.results(citationSearch.references,query:text)) { ref in
-                        Toggle(isOn:Binding(get:{ chosenReferences[ref.id] != nil },set:{ if $0 { chosenReferences[ref.id] = ref } else { chosenReferences.removeValue(forKey:ref.id) } })) {
-                            VStack(alignment:.leading,spacing:3) {
-                                HStack {
-                                    Text(ref.title).font(.system(size:12))
-                                    if citationChoices.keys.contains(ref.citeKey) { Label("Already cited",systemImage:"checkmark.circle.fill").font(.system(size:10)).foregroundStyle(.secondary) }
-                                }
-                                Text([ref.author,ref.year].filter { !$0.isEmpty }.joined(separator:" · ")).font(.system(size:10)).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }.padding(4)
-            }.frame(height:220)
+            if !citationSearch.error.isEmpty && citationSearch.error != citationLibraries.error { Text(citationSearch.error).font(.system(size:11)).foregroundStyle(.red) }
+            CitationResults(references:citationChoices.results(citationSearch.finding ? [] : citationSearch.references,query:text),cited:citationChoices.keys,chosen:$chosenReferences,keyboard:citationKeyboard,submit:{ insert() },cancel:{ session.sheet = nil }).frame(height:220)
+            Text("Use arrows to move, Space to select, and Return to insert.").font(.system(size:11)).foregroundStyle(.secondary)
             HStack { TextField("Page / locator",text:$locator).textFieldStyle(.roundedBorder); Picker("Citation display",selection:$form) { Text("Standard citation").tag("normal"); Text("In a sentence").tag("prose"); Text("Author only").tag("author"); Text("Year only").tag("year") }.frame(width:250) }
             if let destinations = try? session.referenceDestinations(), destinations.count > 1 {
                 Picker("Bibliography",selection:$bibliographyDestination) {
@@ -288,9 +284,6 @@ struct InsertionSheet: View {
                     ForEach(destinations) { Text($0.label).tag($0.id) }
                 }
             }
-            Text("The document’s style controls formatting; this choice controls how the citation is used.").font(.system(size:11)).foregroundStyle(.secondary)
-            Text(form == "prose" ? "For example in APA: Smith (2020) found…" : form == "author" ? "For example: Smith" : form == "year" ? "For example: 2020" : "Uses the document’s citation style, for example (Smith, 2020) in APA or [1] in IEEE.").font(.system(size:11)).foregroundStyle(.secondary)
-            Text("Keep Zotero open with Settings → Advanced → Allow other applications on this computer to communicate with Zotero enabled.").font(.system(size:11)).foregroundStyle(.secondary)
         }
     }
     func searchZotero() { citationSearch.search(query:text,library:library,delay:loadedInitialReferences && text.isEmpty ? 0 : 0.18) }
@@ -312,6 +305,9 @@ struct InsertionSheet: View {
             // become part of the target or another argument of the call.
             session.insertSource("#ref(<\(target)>);")
         case "citation":
+            guard !finding else { return }
+            if chosenReferences.isEmpty, let highlightedReference = citationKeyboard.highlightedReference { chosenReferences[highlightedReference.id] = highlightedReference }
+            guard !chosenReferences.isEmpty else { failure = "Select a reference."; return }
             finding = true
             ZoteroIntegration.insert(chosenReferences.values.sorted { $0.id < $1.id }.map { ref in
                 var ref = ref; if citationChoices.keys.contains(ref.citeKey) { ref.key = "" }; return ref

@@ -160,14 +160,45 @@ import BlankCore
         print(String(format:"Link hover: 100 small-document hit checks %.1f ms wall, %.1f ms CPU; acceptance-process RSS %.1f MiB",Date().timeIntervalSince(hoverStart)*1000,(ResourceMetrics.cpuSeconds()-hoverCPU)*1000,ResourceMetrics.residentMiB()))
         if let target = editor.linkTarget(at:point) {
             check(target.range == linkedText,"Link hover identifies the complete styled Unicode link independently of an adjacent identical URL")
-            let hoverEvent = NSEvent.mouseEvent(with:.mouseMoved,location:editor.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
+            // A synthetic mouse event does not activate an app like a real click.
+            // Establish the native foreground state before testing delayed hover.
+            NSApp.activate(ignoringOtherApps:true); controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(editor)
+            let focusDeadline = Date().addingTimeInterval(3)
+            let foregroundBefore = "active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true)"
+            var foregroundEvents: [UInt] = []
+            while !(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor) && Date() < focusDeadline {
+                // The synchronous suite suspends NSApplication's event loop.
+                // Dispatch its queued activation/window events as AppKit normally does.
+                for _ in 0..<32 {
+                    guard Date() < focusDeadline, let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    foregroundEvents.append(event.type.rawValue); NSApp.sendEvent(event)
+                }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+            }
+            print("Link hover foreground: before=\(foregroundBefore) events=\(foregroundEvents) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true)")
+            check(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor,"Link-hover fixture has an active app and key native editor window")
+            check(editor.selectedRange() == caret && session.buffer.source == linkedSource,"Native foreground setup preserves the hover fixture's exact source and caret")
+            editor.ensureNativeLayout()
+            let hoverHit = editor.documentGlyphRect(NSRange(location:linkedText.location+1,length:1)), hoverPoint = NSPoint(x:hoverHit.midX,y:hoverHit.midY)
+            check(editor.linkTarget(at:hoverPoint) == target,"Native foreground setup retains the exact Unicode hover target")
+            let hoverEvent = NSEvent.mouseEvent(with:.mouseMoved,location:editor.convert(hoverPoint,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
             let hoverPreconditions = "selectionPanel=\(editor.selectionPanel?.isShown == true) slash=\(editor.slashPopover?.isShown == true) block=\(editor.blockPopover?.isShown == true) selecting=\(editor.selectingText) dragging=\(editor.draggingBlock) focus=\(controller.window?.firstResponder === editor)"
             editor.mouseMoved(with:hoverEvent)
             let hoverScheduled = editor.hoveredLink == target && editor.linkHoverWork?.isCancelled == false
+            check(hoverScheduled,"Native pointer movement schedules the delayed link hover")
             check(editor.linkPanel?.isShown != true,"Brief pointer movement over a link does not immediately show a panel")
-            RunLoop.main.run(until:Date().addingTimeInterval(0.4))
+            // Await the asynchronous presentation, not a 50 ms scheduler margin.
+            // Keep the production delay and native input path unchanged.
+            var hoverQueueReached = false
+            let hoverMarker = DispatchWorkItem { hoverQueueReached = true }
+            DispatchQueue.main.asyncAfter(deadline:.now()+0.35,execute:hoverMarker)
+            defer { hoverMarker.cancel() }
+            let hoverWaitStart = Date(), hoverDeadline = Date().addingTimeInterval(3)
+            while editor.linkPanel?.isShown != true && Date() < hoverDeadline {
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+            }
             if editor.linkPanel?.isShown != true || editor.selectedRange() != caret || controller.window?.firstResponder !== editor {
-                print("Link hover diagnostic: before=\(hoverPreconditions) scheduled=\(hoverScheduled) panel=\(editor.linkPanel?.isShown == true) caret=\(editor.selectedRange()) expected=\(caret) focus=\(controller.window?.firstResponder === editor) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) target=\(editor.hoveredLink == target) valid=\(editor.validLinkTarget(target)) hoverCancelled=\(editor.linkHoverWork?.isCancelled as Any) dismissCancelled=\(editor.linkDismissWork?.isCancelled as Any) visible=\(editor.visibleRect) hit=\(hit)")
+                print("Link hover diagnostic: before=\(hoverPreconditions) scheduled=\(hoverScheduled) waited=\(Date().timeIntervalSince(hoverWaitStart)) queueReached=\(hoverQueueReached) panelExists=\(editor.linkPanel != nil) panel=\(editor.linkPanel?.isShown == true) caret=\(editor.selectedRange()) expected=\(caret) focus=\(controller.window?.firstResponder === editor) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) target=\(editor.hoveredLink == target) valid=\(editor.validLinkTarget(target)) hoverCancelled=\(editor.linkHoverWork?.isCancelled as Any) dismissCancelled=\(editor.linkDismissWork?.isCancelled as Any) visible=\(editor.visibleRect) hit=\(hit)")
                 fflush(stdout)
             }
             check(editor.linkPanel?.isShown == true && editor.selectedRange() == caret && controller.window?.firstResponder === editor,"Link hover presents native actions without moving the caret or taking editing focus")

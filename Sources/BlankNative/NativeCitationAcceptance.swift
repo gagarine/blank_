@@ -6,7 +6,10 @@ import BlankCore
 final class CitationAcceptanceProtocol: URLProtocol {
     private static let lock = NSLock()
     private static var urls: [URL] = []
-    static var requests: [URL] { lock.lock(); defer { lock.unlock() }; return urls }
+    static var requests: [URL] { lock.lock(); defer { lock.unlock() }; return urls.filter { !$0.path.hasSuffix("/groups") } }
+    static var groupRequests: [URL] { lock.lock(); defer { lock.unlock() }; return urls.filter { $0.path.hasSuffix("/groups") } }
+    static var groupFixture = "normal"
+    static var itemFixtureOffline = false
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.host == "localhost" && request.url?.port == 23119
     }
@@ -15,10 +18,24 @@ final class CitationAcceptanceProtocol: URLProtocol {
         Self.lock.lock(); Self.urls.append(request.url!); Self.lock.unlock()
         let query = URLComponents(url:request.url!,resolvingAgainstBaseURL:false)?.queryItems?.first(where:{ $0.name == "q" })?.value ?? ""
         let title = query.isEmpty ? "Citation acceptance reference" : "Search result for " + query
+        let groups = request.url!.path.hasSuffix("/groups")
+        if groups {
+            let start = Int(URLComponents(url:request.url!,resolvingAgainstBaseURL:false)?.queryItems?.first(where:{ $0.name == "start" })?.value ?? "0") ?? 0
+            let fixture = Self.groupFixture
+            let rows: [[String:Any]] = fixture == "empty" ? [] : fixture == "paged" ? (start..<(start == 0 ? 100 : 102)).map { ["id":$0+100,"data":["name":"Group \($0)"]] } : [["id":123,"data":["name":"Research café 日本"]],["id":456,"data":["name":"Second library"]]]
+            let data = fixture == "malformed" ? Data("{}".utf8) : try! JSONSerialization.data(withJSONObject:rows)
+            let deliver = {
+                self.client?.urlProtocol(self,didReceive:HTTPURLResponse(url:self.request.url!,statusCode:fixture == "offline" ? 503 : 200,httpVersion:nil,headerFields:nil)!,cacheStoragePolicy:.notAllowed)
+                self.client?.urlProtocol(self,didLoad:data); self.client?.urlProtocolDidFinishLoading(self)
+            }
+            if fixture == "late" { DispatchQueue.global().asyncAfter(deadline:.now()+0.3,execute:deliver) } else { deliver() }
+            return
+        }
         let bibliography = request.url?.query?.contains("format=biblatex") == true
-        let data = bibliography ? Data("@book{original, author={Example, Jane}, title={Citation acceptance reference}, year={2026}, publisher={Press}}".utf8) : try! JSONSerialization.data(withJSONObject:[["key":"ABCD1234","data":["itemType":"book","title":title,"creators":[["lastName":"Example"]],"date":"2026"]]])
+        let itemData = try! JSONSerialization.data(withJSONObject:query == "none" ? [] : [["key":"ABCD1234","data":["itemType":"book","title":title,"creators":[["lastName":"Example"]],"date":"2026"]],["key":"EFGH5678","data":["itemType":"book","title":"Second reference","creators":[["lastName":"Other"]],"date":"2025"]]])
+        let data = bibliography ? Data("@book{original, author={Example, Jane}, title={Citation acceptance reference}, year={2026}, publisher={Press}}".utf8) : itemData
         let deliver = {
-            self.client?.urlProtocol(self,didReceive:HTTPURLResponse(url:self.request.url!,statusCode:query == "offline" ? 503 : 200,httpVersion:nil,headerFields:nil)!,cacheStoragePolicy:.notAllowed)
+            self.client?.urlProtocol(self,didReceive:HTTPURLResponse(url:self.request.url!,statusCode:query == "offline" || Self.itemFixtureOffline ? 503 : 200,httpVersion:nil,headerFields:nil)!,cacheStoragePolicy:.notAllowed)
             self.client?.urlProtocol(self,didLoad:data)
             self.client?.urlProtocolDidFinishLoading(self)
         }
@@ -30,6 +47,7 @@ final class CitationAcceptanceProtocol: URLProtocol {
 @MainActor enum NativeCitationAcceptance {
     static func showFixture(controller: DocumentWindow) {
         URLProtocol.registerClass(CitationAcceptanceProtocol.self)
+        if CommandLine.arguments.contains("--citation-fixture-offline") { CitationAcceptanceProtocol.groupFixture = "offline"; CitationAcceptanceProtocol.itemFixtureOffline = true }
         controller.session.chooseInsertion("citation")
     }
     static func run(controller: DocumentWindow) {
@@ -130,11 +148,134 @@ final class CitationAcceptanceProtocol: URLProtocol {
         check(writing.buffer.source == "Before Author target target.","Single Replace accepts Find’s expanded atomic citation selection")
         writing.undo(); check(writing.buffer.source == replacementSource,"Single citation replacement preserves exact-source undo")
         writing.saveWork?.cancel(); writing.recoveryQueue.sync {}
+        libraryAndKeyboard(controller:controller)
         fieldsAndCommands(controller:controller)
         ProjectAcceptance.run()
         BibliographyConversionAcceptance.run()
         session.sheet = nil
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+    }
+    static func libraryAndKeyboard(controller: DocumentWindow) {
+        func check(_ condition: @autoclosure () -> Bool,_ label: String) {
+            guard condition() else { fatalError("FAIL: \(label)") }; print("PASS: \(label)")
+        }
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !condition() && Date() < deadline { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }
+            RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        }
+        let libraries = CitationLibraries()
+        CitationAcceptanceProtocol.groupFixture = "paged"; libraries.load(); wait { !libraries.loading }
+        check(libraries.error.isEmpty && libraries.libraries.count == 103 && CitationAcceptanceProtocol.groupRequests.last?.query?.contains("start=100") == true,"Group discovery pages all locally available libraries and retains Personal")
+        let previous = libraries.libraries.map(\.id)
+        CitationAcceptanceProtocol.groupFixture = "offline"; libraries.load(); wait { !libraries.loading }
+        check(!libraries.error.isEmpty && libraries.libraries.map(\.id) == previous,"Failed group discovery preserves the last usable library list")
+        CitationAcceptanceProtocol.groupFixture = "malformed"; libraries.load(); wait { !libraries.loading }
+        check(!libraries.error.isEmpty && libraries.libraries.map(\.id) == previous,"Malformed group data is reported without erasing libraries")
+        CitationAcceptanceProtocol.groupFixture = "late"; libraries.load(); libraries.cancel()
+        RunLoop.main.run(until:Date().addingTimeInterval(0.5))
+        check(libraries.libraries.map(\.id) == previous && !libraries.loading,"Dismissal rejects late group discovery results")
+        CitationAcceptanceProtocol.groupFixture = "normal"; libraries.load(); wait { !libraries.loading }
+        check(libraries.error.isEmpty && libraries.libraries.map(\.id) == ["personal","groups/123","groups/456"],"Library retry discovers named Unicode groups")
+        let session = controller.session
+        session.sheet = nil; RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        session.buffer.loadExternal("Before café 日本"); session.revision += 1; session.editor?.refresh()
+        session.editor?.setSelectedRange(NSRange(location:session.editor!.string.utf16.count,length:0)); session.editor?.captureSelection()
+        let original = session.buffer.source
+        session.chooseInsertion("citation")
+        func find<T: NSView>(_ view: NSView?,_ type: T.Type) -> T? {
+            guard let view else { return nil }; if let result = view as? T { return result }
+            return view.subviews.lazy.compactMap { find($0,type) }.first
+        }
+        wait { find(controller.window?.attachedSheet?.contentView,CitationResultTable.self)?.references.count == 2 }
+        guard let table = find(controller.window?.attachedSheet?.contentView,CitationResultTable.self),
+              let field = find(controller.window?.attachedSheet?.contentView,CitationQueryTextField.self) else { fatalError("Native citation controls missing") }
+        func key(_ code: UInt16,_ characters: String,_ responder: NSResponder) {
+            let event = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:table.window!.windowNumber,context:nil,characters:characters,charactersIgnoringModifiers:characters,isARepeat:false,keyCode:code)!
+            responder.keyDown(with:event); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        }
+        check(field.currentEditor() is NSTextView,"Opening Citation automatically focuses its native search field")
+        guard let input = field.currentEditor() as? NSTextView else { fatalError("Native citation query is not focused") }
+        input.setMarkedText("日本",selectedRange:NSRange(location:2,length:0),replacementRange:NSRange(location:0,length:0))
+        let marked = input.string
+        field.syncText("background refresh")
+        check(input.hasMarkedText() && input.string == marked && !field.control(field,textView:input,doCommandBy:#selector(NSResponder.insertNewline(_:))),"Background query refresh and Return leave native marked-text composition in control")
+        input.unmarkText(); input.insertText("",replacementRange:NSRange(location:0,length:input.string.utf16.count))
+        RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+        key(48,"\t",input)
+        check(table.window?.firstResponder is CitationLibraryPopUp,"Native Tab reaches library selection without changing system keyboard preferences")
+        field.selectText(nil)
+        key(36,"\r",input)
+        check(session.sheet == .insertion && session.buffer.source == original && table.selectedRow == -1,"Return with no checked or highlighted citation does not insert the first result")
+        key(125,"\u{F701}",input)
+        check(table.window?.firstResponder === table && table.selectedRow == 0 && table.chosen.isEmpty,"Native Down transfers search focus to a highlighted unchecked result")
+        key(49," ",table)
+        check(table.chosen == [table.references[0].id],"Native Space checks the highlighted citation")
+        key(125,"\u{F701}",table)
+        check(table.selectedRow == 1 && table.chosen == [table.references[0].id],"Native arrow navigation preserves checked references")
+        key(49," ",table); key(126,"\u{F700}",table)
+        check(table.chosen.count == 2 && table.selectedRow == 0,"Multiple citation checks survive backward native navigation")
+        field.selectText(nil)
+        guard let queryInput = field.currentEditor() as? NSTextView else { fatalError("Query focus missing") }
+        queryInput.insertText("none",replacementRange:NSRange(location:0,length:queryInput.string.utf16.count))
+        wait { table.references.isEmpty }
+        check(table.selectedRow == -1 && table.chosen.count == 2,"Empty search clears stale row focus while preserving checked references")
+        queryInput.insertText("",replacementRange:NSRange(location:0,length:queryInput.string.utf16.count))
+        wait { table.references.count == 2 }
+        check(table.selectedRow == -1 && table.chosen.count == 2,"Refreshed results retain checked identities without a stale row highlight")
+        key(36,"\r",queryInput); wait { session.sheet == nil }
+        check(session.sheet == nil && session.buffer.source.contains("zotero-users-0-ABCD1234") && session.buffer.source.contains("zotero-users-0-EFGH5678"),"Native Return inserts all checked references through canonical source")
+        let inserted = session.buffer.source
+        session.undo(); check(session.buffer.source == original,"Keyboard citation insertion has exact Unicode source Undo")
+        session.undo(true); check(session.buffer.source == inserted,"Keyboard citation insertion shares canonical Redo")
+        session.chooseInsertion("citation"); wait { find(controller.window?.attachedSheet?.contentView,CitationResultTable.self) != nil }
+        guard let second = find(controller.window?.attachedSheet?.contentView,CitationResultTable.self) else { fatalError("Reopened citation table missing") }
+        func libraryPicker(_ view: NSView?) -> NSPopUpButton? {
+            guard let view else { return nil }
+            if let picker = view as? NSPopUpButton, picker.itemTitles.contains("Research café 日本") { return picker }
+            return view.subviews.lazy.compactMap { libraryPicker($0) }.first
+        }
+        wait { libraryPicker(controller.window?.attachedSheet?.contentView) != nil }
+        guard let picker = libraryPicker(controller.window?.attachedSheet?.contentView) else { fatalError("Native library picker missing") }
+        second.moveHighlight(1); key(49," ",second)
+        check(!second.chosen.isEmpty,"Library-change fixture has a checked reference to clear")
+        picker.selectItem(withTitle:"Research café 日本"); picker.sendAction(picker.action,to:picker.target)
+        wait { CitationAcceptanceProtocol.requests.last?.path == "/api/groups/123/items/top" }
+        check(CitationAcceptanceProtocol.requests.last?.path == "/api/groups/123/items/top" && second.chosen.isEmpty,"Selecting a discovered native library searches its group and clears prior choices")
+        wait { second.references.contains { $0.library == "groups/123" } }
+        guard let groupRow = second.references.firstIndex(where:{ $0.library == "groups/123" }) else { fatalError("Group reference missing") }
+        second.selectRowIndexes(IndexSet(integer:groupRow),byExtendingSelection:false); key(49," ",second)
+        check(!second.chosen.isEmpty,"Removed-group fixture has a selected library and checked reference")
+        func reloadButton(_ view: NSView?) -> NSButton? {
+            guard let view else { return nil }
+            if let button = view as? NSButton, button.accessibilityLabel() == "Reload Zotero libraries" { return button }
+            return view.subviews.lazy.compactMap { reloadButton($0) }.first
+        }
+        guard let reload = reloadButton(controller.window?.attachedSheet?.contentView) else { fatalError("Library reload button missing") }
+        CitationAcceptanceProtocol.groupFixture = "empty"; reload.performClick(nil)
+        wait { picker.titleOfSelectedItem == "Personal library" && CitationAcceptanceProtocol.requests.last?.path == "/api/users/0/items/top" }
+        check(picker.itemTitles == ["Personal library"] && picker.titleOfSelectedItem == "Personal library" && second.chosen.isEmpty && second.selectedRow == -1,"Reloading a removed group resets Personal, clears stale choices and searches the current library")
+        CitationAcceptanceProtocol.groupFixture = "normal"
+        key(53,"\u{1b}",second)
+        check(session.sheet == nil && session.buffer.source == inserted,"Native Escape dismisses citation selection without source edits")
+        // No checked state: Return can explicitly insert the highlighted row.
+        session.chooseInsertion("citation"); wait { find(controller.window?.attachedSheet?.contentView,CitationResultTable.self)?.references.count ?? 0 > 0 }
+        guard let third = find(controller.window?.attachedSheet?.contentView,CitationResultTable.self) else { fatalError("Citation table missing") }
+        third.moveHighlight(1); let target = third.highlightedReference!.citeKey
+        key(36,"\r",third); wait { session.sheet == nil }
+        check(session.sheet == nil && session.buffer.source.contains(target),"Return inserts a deliberately highlighted citation without requiring a mouse checkbox")
+        session.undo(); check(session.buffer.source == inserted,"Highlighted citation reuse has exact source Undo")
+        CitationAcceptanceProtocol.groupFixture = "offline"; CitationAcceptanceProtocol.itemFixtureOffline = true
+        let requestsBeforeOfflineOpen = CitationAcceptanceProtocol.requests.count
+        session.chooseInsertion("citation")
+        wait { CitationAcceptanceProtocol.requests.count > requestsBeforeOfflineOpen && find(controller.window?.attachedSheet?.contentView,CitationResultTable.self)?.references.count == 2 }
+        guard let offline = find(controller.window?.attachedSheet?.contentView,CitationResultTable.self) else { fatalError("Offline citation table missing") }
+        check(offline.references.allSatisfy { offline.cited.contains($0.citeKey) },"Remote discovery/search failure leaves already-cited choices visible in the native picker")
+        let beforeReuse = CitationAcceptanceProtocol.requests.count
+        offline.moveHighlight(1); key(36,"\r",offline); wait { session.sheet == nil }
+        check(session.sheet == nil && CitationAcceptanceProtocol.requests.count == beforeReuse,"Native offline citation reuse inserts without another Zotero request")
+        session.undo(); check(session.buffer.source == inserted,"Offline keyboard reuse preserves exact-source Undo")
+        CitationAcceptanceProtocol.groupFixture = "normal"; CitationAcceptanceProtocol.itemFixtureOffline = false
     }
     static func fieldsAndCommands(controller: DocumentWindow) {
         let session = controller.session, editor = session.editor!

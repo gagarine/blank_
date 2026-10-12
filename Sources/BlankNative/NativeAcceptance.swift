@@ -50,10 +50,25 @@ import BlankCore
         NativeReferenceAcceptance.run(controller:controller)
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
-        NativeSelectionStyleAcceptance.run(controller:controller)
+        // Foreground/pointer fixtures run once in their own acceptance process.
+        // scripts/check-bundle.sh invokes --selection-style-self-test separately.
         NativeGoAcceptance.text(original:controller)
         NativeCitationAcceptance.run(controller:controller)
         NativeTemplateAcceptance.run(original:controller)
+        func pumpNativeEvents(until deadline: Date) {
+            for _ in 0..<32 {
+                guard Date() < deadline, let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                NSApp.sendEvent(event)
+            }
+            RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+        }
+        // Commands and Find require real foreground interaction. The synchronous
+        // suite must dispatch AppKit events as well as service run-loop callbacks.
+        NSApp.activate(ignoringOtherApps:true); controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(view)
+        let interactionDeadline = Date().addingTimeInterval(3)
+        while !(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === view) && Date() < interactionDeadline { pumpNativeEvents(until:interactionDeadline) }
+        check(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === view && AppController.shared.current === session,"Commands and Find have an active original native document")
+        check(view.string.isEmpty && session.buffer.source.isEmpty,"Native foreground setup preserves the empty command/search fixture")
         AppController.shared.commands(nil)
         for character in "fast café" {
             let key = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:String(character),charactersIgnoringModifiers:String(character),isARepeat:false,keyCode:0)!
@@ -66,18 +81,52 @@ import BlankCore
         check(session.commandQuery == "fast café" && commandField?.string == "fast café" && session.pendingCommandKeys.isEmpty,"Opening Commands delivers early Unicode keys to its native field editor")
         session.sheet = nil
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        func nativeFindEditor() -> NSTextView? {
+            guard let fieldEditor = controller.searchItem?.searchField.currentEditor() as? NSTextView,
+                  fieldEditor.isFieldEditor, controller.window?.firstResponder === fieldEditor else { return nil }
+            return fieldEditor
+        }
+        func awaitFind(_ query: String? = nil) {
+            let deadline = Date().addingTimeInterval(3)
+            while (nativeFindEditor() == nil || (query != nil && nativeFindEditor()?.string != query)) && Date() < deadline {
+                pumpNativeEvents(until:deadline)
+            }
+            if nativeFindEditor() == nil || (query != nil && nativeFindEditor()?.string != query) {
+                print("Find diagnostic: query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) editor=\((controller.window?.firstResponder as? NSTextView)?.string as Any) isField=\((controller.window?.firstResponder as? NSTextView)?.isFieldEditor as Any) visible=\(session.searchVisible) request=\(session.searchFocusRequest) sheet=\(controller.window?.attachedSheet != nil) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) current=\(AppController.shared.current === session)")
+            }
+        }
+        check(AppController.shared.current === session,"Cmd-F targets the original native document after Commands")
         AppController.shared.find(nil)
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
-        check((controller.window?.firstResponder as? NSTextView)?.isFieldEditor == true,"Cmd-F focuses the native Find field instead of the document")
-        session.searchQuery = "Find again"
-        controller.window?.makeFirstResponder(view)
+        awaitFind()
+        check(nativeFindEditor() != nil,"Cmd-F focuses the native Find field instead of the document")
+        // Exercise native field input before returning to the document, rather
+        // than assigning the model query while its field editor is active.
+        let initialFindEditor = nativeFindEditor()!
+        initialFindEditor.selectAll(nil)
+        initialFindEditor.insertText("Find again",replacementRange:initialFindEditor.selectedRange())
+        let queryDeadline = Date().addingTimeInterval(3)
+        while session.searchQuery != "Find again" && Date() < queryDeadline { pumpNativeEvents(until:queryDeadline) }
+        check(session.searchQuery == "Find again" && controller.searchItem?.searchField.stringValue == "Find again" && view.string.isEmpty && session.buffer.source.isEmpty,"Native Find input updates its query without editing the document")
+        check(controller.window?.makeFirstResponder(view) == true && controller.window?.firstResponder === view,"Returning from Find focuses the native document")
+        check(AppController.shared.current === session,"Repeated Cmd-F targets the original native document")
         AppController.shared.find(nil)
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
-        let findEditor = controller.window?.firstResponder as? NSTextView
+        awaitFind("Find again")
+        let findEditor = nativeFindEditor()
         check(findEditor?.isFieldEditor == true && findEditor?.string == "Find again","Repeated Cmd-F returns to the existing search field")
-        session.hideSearch(); session.searchQuery = ""
+        // Ordinary Close retains the query. Complete native teardown before
+        // clearing it as test cleanup, so the two operations are verified separately.
+        session.hideSearch()
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        let closeFindDeadline = Date().addingTimeInterval(3)
+        while controller.window?.firstResponder !== view && Date() < closeFindDeadline { pumpNativeEvents(until:closeFindDeadline) }
+        if controller.window?.firstResponder !== view {
+            print("Close Find diagnostic: active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true) visible=\(session.searchVisible) query=\(session.searchQuery) field=\(controller.searchItem?.searchField.stringValue as Any) fieldOwnsFocus=\(nativeFindEditor() != nil) responder=\(String(describing:controller.window?.firstResponder)) current=\(AppController.shared.current === session)")
+        }
         check(controller.window?.firstResponder === view && view.string.isEmpty,"Closing search restores the untouched editor and caret")
+        check(!session.searchVisible && session.searchQuery == "Find again" && session.buffer.source.isEmpty,"Closing native Find retains its query and canonical source")
+        session.searchQuery = ""
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+        check(controller.window?.firstResponder === view && session.buffer.source.isEmpty,"Clearing a hidden Find query preserves document focus and source")
         check(controller.window?.styleMask.contains(.fullSizeContentView) == true && controller.window?.titlebarAppearsTransparent == false,"Document extends beneath the native material toolbar")
         for scalar in "Hello café 👩🏽‍💻".unicodeScalars { view.insertText(String(scalar),replacementRange:view.selectedRange()) }
         check(session.buffer.projection.text == "Hello café 👩🏽‍💻","Native typing and Unicode")
@@ -640,6 +689,11 @@ import BlankCore
             }
         }
         session.buffer.loadExternal(tableBeforeDimensions); session.revision += 1; editor.refresh()
+        // A cell selection legitimately opens the formatting panel. Put a
+        // caret in the cell before checking unobstructed table controls/grips.
+        editor.setSelectedRange(NSRange(location:cellRange(2).location,length:0)); editor.captureSelection()
+        editor.updateSelectionPanel(); editor.ensureNativeLayout()
+        check(editor.selectedRange().length == 0 && editor.selectionPanel?.isShown != true && session.buffer.source == tableBeforeDimensions,"Table control fixture has a caret, no selection panel and unchanged source")
         editor.tableControlCell = (0,2); editor.positionTableControls()
         check(editor.tableButtons.count == 2 && editor.tableButtons.allSatisfy { !$0.isHidden },"Native row and column controls are visible beside table")
         let rowButton = editor.tableButtons[0], columnButton = editor.tableButtons[1]
@@ -652,7 +706,11 @@ import BlankCore
         let tableHandle = editor.tableBlockHandleRect(0)!
         check(!tableHandle.intersects(rowButton.frame) && !tableHandle.intersects(columnButton.frame),"Table block grip is separate from row and column action buttons")
         let tableHandlePoint = NSPoint(x:tableHandle.midX,y:tableHandle.midY)
+        check(editor.visibleRect.contains(tableHandlePoint) && editor.convert(tableHandlePoint,to:nil).y < controller.window!.contentLayoutRect.maxY,"Table grip target is visible below the native toolbar")
         editor.mouseEntered(with:pointer(.mouseMoved,tableHandlePoint))
+        if editor.hoverBlock != 0 || NSCursor.current != .openHand {
+            print("Table grip diagnostic: hover=\(editor.hoverBlock as Any) openHand=\(NSCursor.current == .openHand) arrow=\(NSCursor.current == .arrow) point=\(tableHandlePoint) visible=\(editor.visibleRect) bounds=\(editor.bounds) screen=\(controller.window!.convertPoint(toScreen:editor.convert(tableHandlePoint,to:nil))) buttons=\(editor.tableButtons.map { $0.frame }) panel=\(editor.selectionPanel?.isShown == true) slash=\(editor.slashPopover?.isShown == true) block=\(editor.blockPopover?.isShown == true) grabbed=\(editor.grabbed as Any) mode=\(session.mode) window=\(controller.window!.frame) selection=\(editor.selectedRange())")
+        }
         check(editor.hoverBlock == 0 && NSCursor.current == .openHand,"Table block grip remains reachable with an open-hand cursor")
         editor.mouseDown(with:pointer(.leftMouseDown,tableHandlePoint))
         check(editor.grabbed == 0 && NSCursor.current == .closedHand,"Separate table grip starts a block drag")

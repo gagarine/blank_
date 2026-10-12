@@ -13,6 +13,23 @@ import BlankCore
             editor.clearInsertionStyle()
             controller.window?.makeFirstResponder(editor)
         }
+        func focusDocumentForMenu() {
+            let source = session.buffer.source, selection = session.buffer.selection, nativeSelection = editor.selectedRange()
+            NSApp.activate(ignoringOtherApps:true); controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(editor)
+            let deadline = Date().addingTimeInterval(3)
+            while !(NSApp.isActive && controller.window?.isKeyWindow == true && AppController.shared.current === session && controller.window?.firstResponder === editor) && Date() < deadline {
+                for _ in 0..<32 {
+                    guard Date() < deadline, let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    NSApp.sendEvent(event)
+                }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+            }
+            if AppController.shared.current !== session || controller.window?.isKeyWindow != true {
+                print("Formatting menu context: active=\(NSApp.isActive) key=\(String(describing:NSApp.keyWindow)) expected=\(String(describing:controller.window)) current=\(AppController.shared.current?.id as Any)")
+            }
+            check(NSApp.isActive && controller.window?.isKeyWindow == true && AppController.shared.current === session && controller.window?.firstResponder === editor,"Native formatting menu targets the active document")
+            check(session.buffer.source == source && session.buffer.selection == selection && editor.selectedRange() == nativeSelection,"Native menu focus setup preserves exact source and selection")
+        }
         func contextMenu() -> NSMenu {
             editor.ensureNativeLayout()
             let point = editor.convert(editor.rectFor(editor.selectedRange().location).origin,to:nil)
@@ -45,9 +62,11 @@ import BlankCore
         RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(editor.string == both && !items(contextMenu()).contains { $0.action == #selector(NativeTextView.blankBold(_:)) || $0.action == #selector(NSFontManager.addFontTrait(_:)) },"Source displays exact formatting syntax without rich-font menu actions")
         let undoItem = items(NSApp.mainMenu!).first { $0.action == #selector(AppController.undo(_:)) }!
+        focusDocumentForMenu()
         check(NSApp.sendAction(undoItem.action!,to:undoItem.target,from:undoItem),"Native Undo menu reaches shared document history")
         check(session.buffer.source == "Before *café 👩🏽‍💻* after // keep this comment\n","Context-menu formatting shares undo with Source")
         let redoItem = items(NSApp.mainMenu!).first { $0.action == #selector(AppController.redo(_:)) }!
+        focusDocumentForMenu()
         check(NSApp.sendAction(redoItem.action!,to:redoItem.target,from:redoItem),"Native Redo menu reaches shared document history")
         check(session.buffer.source == both,"Context-menu formatting shares redo with Source")
         session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1)); editor.setSelectedRange(range)

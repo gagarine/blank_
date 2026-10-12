@@ -14,6 +14,17 @@ import BlankCore
             while !condition() && Date() < deadline { RunLoop.main.run(until:Date().addingTimeInterval(0.02)) }
             check(condition(),"Template preview work completes")
         }
+        func waitForNativeUI(_ label: String,_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(3)
+            while !condition() && Date() < deadline {
+                for _ in 0..<32 {
+                    guard Date() < deadline, let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    NSApp.sendEvent(event)
+                }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+            }
+            check(condition(),label)
+        }
         defer {
             gallery?.window?.close()
             for window in windows { window.window?.close() }
@@ -88,9 +99,9 @@ import BlankCore
             guard let createSheet = chooser.window?.attachedSheet else { fatalError("Preview did not reopen") }
             let previousCount = AppController.shared.controllers.count
             let returnKey = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:createSheet.windowNumber,context:nil,characters:"\r",charactersIgnoringModifiers:"\r",isARepeat:false,keyCode:36)!
-            _ = createSheet.performKeyEquivalent(with:returnKey)
-            RunLoop.main.run(until:Date().addingTimeInterval(0.3))
-            check(chooser.window?.attachedSheet == nil && AppController.shared.controllers.count == previousCount+1,"Creating from Preview first dismisses its sheet and opens exactly one document")
+            waitForNativeUI("Template Preview receives native key focus before Return") { NSApp.isActive && createSheet.isKeyWindow && NSApp.keyWindow === createSheet }
+            check(createSheet.performKeyEquivalent(with:returnKey),"Template Preview consumes its native Return key")
+            waitForNativeUI("Creating from Preview first dismisses its sheet and opens exactly one document") { chooser.window?.attachedSheet == nil && AppController.shared.controllers.count == previousCount+1 }
             let previewCopy = AppController.shared.controllers.last!
             windows.append(previewCopy); sessions.append(previewCopy.session)
             previewCopy.session.dirty = false; previewCopy.window?.close()

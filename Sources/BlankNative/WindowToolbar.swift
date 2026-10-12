@@ -48,8 +48,13 @@ extension NSToolbarItem.Identifier {
         if let toolbar = window?.toolbar, !toolbar.items.contains(where:{ $0.itemIdentifier == .blankSearch }) { toolbar.insertItem(withItemIdentifier:.blankSearch,at:toolbar.items.count) }
         searchItem?.searchField.stringValue = session.searchQuery
         searchWidth?.constant = 220
-        searchItem?.beginSearchInteraction()
-        searchItem?.searchField.selectText(nil)
+        window?.layoutIfNeeded()
+        // Native field focus expands NSSearchToolbarItem automatically. Starting
+        // a second search interaction can leave delayed focus after Find closes.
+        if let fieldEditor = searchItem?.searchField.currentEditor() as? NSTextView,
+           window?.firstResponder === fieldEditor {
+            fieldEditor.selectAll(nil)
+        } else { searchItem?.searchField.selectText(nil) }
     }
     @objc func searchDocument(_ sender: NSSearchField) { session.searchQuery = sender.stringValue }
     @objc func zoomPreview(_ sender: NSToolbarItemGroup) {
