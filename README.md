@@ -30,6 +30,8 @@ bash scripts/check.sh
 
 Quit and reopen after rebuilding. Native checks need an unlocked desktop session. See [AGENTS.md](AGENTS.md) for architecture, build and verification conventions.
 
+To repeat the draft restoration checks without rebuilding, run `bash scripts/check-drafts.sh build/blank_.app 10`. Each sequence uses disposable recovery data and fresh AppKit window state, and waits for native snapshot writes before inspecting their exact source and dependencies.
+
 [CI](.github/workflows/build-macos.yml) checks macOS 27 using GitHub’s `xcode-27` runner. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after the build and checks pass. Apps are ad-hoc signed; Intel support is unverified.
 
 [Issues](https://github.com/gagarine/blank_/issues) · [MIT](LICENSE) · Built with OpenAI Codex.

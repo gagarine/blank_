@@ -39,12 +39,6 @@ BLANK_DATA_DIR="$portable/find-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_L
 # Citation Space uses its own foreground keyboard/window fixture and mock API.
 BLANK_DATA_DIR="$portable/paragraph-space-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --paragraph-space-self-test
 BLANK_DATA_DIR="$portable/data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --self-test
-# Lifecycle processes share one identity and data directory, independently of
-# editing fixtures whose hard-exit snapshots belong to a different data root.
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier local.blank.acceptance.drafts.$(uuidgen)" "$relocated/Contents/Info.plist"
-codesign --force --deep --sign - "$relocated"
-codesign --verify --deep --strict "$relocated"
-BLANK_DATA_DIR="$portable/draft-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --draft-lifecycle-prepare
-BLANK_DATA_DIR="$portable/draft-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --draft-lifecycle-verify
-BLANK_DATA_DIR="$portable/draft-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --draft-lifecycle-disabled-verify
+# Lifecycle relaunches use independent native window state and recovery data.
+bash "$repo/scripts/check-drafts.sh" "$relocated"
 printf 'PASS: relocated app bundle (in-process parser and separate compiler)\n'

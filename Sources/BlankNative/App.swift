@@ -6,7 +6,7 @@ import Combine
 @main enum BlankMain {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--measure") { ResourceMetrics.run(); return }
-        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") || CommandLine.arguments.contains("--selection-style-self-test") || CommandLine.arguments.contains("--find-self-test") || CommandLine.arguments.contains("--paragraph-space-self-test") {
+        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--file-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") || CommandLine.arguments.contains("--selection-style-self-test") || CommandLine.arguments.contains("--find-self-test") || CommandLine.arguments.contains("--paragraph-space-self-test") {
             setbuf(stdout,nil)
         }
         let app = NSApplication.shared
@@ -58,7 +58,10 @@ import Combine
         DispatchQueue.main.async { if !CommandLine.arguments.contains("--selection-style-ui-test") { NSApp.activate() } }
         if CommandLine.arguments.contains(where:{ $0.hasPrefix("--draft-lifecycle-") }) {
             setbuf(stdout,nil)
-            RunLoop.main.perform {
+            // Run-loop perform blocks can share a batch with pending AppKit
+            // save completions. A synchronous check that pumps a nested loop
+            // cannot drain that outer batch, so start it from a timer instead.
+            let checks = Timer(timeInterval:0,repeats:false) { _ in
                 MainActor.assumeIsolated {
                     if CommandLine.arguments.contains("--draft-lifecycle-prepare") { NativeDraftAcceptance.prepare() }
                     else if CommandLine.arguments.contains("--draft-lifecycle-disabled-verify") { NativeDraftAcceptance.verifyDisabledLaunch() }
@@ -66,6 +69,7 @@ import Combine
                     exit(0)
                 }
             }
+            RunLoop.main.add(checks,forMode:.default)
         }
         if CommandLine.arguments.contains("--selection-style-ui-test"), let controller = controllers.first { NativeSelectionStyleAcceptance.showFixture(controller:controller) }
         if CommandLine.arguments.contains("--figure-ui-test"), let controller = controllers.first { NativeFigureAcceptance.showFixture(controller:controller) }
@@ -76,7 +80,7 @@ import Combine
         if CommandLine.arguments.contains("--citation-ui-test"), let controller = controllers.first {
             NativeCitationAcceptance.showFixture(controller:controller)
         }
-        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") || CommandLine.arguments.contains("--selection-style-self-test") || CommandLine.arguments.contains("--find-self-test") || CommandLine.arguments.contains("--paragraph-space-self-test") {
+        if CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--file-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") || CommandLine.arguments.contains("--selection-style-self-test") || CommandLine.arguments.contains("--find-self-test") || CommandLine.arguments.contains("--paragraph-space-self-test") {
             // Run outside a main-queue block: the acceptance suite pumps the
             // run loop while waiting for background compiler/file callbacks.
             RunLoop.main.perform {
@@ -88,6 +92,7 @@ import Combine
                     else if CommandLine.arguments.contains("--block-source-self-test") { NativeBlockSourceAcceptance.run(controller:controller) }
                     else if CommandLine.arguments.contains("--label-self-test") { NativeLabelAcceptance.run(controller:controller) }
                     else if CommandLine.arguments.contains("--figure-self-test") { NativeFigureAcceptance.run(controller:controller) }
+                    else if CommandLine.arguments.contains("--file-self-test") { FileAcceptance.run() }
                     else if CommandLine.arguments.contains("--document-self-test") { NativeDocumentAcceptance.run() }
                     else { NativeAcceptance.run(controller:controller) }
                     exit(0)
