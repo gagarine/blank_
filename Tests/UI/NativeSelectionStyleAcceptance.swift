@@ -1,5 +1,7 @@
+@testable import BlankIntegrationTests
 import AppKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeSelectionStyleAcceptance {
     static func showFixture(controller: DocumentWindow) {
@@ -178,9 +180,24 @@ import BlankCore
             print("Link hover foreground: before=\(foregroundBefore) events=\(foregroundEvents) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true)")
             check(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor,"Link-hover fixture has an active app and key native editor window")
             check(editor.selectedRange() == caret && session.buffer.source == linkedSource,"Native foreground setup preserves the hover fixture's exact source and caret")
+            // AppKit also refreshes tracking from the real pointer during display
+            // cycles. Put the disposable window under that stationary pointer so
+            // its native tracking agrees with the injected mouse event. Moving
+            // the desktop pointer or suppressing cursor updates would hide bugs.
+            let hoverWindow = controller.window!, previousOrigin = hoverWindow.frame.origin
+            defer { hoverWindow.setFrameOrigin(previousOrigin) }
+            editor.ensureNativeLayout()
+            let initialHit = editor.documentGlyphRect(NSRange(location:linkedText.location+1,length:1))
+            let screenHit = hoverWindow.convertPoint(toScreen:editor.convert(NSPoint(x:initialHit.midX,y:initialHit.midY),to:nil))
+            let pointer = NSEvent.mouseLocation
+            hoverWindow.setFrameOrigin(NSPoint(x:previousOrigin.x+pointer.x-screenHit.x,y:previousOrigin.y+pointer.y-screenHit.y))
+            let layoutDeadline = Date().addingTimeInterval(0.1)
+            while Date() < layoutDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.01)) }
             editor.ensureNativeLayout()
             let hoverHit = editor.documentGlyphRect(NSRange(location:linkedText.location+1,length:1)), hoverPoint = NSPoint(x:hoverHit.midX,y:hoverHit.midY)
             check(editor.linkTarget(at:hoverPoint) == target,"Native foreground setup retains the exact Unicode hover target")
+            let actualPoint = editor.convert(hoverWindow.convertPoint(fromScreen:NSEvent.mouseLocation),from:nil)
+            check(editor.linkTarget(at:actualPoint) == target,"Native display tracking and the injected pointer share the exact hover target")
             let hoverEvent = NSEvent.mouseEvent(with:.mouseMoved,location:editor.convert(hoverPoint,to:nil),modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,eventNumber:1,clickCount:0,pressure:0)!
             let hoverPreconditions = "selectionPanel=\(editor.selectionPanel?.isShown == true) slash=\(editor.slashPopover?.isShown == true) block=\(editor.blockPopover?.isShown == true) selecting=\(editor.selectingText) dragging=\(editor.draggingBlock) focus=\(controller.window?.firstResponder === editor)"
             editor.mouseMoved(with:hoverEvent)

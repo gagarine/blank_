@@ -1,7 +1,9 @@
+@testable import BlankIntegrationTests
 import AppKit
 import PDFKit
 import SwiftUI
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeAcceptance {
     static func run(controller: DocumentWindow) {
@@ -51,11 +53,9 @@ import BlankCore
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
         // Foreground/pointer fixtures run once in their own acceptance process.
-        // scripts/check-bundle.sh invokes --selection-style-self-test separately.
+        // scripts/check-native.sh ui invokes --selection-style-self-test separately.
         NativeGoAcceptance.text(original:controller)
         NativeCitationAcceptance.run(controller:controller)
-        NativeUniverseAcceptance.run(original:controller)
-        NativeTemplateAcceptance.run(original:controller)
         func pumpNativeEvents(until deadline: Date) {
             for _ in 0..<32 {
                 guard Date() < deadline, let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
@@ -796,17 +796,12 @@ import BlankCore
         session.revision += 1; session.compile()
         let deadline = Date().addingTimeInterval(25)
         while session.compiling && Date() < deadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
-        check(session.pdf != nil,"Official Typst compiler produces native PDF")
-        let sharedFile = try! SharedPDF(data:session.pdfData!,name:session.title)
-        check(sharedFile.url.pathExtension == "pdf" && sharedFile.url.lastPathComponent == session.title+".pdf","Share prepares a named PDF file without Typst source")
-        check((try? Data(contentsOf:sharedFile.url)) == session.pdfData && PDFDocument(url:sharedFile.url)?.string?.contains("Native PDF") == true,"Native sharing supplies the current compiler PDF")
         let clipboardPDF = try! SharedPDF(data:session.pdfData!,name:"Clipboard PDF").url
         NSPasteboard.general.clearContents(); NSPasteboard.general.writeObjects([clipboardPDF as NSURL])
         for index in 0..<12 { _ = try! SharedPDF(data:session.pdfData!,name:"Cache \(index)") }
         let shareCache = AppController.dataDirectory.appendingPathComponent("shared-pdfs")
         let cachedCount = (try? FileManager.default.contentsOfDirectory(atPath:shareCache.path).count) ?? 100
         check(FileManager.default.fileExists(atPath:clipboardPDF.path) && cachedCount <= 10,"Share cache stays bounded while preserving the PDF copied to the native clipboard (\(cachedCount) cached, clipboard exists: \(FileManager.default.fileExists(atPath:clipboardPDF.path)))")
-        check(!session.sourceMap.isEmpty,"Preview carries source navigation map")
         session.switchMode(.preview); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         guard let pdfView = session.pdfView, let secondPage = session.pdf?.page(at:1) else { fatalError("Missing two-page preview") }
         // PDFKit sends this same notification for wheel/trackpad page changes.
@@ -827,42 +822,6 @@ import BlankCore
         check(pdfView.currentSelection?.string?.contains("Second page") == true,"Toolbar Find selects text in PDF Preview")
         session.searchQuery = ""
         session.switchMode(.write); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
-        let good = session.pdf
-        session.buffer.loadExternal("#unknown-function()")
-        session.revision += 1; session.compile()
-        let failureDeadline = Date().addingTimeInterval(10)
-        while session.compiling && Date() < failureDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
-        check(session.pdf === good && session.error != nil,"Compilation errors preserve last successful PDF")
-        var failedShare: Result<Data,any Error>?
-        session.requestPDF { failedShare = $0 }
-        let failedShareDeadline = Date().addingTimeInterval(10)
-        while failedShare == nil && Date() < failedShareDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
-        if case .failure? = failedShare { check(session.pdf === good,"Sharing invalid source reports an error instead of sharing the previous PDF") }
-        else { fatalError("Invalid source was shared as a PDF") }
-        session.buffer.loadExternal("= Share snapshot\n\nPDF sharing revision check."); session.revision += 1
-        var staleShare: Result<Data,any Error>?
-        session.requestPDF { staleShare = $0 }; session.revision += 1
-        let staleShareDeadline = Date().addingTimeInterval(10)
-        while staleShare == nil && Date() < staleShareDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
-        if case .failure? = staleShare { check(true,"Changing source during PDF preparation rejects a stale share") }
-        else { fatalError("Stale PDF revision was shared") }
-        // A share requested during an older compilation must wait for its own
-        // revision, provided no further edit occurs after the request.
-        session.compile(); session.buffer.loadExternal("= Latest share\n\nNewest revision."); session.revision += 1
-        var latestShare: Result<Data,any Error>?
-        session.requestPDF { latestShare = $0 }
-        let latestShareDeadline = Date().addingTimeInterval(10)
-        while latestShare == nil && Date() < latestShareDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
-        if case let .success(data)? = latestShare { check(PDFDocument(data:data)?.string?.contains("Latest share") == true,"Share waits for its current revision behind an older compilation") }
-        else { fatalError("Current PDF share did not finish behind older compilation") }
-        session.buffer.loadExternal("#figure(image(\"assets/test.png\"), caption: [A caption])")
-        session.revision += 1
-        let exported = FileManager.default.temporaryDirectory.appendingPathComponent("blank-export-"+UUID().uuidString+".pdf")
-        session.compile(); session.compile(export:exported)
-        let exportDeadline = Date().addingTimeInterval(10)
-        while session.compiling && Date() < exportDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }
-        check((try? Data(contentsOf:exported).starts(with:Data("%PDF-".utf8))) == true,"PDF export queued during compilation includes imported figure and caption")
-        try? FileManager.default.removeItem(at:exported)
         // Exercise the same Tutorial action used by Help, Cmd-K and --tutorial.
         let application = AppController.shared!
         application.tutorial(nil)
@@ -879,8 +838,6 @@ import BlankCore
         }
         tutorialWindow.window?.close()
         print("Native acceptance completed")
-        FileAcceptance.run()
-        NativeDocumentAcceptance.run()
         session.saveWork?.cancel(); controller.window?.close()
     }
 }

@@ -29,10 +29,26 @@ Built with SwiftUI, AppKit and the official Typst 0.15.1 parser and compiler. Lo
 ```sh
 bash scripts/build.sh release  # omit release for debug
 open build/blank_.app
-bash scripts/check.sh
+bash scripts/check.sh          # background: unit + integration
+bash scripts/check-ui.sh       # explicit interactive UI suite
+bash scripts/check-all.sh      # all categories, including UI
 ```
 
-Quit and reopen after rebuilding. Native checks need an unlocked desktop session. See [AGENTS.md](AGENTS.md) for architecture, build and verification conventions.
+Quit and reopen after rebuilding. Default checks run without activation, visible windows or desktop keyboard input. Native integration still needs a logged-in window-server session. UI checks explicitly activate the disposable test app and need an unlocked desktop; quit the existing `/tmp/blank-resize-ui/blank_.app` fixture first. See [AGENTS.md](AGENTS.md) for architecture, build and verification conventions.
+
+| Category | Targets and files | Scope |
+| --- | --- | --- |
+| Unit | `BlankUnitTests`, `Tests/Unit` | Canonical model/source, Unicode mapping, history, editing transactions and structured clipboard data. All 38 existing model checks use Swift Testing. |
+| Integration | `BlankIntegrationTests` / `BlankIntegrationChecks`, `Tests/Integration` | Files, projects, recovery/relaunches, packages, compiler protocol, PDF/export/share revisions, template storage and previews, mocked citation APIs and AppKit attributed text/layout that need no foreground. |
+| UI | `BlankUITests` / `BlankUIChecks`, `Tests/UI` | Actual native key paths, shortcuts, selection, focus, navigation, sheets/windows, deletion across block boundaries, marked-text composition, tables and shared Undo/Redo. |
+
+Rust parser unit tests and compiler/package integration tests remain in their Cargo crates and run in background checks. CI runs `check-all.sh`, covering every category. Test hosts use disposable recovery/projects/package caches, run from signed relocated bundles without development library paths, and preserve clipboard, recents and existing test preferences. The background host prohibits activation/window ordering and verifies it never becomes active or displays a window; it never writes the system clipboard.
+
+Swift Testing was verified with the macOS 27 CLT compiler. Its default module scan misses the bundled macro plugin, so `check-unit.sh` explicitly loads the plugin paired with the selected compiler when present. XCTest cannot be imported with this CLT installation, and `xcodebuild`/XCUIAutomation require full Xcode. The native integration/UI harness remains for those categories, with distinct targets, folders and commands; there is no silent reduction of native keyboard/focus assertions. An eventual XCUIAutomation migration needs a real Xcode UI-test runner and a fresh compatibility check. [Swift Testing](https://developer.apple.com/xcode/swift-testing/) and [XCUIAutomation](https://developer.apple.com/documentation/xcuiautomation) describe the supported frameworks.
+
+UI scenarios that depend on app-wide focus run in separate processes. The harness waits for real AppKit field/sheet transitions; the hover fixture positions its disposable window under the stationary pointer. Native events exercise AppKit input paths, but real IME candidate panels, VoiceOver, bidirectional navigation, live Zotero and broader file/window/object scenarios remain unverified. Large-table editing and full Source reprojection still need performance work.
+
+Ordinary builds contain no acceptance fixtures. `BLANK_BUILD_CHECKS=1` adds verification targets and enables their `@testable` imports; scripts set it automatically. Verification executables run inside temporary app copies so native document APIs and bundled compiler lookup are real. Do not run their raw Swift executables against user data.
 
 [CI](.github/workflows/build-macos.yml) checks macOS 27 using GitHub’s `xcode-27` runner. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after the build and checks pass. Apps are ad-hoc signed; Intel support is unverified.
 

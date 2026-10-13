@@ -1,5 +1,7 @@
+@testable import BlankIntegrationTests
 import AppKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeDeleteAcceptance {
     static func run(controller: DocumentWindow) {

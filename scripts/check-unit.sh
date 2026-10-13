@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+cd "$(pwd -P)"
 configuration=${1:-release}
 export MACOSX_DEPLOYMENT_TARGET=27.0
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"

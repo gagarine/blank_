@@ -1,5 +1,6 @@
 import AppKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeDocumentAcceptance {
     static func run() {
@@ -25,7 +26,7 @@ import BlankCore
             try fm.createDirectory(at:folder,withIntermediateDirectories:true)
             let session = DocumentSession(), controller = DocumentWindow(session:session)
             windows.append(controller)
-            controller.showWindow(nil)
+            controller.window?.contentView?.layoutSubtreeIfNeeded()
             let document = controller.nativeDocument
             let source = "// Keep this comment\n= Café 👩🏽‍💻\n\n*Bold* and 日本\n\n#include \"child.typ\"\n"
             session.buffers["child.typ"] = DocumentBuffer("Child 日本")

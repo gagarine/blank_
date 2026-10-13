@@ -1,8 +1,11 @@
 import AppKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum ProjectAcceptance {
     static func run() {
+        guard URLProtocol.registerClass(CitationAcceptanceProtocol.self) else { fatalError("Cannot isolate citation API") }
+        defer { URLProtocol.unregisterClass(CitationAcceptanceProtocol.self) }
         let fm = FileManager.default, folder = fm.temporaryDirectory.appendingPathComponent("blank-project-"+UUID().uuidString)
         var sessions: [DocumentSession] = []
         let recents = NSDocumentController.shared.recentDocumentURLs

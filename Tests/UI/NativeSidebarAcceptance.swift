@@ -1,6 +1,8 @@
+@testable import BlankIntegrationTests
 import AppKit
 import PDFKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeSidebarAcceptance {
     static func run(controller: DocumentWindow) {

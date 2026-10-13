@@ -1,5 +1,7 @@
+@testable import BlankIntegrationTests
 import AppKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeReferenceAcceptance {
     private static func check(_ condition: @autoclosure () -> Bool,_ label: String) {
@@ -54,9 +56,28 @@ import BlankCore
             if let box = view as? ReferenceLabelComboBox { return box }
             return view.subviews.lazy.compactMap { combo($0) }.first
         }
+        func awaitNative(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(3)
+            while !condition() && Date() < deadline {
+                for _ in 0..<32 {
+                    guard let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    NSApp.sendEvent(event)
+                }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+            }
+            check(condition(),"Reference fixture completes its native sheet transition")
+        }
         func open() -> ReferenceLabelComboBox {
+            // A nil SwiftUI binding can precede AppKit's sheet teardown. Await
+            // the real window before opening another insertion, so its field
+            // editor cannot belong to the previous reference sheet.
+            awaitNative { controller.window?.attachedSheet == nil }
             session.chooseInsertion("reference")
-            RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+            awaitNative {
+                guard let sheet = controller.window?.attachedSheet,
+                      let box = combo(sheet.contentView), let input = box.currentEditor() as? NSTextView else { return false }
+                return sheet.isKeyWindow && sheet.firstResponder === input
+            }
             guard let box = combo(controller.window?.attachedSheet?.contentView) else {
                 fatalError("FAIL: Cross reference offers a native editable list of existing labels")
             }
@@ -65,7 +86,7 @@ import BlankCore
         func key(_ input: NSTextView,_ character: String,_ keyCode: UInt16) {
             let event = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.attachedSheet!.windowNumber,context:nil,characters:character,charactersIgnoringModifiers:character,isARepeat:false,keyCode:keyCode)!
             input.keyDown(with:event)
-            RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+            awaitNative { session.sheet == nil && controller.window?.attachedSheet == nil }
         }
         let box = open()
         check(box.objectValues as? [String] == [target] && box.isEditable && !box.completes,"Cross reference offers a native editable list without forcing autocomplete")
@@ -106,6 +127,7 @@ import BlankCore
             guard let native = field.currentEditor() as? NSTextView else { fatalError("Missing boundary editor") }
             native.insertText(name,replacementRange:native.selectedRange()); key(native,"\r",36)
             let expected = adjacent.replacingBytes(ByteSpan(start,start+1),with:"#ref(<"+name+">);")
+            if Array(session.buffer.source.utf8) != Array(expected.utf8) { print("Reference diagnostic: actual=\(session.buffer.source.debugDescription) expected=\(expected.debugDescription) field=\(native.string.debugDescription) anchor=\(session.insertionAnchor)") }
             check(Array(session.buffer.source.utf8) == Array(expected.utf8),"Reference insertion preserves exact punctuation/Unicode targets next to \(suffix)")
             let call = session.buffer.parsed.tree.descendants("FuncCall").first { session.buffer.source.bytes($0.span).hasPrefix("ref(") }!
             check(session.buffer.source.bytes(call.span) == "ref(<"+name+">)","Following markup is outside the generated reference call")

@@ -22,29 +22,8 @@ for binary in blank_ libblank_syntax.dylib typst-compiler; do
 done
 test ! -e "$relocated/Contents/MacOS/writer-helper"
 otool -L "$relocated/Contents/MacOS/blank_" | grep -q '@rpath/libblank_syntax.dylib'
-# Keep AppKit's draft/restoration registry and preferences separate from the
-# user's app. A unique test identity also prevents reopening a crashed test.
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier local.blank.acceptance.$(uuidgen)" "$relocated/Contents/Info.plist"
-codesign --force --deep --sign - "$relocated"
-codesign --verify --deep --strict "$relocated"
-# Launch away from the checkout, without development library search paths.
-# Native acceptance also exercises Swift's bundled compiler lookup and PDF export.
+# Compiler/PDF protocol verification is headless and uses disposable data.
+# Native integration and explicit UI hosts are packaged separately by check-native.
 cd "$portable"
 env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH python3 "$repo/scripts/compiler-check.py" "$relocated"
-# Foreground/pointer checks have app-wide focus and event-queue effects. Keep
-# their full assertions in a separate process and disposable recovery directory.
-BLANK_DATA_DIR="$portable/selection-style-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --selection-style-self-test
-# The complete Find lifecycle uses its own windows and native focus transitions.
-BLANK_DATA_DIR="$portable/find-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --find-self-test
-# Citation Space uses its own foreground keyboard/window fixture and mock API.
-BLANK_DATA_DIR="$portable/paragraph-space-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --paragraph-space-self-test
-BLANK_DATA_DIR="$portable/data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --self-test
-# Lifecycle processes share one identity and data directory, independently of
-# editing fixtures whose hard-exit snapshots belong to a different data root.
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier local.blank.acceptance.drafts.$(uuidgen)" "$relocated/Contents/Info.plist"
-codesign --force --deep --sign - "$relocated"
-codesign --verify --deep --strict "$relocated"
-BLANK_DATA_DIR="$portable/draft-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --draft-lifecycle-prepare
-BLANK_DATA_DIR="$portable/draft-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --draft-lifecycle-verify
-BLANK_DATA_DIR="$portable/draft-data" env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$relocated/Contents/MacOS/blank_" --draft-lifecycle-disabled-verify
-printf 'PASS: relocated app bundle (in-process parser and separate compiler)\n'
+printf 'PASS: relocated app bundle (parser and compiler; no activation or keyboard events)\n'

@@ -1,5 +1,7 @@
+@testable import BlankIntegrationTests
 import AppKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeFigureAcceptance {
     static let fixture = "Before café 👩🏽‍💻.\n\n#figure(image(\"assets/original.png\", width: 85%, alt: \"Original alternative\"), caption: [Original caption])\n\nAfter."
