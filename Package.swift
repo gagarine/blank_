@@ -10,6 +10,6 @@ let package = Package(
             .unsafeFlags(["-Ltarget/release", "-lblank_syntax", "-Xlinker", "-rpath", "-Xlinker", "@executable_path"])
         ]),
         .executableTarget(name: "BlankNative", dependencies: ["BlankCore"]),
-        .executableTarget(name: "BlankCoreChecks", dependencies: ["BlankCore"], path: "Tests/BlankCoreTests")
+        .testTarget(name: "BlankUnitTests", dependencies: ["BlankCore"], path: "Tests/Unit")
     ], swiftLanguageModes: [.v5]
 )
