@@ -6,6 +6,10 @@ Your work stays in ordinary local `.typ` files, including multi-file projects wi
 
 Typst Universe packages download automatically on first use and remain available offline in `~/Library/Caches/blank_/typst/packages`. **Settings → Typst packages → Clear Package Cache** removes blank_’s downloads; packages are downloaded again when needed. Packages installed by the Typst CLI or bundled in a project's `packages` directory remain available and are not removed.
 
+**File → Templates…** offers **Local** and **Universe** with a shared search field. Universe lists the latest version compatible with the bundled Typst compiler; select a template for its description, version, documentation and a demand-compiled preview. **Create Document** copies every starter file and asset into an independent draft, preserving its declared entry and version-pinned imports. **Save as Template…** adds your copy to Local. New Document stays empty.
+
+Universe catalogue and packages share the cache above. The catalogue refreshes after 24 hours, can be refreshed manually, and falls back to the saved catalogue when offline. Downloaded templates and local templates work offline when their imports are cached. Clear Package Cache also clears the saved catalogue. Catalogue, preview and creation work can be cancelled; preview failure still allows creating an editable copy.
+
 Zotero integration supports reference insertion and refresh, BibLaTeX and Hayagriva bibliographies, custom CSL styles and bibliography conversion.
 
 Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3** to switch views. For a guided tour, open **Help → Tutorial**.

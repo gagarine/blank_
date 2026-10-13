@@ -50,6 +50,25 @@ with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
             return result['pdf']
         before = package_compile('preview', 10)
         package_compile('local', 11)
+        # Universe starters share that cache and retain the declared entry,
+        # version-pinned imports and every file, including unused assets.
+        with (cached/'typst.toml').open('a') as manifest:
+            manifest.write('[template]\npath = "starter"\nentrypoint = "chapters/main.typ"\n')
+        (cached/'starter/chapters').mkdir(parents=True)
+        starter = '#import "@preview/blank-bundle-fixture:1.0.0": message\n#message\n= Café\n'
+        (cached/'starter/chapters/main.typ').write_text(starter)
+        (cached/'starter/unused.bin').write_bytes(bytes([0, 255, 7]))
+        (cached/'README.md').write_text('Starter documentation')
+        catalogue = [{'name':'blank-bundle-fixture','version':'1.0.0','description':'Starter',
+                      'template':{'path':'starter','entrypoint':'chapters/main.typ'}}]
+        (package_cache/'.universe-index.json').write_text(json.dumps(catalogue))
+        assert call('universeCatalog', {})['templates'][0]['version'] == '1.0.0'
+        snapshot = call('universeTemplate', {'name':'blank-bundle-fixture','version':'1.0.0'})
+        assert snapshot['entry'] == 'chapters/main.typ' and snapshot['documentation'] == 'Starter documentation'
+        assert base64.b64decode(snapshot['files'][snapshot['entry']]).decode() == starter
+        assert base64.b64decode(snapshot['files']['unused.bin']) == bytes([0, 255, 7])
+        assert 'lib.typ' not in snapshot['files']
+        print('PASS: bundled Universe protocol uses cached catalogue, pinned package, declared entry and complete starter files')
         call('clearPackageCache', {})
         assert not package_cache.exists() and vendored.exists()
         call('clearPackageCache', {})

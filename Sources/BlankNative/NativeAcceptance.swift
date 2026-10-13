@@ -54,6 +54,7 @@ import BlankCore
         // scripts/check-bundle.sh invokes --selection-style-self-test separately.
         NativeGoAcceptance.text(original:controller)
         NativeCitationAcceptance.run(controller:controller)
+        NativeUniverseAcceptance.run(original:controller)
         NativeTemplateAcceptance.run(original:controller)
         func pumpNativeEvents(until deadline: Date) {
             for _ in 0..<32 {

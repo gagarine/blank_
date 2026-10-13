@@ -1,5 +1,6 @@
 mod conversion;
 mod packages;
+mod universe;
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -294,6 +295,11 @@ fn main() {
                 respond(&output,id,result);
             },
             "compile"=>{let output=output.clone();std::thread::spawn(move||respond(&output,id,compile(params)));},
+            "universeCatalog" | "universeTemplate" => {
+                let output = output.clone();
+                let method = request["method"].as_str().unwrap().to_owned();
+                std::thread::spawn(move || respond(&output, id, universe::request(&method, params)));
+            },
             "clearPackageCache"=>{let output=output.clone();std::thread::spawn(move||respond(&output,id,packages::clear_cache().map(|()|json!({})).map_err(|e|format!("Cannot clear the package cache: {e}"))));},
             _=>respond(&output,id,Err("unknown method".into()))
         }
