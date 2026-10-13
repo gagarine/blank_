@@ -42,10 +42,21 @@ import BlankCore
             let unused = Data([0,255,7]); try write("starter/assets/unused.bin",unused)
             let record: [String:Any] = ["name":"blank-universe-native-fixture","version":"1.0.0","description":"Unicode Café template","authors":["Fixture author"],"categories":["book"],"keywords":["acceptance"],"template":["path":"starter","entrypoint":"chapters/main.typ"]]
             try JSONSerialization.data(withJSONObject:[record]).write(to:index,options:.atomic)
-            let library = UniverseLibrary()
+            var clock = Date()
+            let library = UniverseLibrary(now:{ clock })
             library.load()
             wait("Offline cached Universe catalogue loads without changing the document") { !library.loading }
             check(library.loadError == nil && library.templates.count == 1 && original.session.buffer.source.isEmpty,"Catalogue browsing leaves New Document empty")
+            var refreshedRecord = record; refreshedRecord["description"] = "Refreshed catalogue description"
+            try JSONSerialization.data(withJSONObject:[refreshedRecord]).write(to:index,options:.atomic)
+            library.load()
+            check(!library.loading && library.templates.first?.description == record["description"] as? String,"A populated catalogue remains cached within its freshness interval")
+            clock = clock.addingTimeInterval(25*60*60); library.load()
+            wait("A populated catalogue reloads when its 24-hour interval expires") { !library.loading }
+            check(library.templates.first?.description == "Refreshed catalogue description","Expired in-memory catalogue observes updated catalogue data")
+            try JSONSerialization.data(withJSONObject:[record]).write(to:index,options:.atomic)
+            clock = clock.addingTimeInterval(25*60*60); library.load()
+            wait("Catalogue can load another expired snapshot") { !library.loading }
             let item = library.templates[0]
             check(item.version == "1.0.0" && item.matches("café") && item.matches("book") && item.matches("fixture author") && !item.matches("unmatched"),"Search covers name, description, author and category")
             let locals = try TemplateLibrary(root:folder.appendingPathComponent("library"))

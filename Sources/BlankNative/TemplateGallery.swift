@@ -42,7 +42,7 @@ import BlankCore
     }
     required init?(coder: NSCoder) { fatalError() }
     func windowWillClose(_ notification: Notification) { universe.cancelBrowsing() }
-    func windowDidBecomeKey(_ notification: Notification) { perform { try library.reload() } }
+    func windowDidBecomeKey(_ notification: Notification) { perform { try library.reload() }; if source == .universe { universe.load() } }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.init("add"),.init("preview"),.init("edit"),.init("actions"),.flexibleSpace] }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.init("add"),.flexibleSpace,.init("preview"),.init("edit"),.init("actions")] }
     func toolbar(_ toolbar: NSToolbar,itemForItemIdentifier id: NSToolbarItem.Identifier,willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {

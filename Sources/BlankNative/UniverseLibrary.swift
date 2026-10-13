@@ -71,6 +71,8 @@ final class UniverseProject: NSObject, @unchecked Sendable {
     @Published var creating = false
     @Published var createError: String?
     @Published var generation = 0
+    private let now: () -> Date
+    private var catalogueLoadedAt: Date?
     private var catalogueClient: TypstCompiler?
     private var previewClient: TypstCompiler?
     private var createClient: TypstCompiler?
@@ -79,14 +81,15 @@ final class UniverseProject: NSObject, @unchecked Sendable {
     private let projects = NSCache<NSString,UniverseProject>()
     private let pdfs = NSCache<NSString,NSData>()
     var selected: UniverseTemplate? { templates.first { $0.id == self.selection } }
-    init() {
+    init(now: @escaping () -> Date = { Date() }) {
+        self.now = now
         projects.countLimit = 2; projects.totalCostLimit = 64*1024*1024
         pdfs.countLimit = 6; pdfs.totalCostLimit = 32*1024*1024
     }
     func project(_ item: UniverseTemplate) -> UniverseProject? { projects.object(forKey:item.id as NSString) }
     func pdf(_ item: UniverseTemplate) -> Data? { pdfs.object(forKey:item.id as NSString).map { $0 as Data } }
     func load(refresh: Bool = false) {
-        guard !loading, refresh || templates.isEmpty else { return }
+        guard !loading, refresh || templates.isEmpty || catalogueLoadedAt.map({ now().timeIntervalSince($0) >= 24*60*60 }) != false else { return }
         loading = true; loadError = nil
         let token = UUID(); catalogueToken = token
         let client = TypstCompiler(); catalogueClient = client
@@ -102,7 +105,7 @@ final class UniverseProject: NSObject, @unchecked Sendable {
                     guard let self, catalogueToken == token else { return }
                     loading = false; catalogueClient = nil
                     do {
-                        let (items,message) = try decoded.get(); templates = items; warning = message
+                        let (items,message) = try decoded.get(); templates = items; warning = message; catalogueLoadedAt = now()
                         if !templates.contains(where:{ $0.id == self.selection }) { selection = nil }
                     } catch { loadError = error.localizedDescription }
                 }

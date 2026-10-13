@@ -174,19 +174,24 @@ fn bounded_read(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
 }
 
 fn relative(path: &str, allow_root: bool) -> Result<PathBuf, String> {
-    if allow_root && path == "." {
+    if path.is_empty() && allow_root {
         return Ok(PathBuf::new());
     }
-    if path.is_empty()
-        || path.contains('\\')
-        || path.contains('\0')
-        || !Path::new(path)
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
-    {
-        return Err("Template declares a path outside its project".into());
+    if path.is_empty() || path.contains('\\') || path.contains('\0') {
+        return Err("Template declares an invalid project path".into());
     }
-    Ok(PathBuf::from(path))
+    let mut normalized = PathBuf::new();
+    for part in Path::new(path).components() {
+        match part {
+            Component::Normal(name) => normalized.push(name),
+            Component::CurDir => {}
+            _ => return Err("Template declares a path outside its project".into()),
+        }
+    }
+    if normalized.as_os_str().is_empty() && !allow_root {
+        return Err("Template entry file is missing".into());
+    }
+    Ok(normalized)
 }
 
 fn checked_child(root: &Path, path: &Path) -> Result<PathBuf, String> {
@@ -379,7 +384,7 @@ mod tests {
     }
     #[test]
     fn exact_declared_entry_all_starter_files_and_assets() {
-        let temp = fixture("starter", "chapters/main.typ");
+        let temp = fixture("./starter/", "./chapters/main.typ");
         let source = b"// exact starter\n#import \"@preview/fixture:1.0.0\": *\n#include \"../appendix.typ\"\n";
         temp.file("starter/chapters/main.typ", source);
         temp.file("starter/appendix.typ", "= Café 日本".as_bytes());
@@ -413,6 +418,24 @@ mod tests {
             "= Café 日本".as_bytes()
         );
     }
+    #[test]
+    fn root_templates_accept_empty_or_dot_directory() {
+        let spec = checked_spec("fixture", "1.0.0").unwrap();
+        for path in ["", ".", "./"] {
+            let temp = fixture(path, "./main.typ");
+            temp.file("main.typ", b"= Root starter");
+            let result = snapshot(&temp.0, &spec).unwrap();
+            assert_eq!(result["entry"], "main.typ");
+            assert_eq!(
+                STANDARD
+                    .decode(result["files"]["main.typ"].as_str().unwrap())
+                    .unwrap(),
+                b"= Root starter"
+            );
+        }
+        assert!(relative("", false).is_err());
+    }
+
     #[test]
     fn refuses_missing_entry_traversal_links_bad_source_and_wrong_versions() {
         let spec = checked_spec("fixture", "1.0.0").unwrap();
