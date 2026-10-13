@@ -5,6 +5,7 @@ import BlankCore
 @MainActor enum NativeUniverseAcceptance {
     static func run(original: DocumentWindow) {
         let fm = FileManager.default
+        let recents = NSDocumentController.shared.recentDocumentURLs
         let folder = fm.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("blank-universe-acceptance-"+UUID().uuidString)
         let cache = ProcessInfo.processInfo.environment["BLANK_PACKAGE_CACHE"].map { URL(fileURLWithPath:$0) } ?? AppController.dataDirectory.appendingPathComponent("cache/typst/packages")
         let package = cache.appendingPathComponent("preview/blank-universe-native-fixture/1.0.0")
@@ -27,6 +28,8 @@ import BlankCore
             for session in sessions { session.saveWork?.cancel(); session.watchers.forEach { $0.cancel() }; session.recoveryQueue.sync {} }
             try? fm.removeItem(at:folder); try? fm.removeItem(at:package.deletingLastPathComponent())
             if let savedIndex { try? savedIndex.write(to:index,options:.atomic) } else { try? fm.removeItem(at:index) }
+            NSDocumentController.shared.clearRecentDocuments(nil)
+            recents.reversed().forEach { NSDocumentController.shared.noteNewRecentDocumentURL($0) }
             original.window?.makeKeyAndOrderFront(nil)
         }
         do {
@@ -40,7 +43,7 @@ import BlankCore
             let icon = Data("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\"><rect width=\"20\" height=\"20\" fill=\"blue\"/></svg>".utf8)
             try write("starter/assets/icon.svg",icon)
             let unused = Data([0,255,7]); try write("starter/assets/unused.bin",unused)
-            let record: [String:Any] = ["name":"blank-universe-native-fixture","version":"1.0.0","description":"Unicode Café template","authors":["Fixture author"],"categories":["book"],"keywords":["acceptance"],"template":["path":"starter","entrypoint":"chapters/main.typ"]]
+            let record: [String:Any] = ["name":"blank-universe-native-fixture","version":"1.0.0","description":"Unicode Café template","authors":["Fixture author"],"categories":["book"],"keywords":["acceptance"],"license":"MIT","repository":"https://example.org/fixture","compiler":"0.15.0","updatedAt":1789379262,"template":["path":"starter","entrypoint":"chapters/main.typ"]]
             try JSONSerialization.data(withJSONObject:[record]).write(to:index,options:.atomic)
             var clock = Date()
             let library = UniverseLibrary(now:{ clock })
@@ -59,14 +62,61 @@ import BlankCore
             wait("Catalogue can load another expired snapshot") { !library.loading }
             let item = library.templates[0]
             check(item.version == "1.0.0" && item.matches("café") && item.matches("book") && item.matches("fixture author") && !item.matches("unmatched"),"Search covers name, description, author and category")
+            check(item.license == "MIT" && item.repositoryURL?.host == "example.org" && item.compiler == "0.15.0" && item.updatedAt == item.firstReleasedAt,"About metadata retains license, repository, compiler and release dates")
+            let thumbnailItem = try JSONDecoder().decode(UniverseTemplate.self,from:JSONSerialization.data(withJSONObject: ["name":"thumbnail-fixture","version":"1.0.0","description":"","authors":[],"categories":[],"keywords":[],"thumbnail":true]))
+            var callbacks: [(Result<Data,Error>) -> Void] = [], cancellations = 0
+            let thumbnails = UniverseThumbnails(fetch:{ url,complete in
+                check(url.absoluteString == "https://packages.typst.org/preview/thumbnails/thumbnail-fixture-1.0.0-small.webp","Thumbnail requests use the official published endpoint")
+                callbacks.append(complete); return { cancellations += 1 }
+            })
+            thumbnails.show(thumbnailItem); thumbnails.show(thumbnailItem)
+            check(callbacks.count == 1,"Visible thumbnail requests are deduplicated")
+            thumbnails.hide(thumbnailItem)
+            check(cancellations == 1,"Offscreen thumbnails cancel their request")
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes:nil,pixelsWide:4,pixelsHigh:8,bitsPerSample:8,samplesPerPixel:4,hasAlpha:true,isPlanar:false,colorSpaceName:.deviceRGB,bytesPerRow:0,bitsPerPixel:0)!
+            let png = bitmap.representation(using:.png,properties:[:])!
+            callbacks[0](.success(png))
+            RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+            check(thumbnails.image(thumbnailItem) == nil,"Cancelled thumbnail completions cannot install stale images")
+            thumbnails.show(thumbnailItem); callbacks[1](.success(png))
+            wait("A visible thumbnail decodes asynchronously") { thumbnails.image(thumbnailItem) != nil }
+            thumbnails.hide(thumbnailItem); thumbnails.show(thumbnailItem)
+            check(callbacks.count == 2 && thumbnails.image(thumbnailItem)?.size == NSSize(width:4,height:8),"Cached thumbnails preserve aspect ratio without another download")
+            thumbnails.show(item)
+            check(callbacks.count == 2,"Templates without a published thumbnail make no image request")
+            thumbnails.cancelAll()
+            let readme = UniverseReadmeBlock.parse("# Title\n\nSome **bold**.\n\n- One\n- Two\n\n```typst\n#let x = 1\n```\n\n| Name | Value |\n| --- | --- |\n| Font | Roboto |")
+            check(readme.first?.heading == 1 && readme.filter { $0.marker == "•" }.count == 2 && readme.contains { $0.code && String($0.text.characters).contains("#let x = 1") },"Inline Readme preserves Markdown headings, paragraphs, lists and literal code")
+            check(readme.last?.rows.count == 2 && readme.last?.rows[1].cells.map { String($0.characters) } == ["Font","Roboto"],"Readme tables retain rows and cells for native Grid rendering")
+            let pagesDocument = PDFDocument()
+            for _ in 0..<3 { pagesDocument.insert(PDFPage(),at:pagesDocument.pageCount) }
+            let pages = UniversePreviewPages(data:pagesDocument.dataRepresentation()!)
+            pages.move(-1); check(pages.index == 0 && pages.count == 3,"A preview starts on its first page and clamps previous navigation")
+            pages.move(1); check(pages.index == 1,"The native pager advances by one page")
+            pages.move(100); check(pages.index == 2,"The pager clamps at the final page")
             let locals = try TemplateLibrary(root:folder.appendingPathComponent("library"))
             let chooser = TemplateGalleryWindow(library:locals); gallery = chooser
+            let coordinator = TemplateCollection.Coordinator(library:locals,owner:chooser)
+            let grid = NSCollectionView(frame:NSRect(x:0,y:0,width:400,height:300))
+            grid.collectionViewLayout = NSCollectionViewFlowLayout(); grid.dataSource = coordinator
+            grid.register(TemplateTile.self,forItemWithIdentifier:.init("Template")); grid.reloadData()
+            let displayedCount = coordinator.collectionView(grid,numberOfItemsInSection:0)
             chooser.query = "thesis"
+            let oldCell = coordinator.collectionView(grid,itemForRepresentedObjectAt:IndexPath(item:displayedCount-1,section:0))
+            check(oldCell.textField?.stringValue == locals.templates.last?.name,"Pending native cell requests retain their displayed snapshot while search changes")
             check(chooser.visibleLocalTemplates.count == 1 && chooser.visibleLocalTemplates[0].name == "Thesis","Local templates use the shared search convention")
             chooser.source = .universe
             check(!chooser.validateToolbarItem(NSToolbarItem(itemIdentifier:.init("edit"))) && !chooser.validateMenuItem(NSMenuItem(title:"Duplicate",action:#selector(TemplateGalleryWindow.duplicate(_:)),keyEquivalent:"")),"Universe does not expose local editing or deletion actions")
             chooser.universe.cancelBrowsing()
+            chooser.query = ""; chooser.universe.templates = library.templates
+            chooser.universe.selection = item.id; chooser.source = .local
+            chooser.query = "No matching Universe template"; chooser.source = .universe
+            check(chooser.universe.selection == nil,"Changing shared search in Local clears an excluded Universe selection before returning")
+            chooser.universe.cancelBrowsing(); chooser.query = ""
             library.selection = item.id
+            library.requestPreview(); library.requestPreview()
+            check(library.previewing,"Repeated details updates preserve the selected preview request")
+            library.cancelPreview(); library.requestPreview()
             wait("Selected Universe starter compiles its cached pinned import and assets") { !library.previewing }
             check(library.previewError == nil && library.pdf(item).flatMap({ PDFDocument(data:$0) })?.pageCount == 1 && library.project(item)?.documentation == "Fixture documentation","Details provide a real PDF, version and documentation")
             var first: DocumentSession?

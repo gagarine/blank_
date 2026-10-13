@@ -9,13 +9,13 @@ import BlankCore
     @Published var source: Source = .local {
         didSet {
             window?.toolbar?.validateVisibleItems()
-            if source == .universe { universe.load() } else { universe.cancelBrowsing() }
+            if source == .universe { universe.load(); universe.requestPreview() } else { universe.cancelBrowsing() }
         }
     }
     @Published var query = "" {
         didSet {
             window?.toolbar?.validateVisibleItems()
-            if source == .universe, let item = universe.selected, !item.matches(query) { universe.selection = nil }
+            if let item = universe.selected, !item.matches(query) { universe.selection = nil }
         }
     }
     let universe = UniverseLibrary()
@@ -42,7 +42,7 @@ import BlankCore
     }
     required init?(coder: NSCoder) { fatalError() }
     func windowWillClose(_ notification: Notification) { universe.cancelBrowsing() }
-    func windowDidBecomeKey(_ notification: Notification) { perform { try library.reload() }; if source == .universe { universe.load() } }
+    func windowDidBecomeKey(_ notification: Notification) { perform { try library.reload() }; if source == .universe { universe.load(); universe.requestPreview() } }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.init("add"),.init("preview"),.init("edit"),.init("actions"),.flexibleSpace] }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.init("add"),.flexibleSpace,.init("preview"),.init("edit"),.init("actions")] }
     func toolbar(_ toolbar: NSToolbar,itemForItemIdentifier id: NSToolbarItem.Identifier,willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
@@ -168,7 +168,7 @@ struct TemplateGallery: View {
             HStack(spacing:16) {
                 Picker("Template source",selection:$owner.source) {
                     ForEach(TemplateGalleryWindow.Source.allCases,id:\.self) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented).frame(width:200)
+                }.pickerStyle(.segmented).labelsHidden().frame(width:200)
                 TextField("Search templates",text:$owner.query).textFieldStyle(.roundedBorder).accessibilityLabel("Search templates")
                 if owner.source == .universe {
                     Button { universe.load(refresh:true) } label: { Image(systemName:"arrow.clockwise") }.help("Refresh Universe catalogue").disabled(universe.loading)
@@ -246,8 +246,8 @@ struct TemplateCollection: NSViewRepresentable {
     }
     func updateNSView(_ view: NSScrollView,context: Context) {
         let coordinator = context.coordinator
-        if coordinator.generation != library.generation || coordinator.query != owner.query { coordinator.generation = library.generation; coordinator.query = owner.query; coordinator.collection?.reloadData() }
-        if let index = owner.visibleLocalTemplates.firstIndex(where:{ $0.id == library.selection }) {
+        if coordinator.generation != library.generation || coordinator.query != owner.query { coordinator.generation = library.generation; coordinator.query = owner.query; coordinator.items = owner.visibleLocalTemplates; coordinator.collection?.reloadData() }
+        if let index = coordinator.items.firstIndex(where:{ $0.id == library.selection }) {
             let path = IndexPath(item:index,section:0)
             if coordinator.collection?.selectionIndexPaths != [path] { coordinator.collection?.selectItems(at:[path],scrollPosition:[]) }
         } else { coordinator.collection?.selectionIndexPaths = [] }
@@ -258,11 +258,15 @@ struct TemplateCollection: NSViewRepresentable {
         weak var collection: TemplateGrid?
         var generation = -1
         var query = ""
-        init(library: TemplateLibrary,owner: TemplateGalleryWindow) { self.library = library; self.owner = owner }
-        func collectionView(_ collectionView: NSCollectionView,numberOfItemsInSection section: Int) -> Int { owner?.visibleLocalTemplates.count ?? 0 }
+        // AppKit may ask for an already displayed index before SwiftUI applies
+        // a search update. Keep count, cells and selection on one snapshot.
+        var items: [DocumentTemplate]
+        init(library: TemplateLibrary,owner: TemplateGalleryWindow) { self.library = library; self.owner = owner; items = owner.visibleLocalTemplates }
+        func collectionView(_ collectionView: NSCollectionView,numberOfItemsInSection section: Int) -> Int { items.count }
         func collectionView(_ collectionView: NSCollectionView,itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
             let tile = collectionView.makeItem(withIdentifier:.init("Template"),for:indexPath) as! TemplateTile
-            let item = owner!.visibleLocalTemplates[indexPath.item]
+            guard items.indices.contains(indexPath.item) else { return tile }
+            let item = items[indexPath.item]
             tile.imageView?.image = library.image(item) ?? NSImage(systemSymbolName:"doc",accessibilityDescription:"Preparing preview")
             tile.textField?.stringValue = item.name; tile.view.setAccessibilityLabel(item.name+" template")
             tile.view.toolTip = library.renderErrors[item.id] ?? item.name
@@ -270,7 +274,7 @@ struct TemplateCollection: NSViewRepresentable {
             return tile
         }
         func collectionView(_ collectionView: NSCollectionView,didSelectItemsAt indexPaths: Set<IndexPath>) {
-            if let index = indexPaths.first?.item, let items = owner?.visibleLocalTemplates, items.indices.contains(index) { library.selection = items[index].id }
+            if let index = indexPaths.first?.item, items.indices.contains(index) { library.selection = items[index].id }
         }
     }
 }
@@ -290,8 +294,8 @@ final class TemplateGrid: NSCollectionView {
         DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(self) }
     }
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard let path = indexPathForItem(at:convert(event.locationInWindow,from:nil)), let owner, owner.visibleLocalTemplates.indices.contains(path.item) else { return nil }
-        selectItems(at:[path],scrollPosition:[]); owner.library.selection = owner.visibleLocalTemplates[path.item].id
+        guard let path = indexPathForItem(at:convert(event.locationInWindow,from:nil)), let owner, let items = (dataSource as? TemplateCollection.Coordinator)?.items, items.indices.contains(path.item) else { return nil }
+        selectItems(at:[path],scrollPosition:[]); owner.library.selection = items[path.item].id
         let menu = NSMenu()
         for (title,action) in [("Create Document",#selector(TemplateGalleryWindow.createDocument(_:))),("Preview",#selector(TemplateGalleryWindow.preview(_:))),("Edit",#selector(TemplateGalleryWindow.edit(_:))),("Duplicate",#selector(TemplateGalleryWindow.duplicate(_:))),("Move to Trash",#selector(TemplateGalleryWindow.trash(_:)))] {
             let item = NSMenuItem(title:title,action:action,keyEquivalent:""); item.target = owner; menu.addItem(item)

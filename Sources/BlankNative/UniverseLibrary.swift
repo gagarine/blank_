@@ -9,6 +9,19 @@ struct UniverseTemplate: Identifiable, Decodable, Equatable {
     let authors: [String]
     let categories: [String]
     let keywords: [String]
+    let license: String?
+    let repository: String?
+    let compiler: String?
+    let updatedAt: Double?
+    let firstReleasedAt: Double?
+    var repositoryURL: URL? {
+        guard let repository, let url = URL(string:repository), ["https","http"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        return url
+    }
+    let thumbnail: Bool?
+    var thumbnailURL: URL? {
+        thumbnail == true ? URL(string:"https://packages.typst.org/preview/thumbnails/\(name)-\(version)-small.webp") : nil
+    }
     var id: String { name+":"+version }
     var documentationURL: URL { URL(string:"https://typst.app/universe/package/\(name)/\(version)/")! }
     func matches(_ query: String) -> Bool {
@@ -20,6 +33,7 @@ final class UniverseProject: NSObject, @unchecked Sendable {
     let entry: String
     let files: [String:Data]
     let documentation: String?
+    let readmeBlocks: [UniverseReadmeBlock]
     var cost: Int { files.values.reduce(0) { $0+$1.count } }
     init(reply: [String:Any]) throws {
         guard let entry = reply["entry"] as? String, let encoded = reply["files"] as? [String:String], encoded.count <= 10_000 else { throw Self.failure("The template returned no project.") }
@@ -33,6 +47,7 @@ final class UniverseProject: NSObject, @unchecked Sendable {
         }
         guard Self.safePath(entry), entry.lowercased().hasSuffix(".typ"), files[entry] != nil else { throw Self.failure("The template entry file is missing.") }
         self.entry = entry; self.files = files; documentation = reply["documentation"] as? String
+        readmeBlocks = documentation.map(UniverseReadmeBlock.parse) ?? []
     }
     private static func failure(_ message: String) -> NSError { NSError(domain:"Universe",code:1,userInfo:[NSLocalizedDescriptionKey:message]) }
     static func safePath(_ path: String) -> Bool {
@@ -62,7 +77,7 @@ final class UniverseProject: NSObject, @unchecked Sendable {
 
 @MainActor final class UniverseLibrary: ObservableObject {
     @Published var templates: [UniverseTemplate] = []
-    @Published var selection: String? { didSet { if selection != oldValue { requestPreview() } } }
+    @Published var selection: String? { didSet { if selection != oldValue { selectedProject = nil; requestPreview() } } }
     @Published var loading = false
     @Published var loadError: String?
     @Published var warning: String?
@@ -71,6 +86,9 @@ final class UniverseProject: NSObject, @unchecked Sendable {
     @Published var creating = false
     @Published var createError: String?
     @Published var generation = 0
+    let thumbnails = UniverseThumbnails()
+    private var requestedPreviewID: String?
+    private var selectedProject: (id:String,project:UniverseProject)?
     private let now: () -> Date
     private var catalogueLoadedAt: Date?
     private var catalogueClient: TypstCompiler?
@@ -86,7 +104,7 @@ final class UniverseProject: NSObject, @unchecked Sendable {
         projects.countLimit = 2; projects.totalCostLimit = 64*1024*1024
         pdfs.countLimit = 6; pdfs.totalCostLimit = 32*1024*1024
     }
-    func project(_ item: UniverseTemplate) -> UniverseProject? { projects.object(forKey:item.id as NSString) }
+    func project(_ item: UniverseTemplate) -> UniverseProject? { selectedProject?.id == item.id ? selectedProject?.project : projects.object(forKey:item.id as NSString) }
     func pdf(_ item: UniverseTemplate) -> Data? { pdfs.object(forKey:item.id as NSString).map { $0 as Data } }
     func load(refresh: Bool = false) {
         guard !loading, refresh || templates.isEmpty || catalogueLoadedAt.map({ now().timeIntervalSince($0) >= 24*60*60 }) != false else { return }
@@ -114,10 +132,10 @@ final class UniverseProject: NSObject, @unchecked Sendable {
     }
     func cancelBrowsing() {
         catalogueToken = UUID(); catalogueClient?.cancel(); catalogueClient = nil; loading = false
-        cancelPreview(); cancelCreation()
+        cancelPreview(); cancelCreation(); thumbnails.cancelAll()
     }
     func cancelPreview() {
-        previewToken = UUID(); previewClient?.cancel(); previewClient = nil; previewing = false
+        previewToken = UUID(); previewClient?.cancel(); previewClient = nil; previewing = false; requestedPreviewID = nil
     }
     private func fetch(_ item: UniverseTemplate, client: TypstCompiler, completion: @escaping (Result<UniverseProject,Error>) -> Void) {
         if let cached = project(item) { completion(.success(cached)); return }
@@ -126,15 +144,21 @@ final class UniverseProject: NSObject, @unchecked Sendable {
             worker.async { [self] in
                 let decoded = Result { try UniverseProject(reply:result.get()) }
                 DispatchQueue.main.async { [weak self = self] in
-                    if let value = try? decoded.get() { self?.projects.setObject(value,forKey:item.id as NSString,cost:value.cost) }
+                    if let value = try? decoded.get() {
+                        self?.projects.setObject(value,forKey:item.id as NSString,cost:value.cost)
+                        if self?.selection == item.id { self?.selectedProject = (item.id,value) }
+                    }
                     completion(decoded)
                 }
             }
         }
     }
     func requestPreview() {
+        guard let item = selected else { cancelPreview(); previewError = nil; return }
+        guard !previewing || requestedPreviewID != item.id else { return }
         cancelPreview(); previewError = nil
-        guard let item = selected, pdf(item) == nil else { return }
+        guard pdf(item) == nil || project(item) == nil else { return }
+        requestedPreviewID = item.id
         previewing = true
         let token = UUID(); previewToken = token
         let client = TypstCompiler(); previewClient = client
@@ -143,7 +167,8 @@ final class UniverseProject: NSObject, @unchecked Sendable {
             switch result {
             case let .failure(error): finishPreview(token,error:error.localizedDescription)
             case let .success(project):
-                generation += 1
+                selectedProject = (item.id,project); generation += 1
+                if pdf(item) != nil { finishPreview(token,error:nil); return }
                 worker.async { [self] in
                     let folder = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("blank-universe-"+UUID().uuidString)
                     let prepared = Result { () throws -> [String:String] in

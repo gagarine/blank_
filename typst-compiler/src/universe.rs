@@ -118,6 +118,15 @@ fn catalog_at(cache: &Path, downloader: &dyn Downloader, refresh: bool) -> Resul
 fn parse_catalog(data: &[u8]) -> Result<Vec<Value>, String> {
     let records: Vec<Value> =
         serde_json::from_slice(data).map_err(|e| format!("Invalid Universe catalogue: {e}"))?;
+    let mut first_released = BTreeMap::<String, u64>::new();
+    for record in &records {
+        if let (Some(name), Some(date)) = (record["name"].as_str(), record["updatedAt"].as_u64()) {
+            first_released
+                .entry(name.to_owned())
+                .and_modify(|first| *first = (*first).min(date))
+                .or_insert(date);
+        }
+    }
     let mut latest = BTreeMap::<String, (PackageVersion, Value)>::new();
     for record in records {
         if !record["template"].is_object() {
@@ -151,6 +160,10 @@ fn parse_catalog(data: &[u8]) -> Result<Vec<Value>, String> {
             "authors":record["authors"].as_array().cloned().unwrap_or_default(),
             "categories":record["categories"].as_array().cloned().unwrap_or_default(),
             "keywords":record["keywords"].as_array().cloned().unwrap_or_default(),
+            "thumbnail":record["template"]["thumbnail"].is_string(),
+            "license":record["license"].as_str(), "repository":record["repository"].as_str(),
+            "compiler":record["compiler"].as_str(), "updatedAt":record["updatedAt"].as_u64(),
+            "firstReleasedAt":first_released.get(name),
         });
         latest.insert(name.to_owned(), (spec.version, value));
     }
@@ -340,8 +353,8 @@ mod tests {
     }
     fn index() -> Vec<u8> {
         serde_json::to_vec(&json!([
-            {"name":"fixture","version":"0.9.0","description":"Old","template":{}},
-            {"name":"fixture","version":"0.10.0","description":"Unicode Café 日本","template":{}},
+            {"name":"fixture","version":"0.9.0","description":"Old","updatedAt":100,"template":{}},
+            {"name":"fixture","version":"0.10.0","description":"Unicode Café 日本","updatedAt":200,"license":"MIT","repository":"https://example.org/fixture","compiler":"0.15.0","template":{"thumbnail":"preview.png"}},
             {"name":"fixture","version":"0.11.0","compiler":"99.0.0","template":{}},
             {"name":"library","version":"1.0.0"},
             {"name":"../outside","version":"1.0.0","template":{}},
@@ -360,6 +373,13 @@ mod tests {
         assert_eq!(first["templates"].as_array().unwrap().len(), 2);
         assert_eq!(first["templates"][0]["version"], "0.10.0");
         assert_eq!(first["templates"][0]["description"], "Unicode Café 日本");
+        let template = &first["templates"][0];
+        assert_eq!(template["license"], "MIT");
+        assert_eq!(template["repository"], "https://example.org/fixture");
+        assert_eq!(template["compiler"], "0.15.0");
+        assert_eq!(template["updatedAt"], 200);
+        assert_eq!(template["firstReleasedAt"], 100);
+        assert_eq!(template["thumbnail"], true);
         *download.response.lock().unwrap() = Err(io::Error::other("offline"));
         assert_eq!(catalog_at(&temp.0, &download, false).unwrap(), first);
         assert_eq!(download.calls.load(Ordering::Relaxed), 1);
