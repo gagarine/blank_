@@ -337,7 +337,24 @@ struct Recovery: Codable {
     }
     static func dependencyTarget(_ path: String,root: URL) throws -> URL {
         let target = root.appendingPathComponent(path).standardizedFileURL
-        guard target.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path+"/") else { throw CocoaError(.fileWriteNoPermission) }
+        // Foundation does not reliably resolve aliases or parent symlinks when
+        // the final file is new. Resolve the nearest existing ancestor first,
+        // then append its missing components consistently for root and target.
+        func resolvedLocation(_ url: URL) throws -> URL {
+            var ancestor = url.standardizedFileURL, missing: [String] = []
+            let fm = FileManager.default
+            while !fm.fileExists(atPath:ancestor.path) {
+                // A dangling symlink is not an ordinary missing directory.
+                guard (try? fm.destinationOfSymbolicLink(atPath:ancestor.path)) == nil else { throw CocoaError(.fileWriteNoPermission) }
+                let parent = ancestor.deletingLastPathComponent()
+                guard parent != ancestor else { throw CocoaError(.fileWriteNoPermission) }
+                missing.append(ancestor.lastPathComponent); ancestor = parent
+            }
+            return missing.reversed().reduce(ancestor.resolvingSymlinksInPath().standardizedFileURL) { $0.appendingPathComponent($1) }
+        }
+        let resolvedRoot = try resolvedLocation(root)
+        let resolvedTarget = try resolvedLocation(target)
+        guard resolvedTarget.path.hasPrefix(resolvedRoot.path+"/") else { throw CocoaError(.fileWriteNoPermission) }
         return target
     }
     func referencedAssets() -> Set<String> {

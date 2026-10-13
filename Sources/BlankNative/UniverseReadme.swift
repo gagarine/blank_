@@ -40,12 +40,13 @@ struct UniverseReadmeBlock: Identifiable {
             let id = components.first?.identity ?? 0
             if blocks.last?.id == id { blocks[blocks.count-1].text.append(content); continue }
             var block = Self(id:id,text:content)
-            let ordered = components.contains { $0.kind == .orderedList }
+            let nearestList = components.first { $0.kind == .orderedList || $0.kind == .unorderedList }
+            let nearestItem = components.first { if case .listItem = $0.kind { return true }; return false }
+            if let nearestItem, case let .listItem(ordinal) = nearestItem.kind { block.marker = nearestList?.kind == .orderedList ? "\(ordinal)." : "•" }
             for component in components {
                 switch component.kind {
                 case let .header(level): block.heading = level
                 case .codeBlock: block.code = true
-                case let .listItem(ordinal): block.marker = ordered ? "\(ordinal)." : "•"
                 case .orderedList, .unorderedList: block.indent += 1
                 default: break
                 }

@@ -88,6 +88,8 @@ import BlankCore
             let readme = UniverseReadmeBlock.parse("# Title\n\nSome **bold**.\n\n- One\n- Two\n\n```typst\n#let x = 1\n```\n\n| Name | Value |\n| --- | --- |\n| Font | Roboto |")
             check(readme.first?.heading == 1 && readme.filter { $0.marker == "•" }.count == 2 && readme.contains { $0.code && String($0.text.characters).contains("#let x = 1") },"Inline Readme preserves Markdown headings, paragraphs, lists and literal code")
             check(readme.last?.rows.count == 2 && readme.last?.rows[1].cells.map { String($0.characters) } == ["Font","Roboto"],"Readme tables retain rows and cells for native Grid rendering")
+            let nested = UniverseReadmeBlock.parse("1. Parent\n   - Child\n     1. Grandchild\n   - Second child")
+            check(nested.map(\.marker) == ["1.","•","1.","•"] && nested.map(\.indent) == [1,2,3,2],"Mixed nested Readme lists use their nearest item and list kind")
             let pagesDocument = PDFDocument()
             for _ in 0..<3 { pagesDocument.insert(PDFPage(),at:pagesDocument.pageCount) }
             let pages = UniversePreviewPages(data:pagesDocument.dataRepresentation()!)

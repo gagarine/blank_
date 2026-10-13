@@ -3,7 +3,7 @@ import BlankCore
 
 @MainActor enum FileAcceptance {
     static func run() {
-        let fm = FileManager.default, folder = fm.temporaryDirectory.appendingPathComponent("blank-files-"+UUID().uuidString)
+        let fm = FileManager.default, folder = URL(fileURLWithPath:"/tmp").appendingPathComponent("blank-files-"+UUID().uuidString)
         let recentDocuments = NSDocumentController.shared.recentDocumentURLs
         var sessions: [DocumentSession] = []
         defer {
@@ -16,6 +16,19 @@ import BlankCore
         do {
             let root = folder.appendingPathComponent("original"), copy = folder.appendingPathComponent("copy")
             try fm.createDirectory(at:root.appendingPathComponent("chapters"),withIntermediateDirectories:true); try fm.createDirectory(at:copy,withIntermediateDirectories:true)
+            let privateRoot = URL(fileURLWithPath:"/private"+root.path)
+            let newTarget = try DocumentSession.dependencyTarget("chapters/new.typ",root:privateRoot)
+            check(newTarget.path == privateRoot.appendingPathComponent("chapters/new.typ").path && !fm.fileExists(atPath:newTarget.path),"Dependency preflight accepts new files through macOS's /private/tmp alias")
+            try "New source café".write(to:newTarget,atomically:true,encoding:.utf8)
+            check(try String(contentsOf:root.appendingPathComponent("chapters/new.typ"),encoding:.utf8) == "New source café","Alias preflight writes inside the selected project")
+            do { _ = try DocumentSession.dependencyTarget("../outside.typ",root:privateRoot); preconditionFailure("Escaping dependency accepted") } catch {}
+            try fm.createSymbolicLink(at:root.appendingPathComponent("outside"),withDestinationURL:copy)
+            do { _ = try DocumentSession.dependencyTarget("outside/new.typ",root:privateRoot); preconditionFailure("Escaping symlink accepted") } catch {}
+            try fm.createSymbolicLink(at:root.appendingPathComponent("dangling"),withDestinationURL:copy.appendingPathComponent("missing"))
+            do { _ = try DocumentSession.dependencyTarget("dangling/new.typ",root:privateRoot); preconditionFailure("Dangling symlink accepted") } catch {}
+            let missingRoot = root.appendingPathComponent("future/project")
+            check(try DocumentSession.dependencyTarget("new.typ",root:missingRoot).path == missingRoot.appendingPathComponent("new.typ").path,"Dependency preflight accepts a not-yet-created project directory")
+            check(!fm.fileExists(atPath:copy.appendingPathComponent("new.typ").path),"Alias preflight still rejects traversal and symlinks outside the project")
             let main = root.appendingPathComponent("main.typ"), child = root.appendingPathComponent("chapters/one.typ")
             try "#let helper() = [Imported]".write(to:root.appendingPathComponent("tools.typ"),atomically:true,encoding:.utf8)
             try "#import \"tools.typ\": *\n// #image(\"example-not-an-asset.png\")\n#include \"chapters/one.typ\"\n\nOriginal".write(to:main,atomically:true,encoding:.utf8)

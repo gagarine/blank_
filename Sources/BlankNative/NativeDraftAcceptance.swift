@@ -12,6 +12,20 @@ import BlankCore
         let limit = Date().addingTimeInterval(5)
         while !condition() && Date() < limit { RunLoop.main.run(until:Date().addingTimeInterval(0.01)) }
     }
+    static func waitForSnapshot(_ document: NativeDocument) {
+        // Modern NSDocument saves serialize their file work separately from
+        // UI activities. Wait behind the launch autosave before touching files.
+        var finished = false
+        document.performAsynchronousFileAccess { completion in
+            MainActor.assumeIsolated {
+                completion()
+                finished = true
+            }
+        }
+        let limit = Date().addingTimeInterval(15)
+        while !finished && Date() < limit { RunLoop.main.run(until:Date().addingTimeInterval(0.01)) }
+        check(finished,"Restored draft completes its native file access")
+    }
     static func buttons(_ view: NSView?) -> [NSButton] {
         guard let view else { return [] }
         return (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons($0) }
@@ -88,9 +102,12 @@ import BlankCore
         print(String(format:"Two small-draft journal rescans (windows already open): %.1f ms wall, %.1f ms CPU; acceptance-process RSS %.1f MiB",Date().timeIntervalSince(start)*1000,(ResourceMetrics.cpuSeconds()-cpu)*1000,ResourceMetrics.residentMiB()))
         check(Set(app.controllers.map { $0.session.id }) == ids && app.controllers.count == 2,"Repeated restoration preserves session identity without duplicate windows")
         let document = app.controllers.first { $0.session === closed }!.nativeDocument
-        wait { document.fileURL != nil }
+        waitForSnapshot(document)
         check(document.fileURL != nil,"Restored draft writes its native UTF-8 snapshot (\(closed.error ?? "no error"))")
         let snapshot = document.fileURL!
+        check((try? String(contentsOf:snapshot,encoding:.utf8)) == closedSource,"Restored native snapshot contains the exact entry source")
+        check((try? String(contentsOf:snapshot.deletingLastPathComponent().appendingPathComponent("child.typ"),encoding:.utf8)) == childSource,"Restored native snapshot retains the included file")
+        check((try? Data(contentsOf:snapshot.deletingLastPathComponent().appendingPathComponent("note.txt"))) == closed.assets["note.txt"],"Restored native snapshot retains the project asset")
         try! "Older native snapshot".write(to:snapshot,atomically:true,encoding:.utf8)
         let native = NativeDocument(); try! native.read(from:snapshot,ofType:"org.typst.source")
         check(native.session.id == closed.id && native.session.root == nil && native.session.buffers[native.session.entry]?.source == closedSource && native.isDraft,"AppKit snapshot reopening uses the canonical project and original draft identity")
