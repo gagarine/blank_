@@ -1,16 +1,18 @@
 # blank_
 
-A quiet native macOS editor for [Typst](https://typst.app). **Write** lets you edit formatted text, **Source** gives you direct access to Typst, and **Preview** shows the typeset PDF. All three are views of the same document.
+A quiet macOS editor for [Typst](https://typst.app), for writing documents and turning them into polished PDFs. Edit formatted text, work directly with the source, or preview the finished pages—all in one app.
 
-Your work stays in ordinary local `.typ` files, including multi-file projects with includes, imports and assets. Automatic draft saving helps keep your work safe.
+## Features
 
-Typst Universe packages download automatically on first use and remain available offline in `~/Library/Caches/blank_/typst/packages`. **Settings → Typst packages → Clear Package Cache** removes blank_’s downloads; packages are downloaded again when needed. Packages installed by the Typst CLI or bundled in a project's `packages` directory remain available and are not removed.
-
-**File → Templates…** offers **Local** and **Universe** with a shared search field. Universe lists the latest version compatible with the bundled Typst compiler and loads published thumbnails for visible rows into a bounded memory cache. Select a template to load its preview automatically. Native previous/next controls show one complete page at a time; Readme and About appear directly below, including authors, license, release dates, minimum Typst version and repository when supplied by Universe. **Create Document** copies every starter file and asset into an independent draft, preserving its declared entry and version-pinned imports. **Save as Template…** adds your copy to Local. New Document stays empty.
-
-Universe catalogue and packages share the cache above. The catalogue refreshes after 24 hours, can be refreshed manually, and falls back to the saved catalogue when offline. Downloaded templates and local templates work offline when their imports are cached. Clear Package Cache also clears the saved catalogue. Catalogue, preview and creation work can be cancelled; preview failure still allows creating an editable copy.
-
-Zotero integration supports reference insertion and refresh, BibLaTeX and Hayagriva bibliographies, custom CSL styles and bibliography conversion.
+- **Three views, one document.** Switch between **Write**, **Source** and **Preview**, with shared editing history and Undo/Redo.
+- **Comfortable writing.** Format text, add headings and lists, insert images, and edit tables directly in your document. Collapse code blocks when you want to concentrate on the prose.
+- **An outline that helps you move around.** Navigate headings, collapse sections, and drag sections to reorganize your writing.
+- **Search and page navigation.** Find text in your writing or PDF, browse page thumbnails, and use Contact Sheet to see several pages at once.
+- **Templates with previews.** Browse your own templates and Typst Universe in **File → Templates…**. See thumbnails, flip through preview pages, and read each template’s documentation and author information. Create your own editable copy or save a document as a reusable template.
+- **Local files and projects.** Keep your work in ordinary Typst files, with related documents and images together. Automatic draft saving and reopening help you pick up where you left off.
+- **References with Zotero.** Search your personal and group libraries, insert and refresh citations, and choose a bibliography style.
+- **PDF export and sharing.** Preview your pages as you write, then export a PDF or share it from the app.
+- **Automatic package downloads.** Typst packages download when needed and stay available offline. Remove the app’s downloads through **Settings → Typst packages → Clear Package Cache**.
 
 Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3** to switch views. For a guided tour, open **Help → Tutorial**.
 
@@ -20,11 +22,13 @@ Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3**
 
 Get the [latest release](https://github.com/gagarine/blank_/releases) for Apple Silicon. Current development builds require macOS 27 or newer; earlier releases may support older versions. Automatic updates are not available yet.
 
-Releases are not notarized. If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. [Apple’s instructions](https://support.apple.com/en-us/102445).
+If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. [Apple’s instructions](https://support.apple.com/en-us/102445).
 
 ## Development
 
 Built with SwiftUI, AppKit and the official Typst 0.15.1 parser and compiler. Local builds and checks require macOS 27 or newer, Swift 6 with a macOS 27 or newer SDK, Rust 1.98.1 (pinned) and Python 3.
+
+### Build and verification
 
 ```sh
 bash scripts/build.sh release  # omit release for debug
@@ -50,6 +54,16 @@ UI scenarios that depend on app-wide focus run in separate processes. The harnes
 
 Ordinary builds contain no acceptance fixtures. `BLANK_BUILD_CHECKS=1` adds verification targets and enables their `@testable` imports; scripts set it automatically. Verification executables run inside temporary app copies so native document APIs and bundled compiler lookup are real. Do not run their raw Swift executables against user data.
 
-[CI](.github/workflows/build-macos.yml) checks macOS 27 using GitHub’s `xcode-27` runner. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after the build and checks pass. Apps are ad-hoc signed; Intel support is unverified.
+### Packages and templates
+
+Packages and the Universe catalogue are cached in `~/Library/Caches/blank_/typst/packages`. Clear Package Cache removes this app-owned cache, including the catalogue, without removing packages installed by the Typst CLI or vendored in a project's `packages` directory.
+
+Universe uses the official index API and selects the latest version compatible with the bundled compiler. The catalogue refreshes after 24 hours or manually, with a saved-catalogue fallback offline. Published row thumbnails use a bounded memory cache; PDF previews compile on selection and display one page at a time. Readme and About use published documentation and metadata. Catalogue, preview and creation work can be cancelled; a failed preview does not prevent creating an editable copy.
+
+Create Document copies all starter files and assets, preserving the declared entry and version-pinned imports. Downloaded and local templates work offline when their imports are cached. New Document always starts empty. Zotero integration supports BibLaTeX and Hayagriva bibliographies, custom CSL styles and bibliography conversion.
+
+### Releases
+
+[CI](.github/workflows/build-macos.yml) checks macOS 27 using GitHub’s `xcode-27` runner. Publishing a `vX.Y.Z` release attaches the Apple Silicon app and checksum after the build and checks pass. Apps are ad-hoc signed and are not notarized; Intel support is unverified.
 
 [Issues](https://github.com/gagarine/blank_/issues) · [MIT](LICENSE) · Built with OpenAI Codex.
