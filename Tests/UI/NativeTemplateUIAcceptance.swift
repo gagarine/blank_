@@ -49,7 +49,8 @@ import BlankCore
         waitForNativeUI("Template Preview receives native key focus before Escape") { NSApp.isActive && sheet.isKeyWindow && NSApp.keyWindow === sheet }
         let escape = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:sheet.windowNumber,context:nil,characters:"\u{1b}",charactersIgnoringModifiers:"\u{1b}",isARepeat:false,keyCode:53)!
         _ = sheet.performKeyEquivalent(with:escape)
-        waitForNativeUI("Escape dismisses template Preview and returns to the gallery") { chooser.window?.attachedSheet == nil && NSApp.isActive && chooser.window?.isKeyWindow == true && NSApp.keyWindow === chooser.window }
+        waitForNativeUI("Template gallery regains native key focus after Escape") { chooser.window?.attachedSheet == nil && NSApp.isActive && chooser.window?.isKeyWindow == true && NSApp.keyWindow === chooser.window }
+        check(chooser.window?.attachedSheet == nil,"Escape dismisses template Preview and returns to the gallery")
         grid.keyDown(with:key(49," "))
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         guard let createSheet = chooser.window?.attachedSheet else { fatalError("Preview did not reopen") }

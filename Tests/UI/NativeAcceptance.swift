@@ -49,7 +49,6 @@ import BlankCore
         NativeFigureAcceptance.run(controller:controller)
         NativeBlockSourceAcceptance.run(controller:controller)
         NativeLabelAcceptance.run(controller:controller)
-        NativeReferenceAcceptance.run(controller:controller)
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
         // Foreground/pointer fixtures run once in their own acceptance process.

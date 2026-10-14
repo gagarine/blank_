@@ -54,7 +54,7 @@ if [[ "$mode" == background ]]; then
     for phase in prepare verify disabled-verify; do run "--draft-integration-$phase"; done
 else
     echo 'Running explicit interactive UI checks; the disposable test app will take focus.'
-    for suite in selection-style find paragraph-space template; do
+    for suite in selection-style find paragraph-space template reference; do
         export BLANK_DATA_DIR="$portable/$suite-data"; mkdir -p "$BLANK_DATA_DIR"
         run "--$suite-self-test"
     done

@@ -41,13 +41,22 @@ import BlankCore
         session.buffer.loadExternal(source)
         let controller = DocumentWindow(session:session)
         AppController.shared.controllers.append(controller)
+        NSApp.activate(ignoringOtherApps:true)
         controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
         defer {
             session.sheet = nil; session.saveWork?.cancel(); session.dirty = false
             controller.nativeDocument.updateChangeCount(.changeCleared)
             controller.window?.close(); original.window?.makeKeyAndOrderFront(nil)
         }
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        let foregroundDeadline = Date().addingTimeInterval(3)
+        while !(NSApp.isActive && controller.window?.isKeyWindow == true && session.editor != nil) && Date() < foregroundDeadline {
+            for _ in 0..<32 {
+                guard let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                NSApp.sendEvent(event)
+            }
+            RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+        }
+        check(NSApp.isActive && controller.window?.isKeyWindow == true,"Reference fixture has an active app and key native window")
         guard let editor = session.editor else { fatalError("Missing reference test editor") }
         let offset = source.utf8.count-"| after.".utf8.count
         session.buffer.selection = EditSelection(offset,offset+1); editor.refresh(reveal:true)
@@ -65,6 +74,7 @@ import BlankCore
                 }
                 RunLoop.main.run(until:Date().addingTimeInterval(0.01))
             }
+            if !condition() { print("Reference sheet diagnostic: sheet=\(controller.window?.attachedSheet != nil) binding=\(session.sheet as Any) active=\(NSApp.isActive) key=\(NSApp.keyWindow?.title as Any) responder=\(controller.window?.attachedSheet?.firstResponder as Any)") }
             check(condition(),"Reference fixture completes its native sheet transition")
         }
         func open() -> ReferenceLabelComboBox {
