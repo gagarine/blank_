@@ -864,7 +864,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
         if session.mode == .write, let image = NSImage(pasteboard:board), let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data:tiff), let data = bitmap.representation(using:.png,properties:[:]) {
             do {
-                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("blank-paste-"+UUID().uuidString)
+                let directory = AppController.temporaryDirectory.appendingPathComponent("blank-paste-"+UUID().uuidString)
                 try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
                 let url = directory.appendingPathComponent("pasted-image.png"); try data.write(to:url)
                 let path = try session.importImage(url); try? FileManager.default.removeItem(at:directory)

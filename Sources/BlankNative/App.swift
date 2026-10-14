@@ -24,6 +24,10 @@ public enum BlankApplication {
         if let custom = ProcessInfo.processInfo.environment["BLANK_DATA_DIR"] { return URL(fileURLWithPath:custom) }
         return FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("blank_-swift")
     }
+    nonisolated static var temporaryDirectory: URL {
+        if let custom = ProcessInfo.processInfo.environment["BLANK_TEMP_DIR"] { return URL(fileURLWithPath:custom,isDirectory:true).resolvingSymlinksInPath() }
+        return FileManager.default.temporaryDirectory
+    }
     var controllers: [DocumentWindow] = []
     var draftRestorationError: String?
     var retainingDraftsForTermination = false

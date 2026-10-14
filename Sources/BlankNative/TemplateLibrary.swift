@@ -64,7 +64,7 @@ struct DocumentTemplate: Identifiable, Equatable {
         savedObserver = NotificationCenter.default.addObserver(forName:.blankDocumentSaved,object:nil,queue:.main) { [weak self] notification in
             MainActor.assumeIsolated {
                 guard let self, let session = notification.object as? DocumentSession,
-                      session.root?.deletingLastPathComponent().standardizedFileURL == self.root.standardizedFileURL else { return }
+                      session.root?.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath().path == self.root.standardizedFileURL.resolvingSymlinksInPath().path else { return }
                 do { try self.reload() } catch { session.error = error.localizedDescription }
             }
         }

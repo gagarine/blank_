@@ -49,7 +49,7 @@ import BlankCore
         else { fatalError("Current PDF share did not finish behind older compilation") }
         session.buffer.loadExternal("#figure(image(\"assets/test.png\"), caption: [A caption])")
         session.revision += 1
-        let exported = FileManager.default.temporaryDirectory.appendingPathComponent("blank-export-"+UUID().uuidString+".pdf")
+        let exported = AppController.temporaryDirectory.appendingPathComponent("blank-export-"+UUID().uuidString+".pdf")
         session.compile(); session.compile(export:exported)
         let exportDeadline = Date().addingTimeInterval(10)
         while session.compiling && Date() < exportDeadline { RunLoop.main.run(until:Date().addingTimeInterval(0.05)) }

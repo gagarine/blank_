@@ -6,10 +6,12 @@ configuration=${2:-release}
 case "$mode" in background) host=BlankIntegrationChecks ;; ui) host=BlankUIChecks ;; *) echo 'Usage: check-native.sh background|ui [debug|release]' >&2; exit 2 ;; esac
 portable=$(mktemp -d /tmp/blank-native-check.XXXXXX)
 portable=$(cd "$portable" && pwd -P)
+trap 'rm -rf "$portable"' EXIT
 export BLANK_DATA_DIR="$portable/data"
 export BLANK_PACKAGE_CACHE="$portable/packages"
 export BLANK_VERIFICATION_STATE="$portable/state.plist"
-mkdir -p "$BLANK_DATA_DIR" "$BLANK_PACKAGE_CACHE"
+export BLANK_TEMP_DIR="$portable/tmp"
+mkdir -p "$BLANK_DATA_DIR" "$BLANK_PACKAGE_CACHE" "$portable/tmp"
 if [[ "$mode" == ui ]]; then
     app=/tmp/blank-resize-ui/blank_.app
     # Reuse the identity authorized for native computer-use verification.
@@ -25,7 +27,7 @@ fi
 finish() {
     result=$?
     if [[ -f "$BLANK_VERIFICATION_STATE" ]]; then
-        env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$app/Contents/MacOS/blank_" --restore-state || true
+        env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH TMPDIR="$portable/tmp/" "$app/Contents/MacOS/blank_" --restore-state || true
     fi
     rm -rf "$portable"
     return "$result"
@@ -43,7 +45,7 @@ codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"
 cd "$portable"
 run() {
-    env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH "$app/Contents/MacOS/blank_" "$@"
+    env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH TMPDIR="$portable/tmp/" "$app/Contents/MacOS/blank_" "$@"
 }
 if [[ "$mode" == background ]]; then
     run

@@ -21,7 +21,7 @@ import AppKit
         }
     }
     public static func requireDisposableEnvironment() {
-        for name in ["BLANK_DATA_DIR","BLANK_PACKAGE_CACHE","BLANK_VERIFICATION_STATE"] {
+        for name in ["BLANK_DATA_DIR","BLANK_PACKAGE_CACHE","BLANK_VERIFICATION_STATE","BLANK_TEMP_DIR","TMPDIR"] {
             guard let path = ProcessInfo.processInfo.environment[name], path.hasPrefix("/") else { fatalError("Missing isolated \(name)") }
             let resolved = URL(fileURLWithPath:path).resolvingSymlinksInPath().path
             let temporary = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path

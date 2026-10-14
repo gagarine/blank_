@@ -6,7 +6,7 @@ import BlankCore
     static func run() {
         guard URLProtocol.registerClass(CitationAcceptanceProtocol.self) else { fatalError("Cannot isolate citation API") }
         defer { URLProtocol.unregisterClass(CitationAcceptanceProtocol.self) }
-        let fm = FileManager.default, folder = fm.temporaryDirectory.appendingPathComponent("blank-project-"+UUID().uuidString)
+        let fm = FileManager.default, folder = AppController.temporaryDirectory.appendingPathComponent("blank-project-"+UUID().uuidString)
         var sessions: [DocumentSession] = []
         let recents = NSDocumentController.shared.recentDocumentURLs
         defer {
@@ -14,7 +14,7 @@ import BlankCore
             try? fm.removeItem(at:folder)
             NSDocumentController.shared.clearRecentDocuments(nil); recents.reversed().forEach { NSDocumentController.shared.noteNewRecentDocumentURL($0) }
         }
-        func check(_ condition: Bool,_ label: String) { precondition(condition,label); print("PASS: "+label) }
+        func check(_ condition: Bool,_ label: String) { guard condition else { fatalError("FAIL: "+label) }; print("PASS: "+label) }
         func wait(_ operation: (@escaping (Error?) -> Void) -> Void,expectFailure: Bool = false) {
             var done = false, failure: Error?
             operation { failure = $0; done = true }

@@ -5,7 +5,7 @@ import BlankCore
 
 @MainActor enum NativeTemplateAcceptance {
     static func run(original: DocumentWindow,interaction: ((TemplateLibrary,TemplateGalleryWindow,[DocumentTemplate]) throws -> [DocumentWindow])? = nil) {
-        let fm = FileManager.default, folder = fm.temporaryDirectory.appendingPathComponent("blank-templates-"+UUID().uuidString)
+        let fm = FileManager.default, folder = AppController.temporaryDirectory.appendingPathComponent("blank-templates-"+UUID().uuidString)
         let recents = NSDocumentController.shared.recentDocumentURLs
         var sessions: [DocumentSession] = [], windows: [DocumentWindow] = []
         var gallery: TemplateGalleryWindow?
@@ -85,6 +85,7 @@ import BlankCore
             edit.changed(); edit.saveWork?.cancel()
             try edit.saveToDisk()
             let edited = library.templates.first { $0.id == item.id }!
+            if edited.version == initialVersion || edit.dirty || edit.buffer.source != source+"\nEdited template" { print("Template Save diagnostic: versionChanged=\(edited.version != initialVersion) dirty=\(edit.dirty) sourceMatches=\(edit.buffer.source == source+"\nEdited template") root=\(edit.root?.absoluteString as Any) library=\(library.root.absoluteString)") }
             check(edited.version != initialVersion && !edit.dirty && edit.buffer.source == source+"\nEdited template","Ordinary template Save updates the gallery version and canonical writing")
             let editedCopy = try library.newDocument(from:edited); sessions.append(editedCopy)
             check(editedCopy.buffer.source == edit.buffer.source && draft.buffer.source == source,"New copies use saved edits while existing documents stay independent")

@@ -125,6 +125,7 @@ import BlankCore
             session.buffer.selection = EditSelection(start,start+1); editor.refresh(reveal:true)
             let field = open()
             guard let native = field.currentEditor() as? NSTextView else { fatalError("Missing boundary editor") }
+            native.selectAll(nil)
             native.insertText(name,replacementRange:native.selectedRange()); key(native,"\r",36)
             let expected = adjacent.replacingBytes(ByteSpan(start,start+1),with:"#ref(<"+name+">);")
             if Array(session.buffer.source.utf8) != Array(expected.utf8) { print("Reference diagnostic: actual=\(session.buffer.source.debugDescription) expected=\(expected.debugDescription) field=\(native.string.debugDescription) anchor=\(session.insertionAnchor)") }

@@ -4,7 +4,7 @@ import BlankCore
 
 @MainActor enum NativeDocumentAcceptance {
     static func run() {
-        let fm = FileManager.default, folder = fm.temporaryDirectory.appendingPathComponent("blank-document-"+UUID().uuidString)
+        let fm = FileManager.default, folder = AppController.temporaryDirectory.appendingPathComponent("blank-document-"+UUID().uuidString)
         let recents = NSDocumentController.shared.recentDocumentURLs
         var windows: [DocumentWindow] = []
         defer {

@@ -75,7 +75,7 @@ import BlankCore
         session.undo(true); check(session.buffer.source == expected,"Figure Redo restores the changed caption")
         session.switchMode(.write); session.undo()
 
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("blank-figure-acceptance-"+UUID().uuidString)
+        let directory = AppController.temporaryDirectory.appendingPathComponent("blank-figure-acceptance-"+UUID().uuidString)
         try! FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
         defer { session.saveWork?.cancel(); session.watchers.forEach { $0.cancel() }; session.diskScanWork?.cancel(); session.dirty = false; try? FileManager.default.removeItem(at:directory) }
         let replacement = directory.appendingPathComponent("replacement 日本.png"), replacementData = imageData(.systemOrange)

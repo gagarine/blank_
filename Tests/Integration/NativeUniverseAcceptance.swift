@@ -7,7 +7,7 @@ import BlankCore
     static func run(original: DocumentWindow) {
         let fm = FileManager.default
         let recents = NSDocumentController.shared.recentDocumentURLs
-        let folder = fm.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("blank-universe-acceptance-"+UUID().uuidString)
+        let folder = AppController.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("blank-universe-acceptance-"+UUID().uuidString)
         let cache = ProcessInfo.processInfo.environment["BLANK_PACKAGE_CACHE"].map { URL(fileURLWithPath:$0) } ?? AppController.dataDirectory.appendingPathComponent("cache/typst/packages")
         let package = cache.appendingPathComponent("preview/blank-universe-native-fixture/1.0.0")
         let index = cache.appendingPathComponent(".universe-index.json")
