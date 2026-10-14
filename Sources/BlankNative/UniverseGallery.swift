@@ -127,6 +127,7 @@ struct UniversePageView: NSViewRepresentable {
             NSColor.white.setFill(); bounds.fill()
             guard let page = page?.pageRef, let context = NSGraphicsContext.current?.cgContext else { return }
             context.saveGState()
+            context.clip(to:bounds)
             context.concatenate(page.getDrawingTransform(.mediaBox,rect:bounds,rotate:0,preserveAspectRatio:true))
             context.drawPDFPage(page)
             context.restoreGState()
