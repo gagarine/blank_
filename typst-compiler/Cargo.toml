@@ -17,6 +17,7 @@ base64 = "0.22"
 comemo = "0.5"
 hayagriva = "0.10.1"
 serde_yaml = "0.9"
+toml = "0.8"
 biblatex = "0.12"
 
 [dev-dependencies]

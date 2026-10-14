@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Protocol/integration checks against the actual bundled official compiler."""
+import argparse
+import base64
+import json
+import os
+import pathlib
+import re
+import subprocess
+import tempfile
+import time
+
+repo = pathlib.Path(__file__).resolve().parents[2]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('app', nargs='?', type=pathlib.Path, default=repo/'build/blank_.app')
+app = parser.parse_args().app.resolve()
+compiler = app / 'Contents/MacOS/typst-compiler'
+with tempfile.TemporaryDirectory(prefix='blank-compiler-', dir='/tmp') as temp:
+    root = pathlib.Path(temp)
+    package_cache = root/'package-cache/packages'
+    process = subprocess.Popen([str(compiler)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=root,
+                               env={**os.environ, 'BLANK_PACKAGE_CACHE':str(package_cache)})
+    seq = 0
+    def call(method, params):
+        global seq
+        seq += 1
+        process.stdin.write(json.dumps({'jsonrpc':'2.0','protocolVersion':1,'id':seq,'method':method,'params':params})+'\n')
+        process.stdin.flush()
+        reply = json.loads(process.stdout.readline())
+        assert reply['id'] == seq and 'error' not in reply, reply
+        return reply['result']
+    try:
+        assert call('initialize', {})['typstVersion'] == '0.15.1'
+        # Cached imports and their assets work without network access. Clearing
+        # removes only app downloads, and the next compile reads fresh contents.
+        def package(base, namespace, text):
+            folder = base/namespace/'blank-bundle-fixture/1.0.0'
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder/'typst.toml').write_text('[package]\nname = "blank-bundle-fixture"\nversion = "1.0.0"\nentrypoint = "lib.typ"\n')
+            (folder/'lib.typ').write_text('#let message = read("asset.txt")\n')
+            (folder/'asset.txt').write_text(text)
+            return folder
+        cached = package(package_cache, 'preview', 'Downloaded package')
+        vendored = package(root/'packages', 'local', 'Vendored package')
+        def package_compile(namespace, revision):
+            source = f'#import "@{namespace}/blank-bundle-fixture:1.0.0": message\n#message'
+            result = call('compile', {'root':str(root),'entry':'packages.typ','files':{'packages.typ':source},'revision':revision})
+            assert not result['diagnostics'] and result.get('pdf'), result
+            assert 'asset.txt' not in result['dependencies'], result
+            return result['pdf']
+        before = package_compile('preview', 10)
+        package_compile('local', 11)
+        # Universe starters share that cache and retain the declared entry,
+        # version-pinned imports and every file, including unused assets.
+        with (cached/'typst.toml').open('a') as manifest:
+            manifest.write('[template]\npath = "starter"\nentrypoint = "chapters/main.typ"\n')
+        (cached/'starter/chapters').mkdir(parents=True)
+        starter = '#import "@preview/blank-bundle-fixture:1.0.0": message\n#message\n= Café\n'
+        (cached/'starter/chapters/main.typ').write_text(starter)
+        (cached/'starter/unused.bin').write_bytes(bytes([0, 255, 7]))
+        (cached/'README.md').write_text('Starter documentation')
+        catalogue = [{'name':'blank-bundle-fixture','version':'1.0.0','description':'Starter',
+                      'template':{'path':'starter','entrypoint':'chapters/main.typ'}}]
+        (package_cache/'.universe-index.json').write_text(json.dumps(catalogue))
+        assert call('universeCatalog', {})['templates'][0]['version'] == '1.0.0'
+        snapshot = call('universeTemplate', {'name':'blank-bundle-fixture','version':'1.0.0'})
+        assert snapshot['entry'] == 'chapters/main.typ' and snapshot['documentation'] == 'Starter documentation'
+        assert base64.b64decode(snapshot['files'][snapshot['entry']]).decode() == starter
+        assert base64.b64decode(snapshot['files']['unused.bin']) == bytes([0, 255, 7])
+        assert 'lib.typ' not in snapshot['files']
+        print('PASS: bundled Universe protocol uses cached catalogue, pinned package, declared entry and complete starter files')
+        call('clearPackageCache', {})
+        assert not package_cache.exists() and vendored.exists()
+        call('clearPackageCache', {})
+        package_compile('local', 12)
+        package(package_cache, 'preview', 'Fresh package contents')
+        assert before != package_compile('preview', 13)
+        # A package asset symlink cannot escape the package's own directory.
+        outside = root/'outside.txt'; outside.write_text('Private project data')
+        (cached/'asset.txt').unlink(); (cached/'asset.txt').symlink_to(outside)
+        result = call('compile', {'root':str(root),'entry':'escape.typ','files':{'escape.typ':'#import "@preview/blank-bundle-fixture:1.0.0": message\n#message'},'revision':14})
+        assert result['diagnostics'] and 'pdf' not in result, result
+        print('PASS: cached package imports/assets, exact vendored imports, cache clearing, fresh recompilation and package path confinement')
+        tutorial = (app/'Contents/Resources/Tutorial.typ').read_text()
+        start = time.monotonic()
+        result = call('compile', {'root':str(root),'entry':'Tutorial.typ','files':{'Tutorial.typ':tutorial},'revision':1})
+        assert not result['diagnostics'], result
+        data = base64.b64decode(result['pdf']); assert data.startswith(b'%PDF-')
+        assert result['pages'] >= 2 and result['sourceMap']
+        (root/'tutorial.pdf').write_bytes(data)
+        print(f"PASS: bundled tutorial → {result['pages']} PDF pages, {len(data)} bytes, {time.monotonic()-start:.3f}s cold compile")
+        files = {'main.typ':'#set text(size: 11pt)\n#include "chapters/one.typ"\n\n#link("https://typst.app")[Typst]\n#footnote[An explanation]\n\n$ x^2 + y^2 $\n',
+                 'chapters/one.typ':'= Café 日本語 👋\n\nA *bold* and _italic_ sentence.\n\n#table(columns: 2, [Idea], [Step], [Write], [Review])\n'}
+        start = time.monotonic()
+        result = call('compile',{'root':str(root),'entry':'main.typ','files':files,'revision':2})
+        assert not result['diagnostics'], result
+        assert any(a['path'] == 'chapters/one.typ' for a in result['sourceMap'])
+        assert all(0 <= a['y'] <= 1 for a in result['sourceMap'])
+        print(f"PASS: in-memory includes, Unicode, table, link, footnote, math, source mapping; {time.monotonic()-start:.3f}s warm compile")
+        typography = 'Regular café text. *Bold text.* _Italic text._\n\n#underline[Underlined café.] #strike[Struck text.] #strike[#underline[*_Combined styles._*]]\n\n#table(columns: 1, [#underline[Decorated cell]])\n\n$ integral_0^infinity e^(-x^2) dif x = sqrt(pi) / 2 $'
+        result = call('compile', {'root':str(root),'entry':'fonts.typ','files':{'fonts.typ':typography},'revision':3})
+        assert not result['diagnostics'], result
+        pdf = base64.b64decode(result['pdf'])
+        font_names = {name.split(b'+')[-1].removesuffix(b'-Identity-H') for name in re.findall(rb'/BaseFont\s*/([^\s/<>]+)', pdf)}
+        expected = {b'LibertinusSerif-Regular', b'LibertinusSerif-Bold', b'LibertinusSerif-Italic', b'NewCMMath-Book'}
+        assert expected <= font_names, font_names
+        assert not any(b'LastResort' in name for name in font_names), font_names
+        print('PASS: PDF compiles underline/strikethrough and combined styles, using bundled regular/bold/italic text and math fonts without LastResort glyph fallback')
+        styles = '#align(center)[= Centered heading]\n\n#par(justify: true)[Justified paragraph. Another sentence to demonstrate alignment.]\n\n#super[1] #sub[2] #text(fill: rgb("#247cb7"))[Blue] #highlight(fill: rgb("#fff2a6"))[Yellow] #link("https://example.com")[Link] `#let x = 2`\n\n```\n#let literal = 2\n```'
+        result = call('compile',{'root':str(root),'entry':'styles.typ','files':{'styles.typ':styles},'revision':4})
+        assert not result['diagnostics'] and result['pages'] >= 1, result
+        print('PASS: alignment, justification, superscript/subscript, text/highlight colors, links and displayed code compile to PDF')
+        result = call('compile',{'root':str(root),'entry':'main.typ','files':{'main.typ':'#nonexistent()'},'revision':4})
+        assert result['diagnostics'] and 'pdf' not in result
+        print('PASS: invalid Typst returns diagnostics without a replacement PDF')
+    finally:
+        process.terminate(); process.wait(timeout=5)

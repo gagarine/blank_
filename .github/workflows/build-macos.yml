@@ -48,7 +48,7 @@ jobs:
           key: native-workspace-${{ matrix.runner }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.toml', 'Cargo.lock', 'typst-compiler/Cargo.toml', 'typst-syntax-bridge/Cargo.toml') }}
           restore-keys: native-workspace-${{ matrix.runner }}-${{ runner.arch }}-
       - name: Build release and run checks
-        run: bash scripts/check.sh release
+        run: bash scripts/check-all.sh release
       - name: Verify portable bundle and archive
         run: |
           app=build/blank_.app

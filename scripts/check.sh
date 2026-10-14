@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+cd "$(pwd -P)"
 configuration=${1:-release}
 case "$configuration" in debug|release) ;; *) echo "Usage: $0 [debug|release]" >&2; exit 2 ;; esac
 os_version=$(sw_vers -productVersion)
@@ -19,10 +20,18 @@ export MACOSX_DEPLOYMENT_TARGET=27.0
 export CARGO_TARGET_DIR="$PWD/target"
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/module-cache"
+export BLANK_BUILD_CHECKS=1
+checks_temporary=$(mktemp -d /tmp/blank-background-check.XXXXXX)
+checks_temporary=$(cd "$checks_temporary" && pwd -P)
+trap 'rm -rf "$checks_temporary"' EXIT
+export BLANK_DATA_DIR="$checks_temporary/data"
+export BLANK_PACKAGE_CACHE="$checks_temporary/packages"
+mkdir -p "$BLANK_DATA_DIR" "$BLANK_PACKAGE_CACHE"
 cargo fmt --check --package blank-syntax
 cargo_options=(--locked)
 if [[ "${BLANK_OFFLINE:-0}" == 1 ]]; then cargo_options+=(--offline); fi
 cargo test --workspace --release "${cargo_options[@]}"
 bash scripts/build.sh "$configuration"
-DYLD_LIBRARY_PATH="$PWD/target/release" ".build/$configuration/BlankCoreChecks"
+bash scripts/check-unit.sh "$configuration"
 bash scripts/check-bundle.sh
+bash scripts/check-native.sh background "$configuration"
