@@ -42,6 +42,11 @@ import BlankCore
         hasUndoManager = false
         synchronize()
     }
+    override func prepareSavePanel(_ savePanel: NSSavePanel) -> Bool {
+        let ready = super.prepareSavePanel(savePanel)
+        if session.root == nil, session.draftName != nil { savePanel.nameFieldStringValue = session.title+".typ" }
+        return ready
+    }
     func synchronize() {
         guard !synchronizing, nativeSaveDepth == 0 else { return }
         synchronizing = true

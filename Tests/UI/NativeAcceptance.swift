@@ -422,7 +422,8 @@ import BlankCore
         check(session.buffer.projection.blocks.map(\.text) == ["Second block","First block","Third block"],"Dropping a block moves its source")
         session.undo(); check(session.buffer.projection.blocks.first?.text == "First block","Block drag undo restores order")
         let shortDragSource = session.buffer.source
-        let longDragSource = (0..<100).map { "Block \($0) café 👩🏽‍💻" }.joined(separator:"\n\n")
+        // Leave scrollable content after target 80 even on tall CI windows.
+        let longDragSource = (0..<160).map { "Block \($0) café 👩🏽‍💻" }.joined(separator:"\n\n")
         session.buffer.loadExternal(longDragSource); session.revision += 1; editor.refresh()
         editor.scroll(.zero); editor.ensureNativeLayout()
         let longHandle = NSPoint(x:editor.textContainerInset.width-23,y:editor.blockRect(0).minY+12)
@@ -440,7 +441,10 @@ import BlankCore
         let heldDrop = NSPoint(x:longHandle.x+50,y:editor.visibleRect.maxY+12)
         editor.mouseDragged(with:pointer(.leftMouseDragged,heldDrop))
         let beforeAutoscroll = editor.visibleRect.minY
-        RunLoop.main.run(until:Date().addingTimeInterval(0.25))
+        let autoscrollDeadline = Date().addingTimeInterval(5)
+        while !(editor.visibleRect.minY > beforeAutoscroll && editor.dragTarget > 80) && Date() < autoscrollDeadline {
+            RunLoop.main.run(until:Date().addingTimeInterval(0.02))
+        }
         check(editor.visibleRect.minY > beforeAutoscroll && editor.dragTarget > 80,"Holding a block below the viewport continues autoscrolling without new mouse events")
         let finalTarget = editor.dragTarget
         editor.mouseUp(with:pointer(.leftMouseUp,NSPoint(x:longHandle.x+50,y:editor.visibleRect.maxY)))

@@ -341,14 +341,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         for run in buffer.parsed.styles {
             let start = max(sourceSpan.start,run.start), end = min(sourceSpan.end,run.end)
             guard end > start else { continue }
-            let color: NSColor
-            switch run.tag {
-            case "Comment": color = .secondaryLabelColor
-            case "Keyword", "Function": color = .systemPurple
-            case "String": color = .systemGreen
-            case "Number", "MathOperator", "MathDelimiter": color = .systemOrange
-            default: continue
-            }
+            guard let color = TypstSyntaxColors.color(run.tag) else { continue }
             let range = NSRange(location:displayStart+buffer.source.utf16Offset(byte:start)-sourceStart,
                                 length:buffer.source.utf16Offset(byte:end)-buffer.source.utf16Offset(byte:start))
             if NSMaxRange(range) <= text.length { text.addAttribute(.foregroundColor,value:color,range:range) }

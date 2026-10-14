@@ -15,7 +15,7 @@ sdk_major=${sdk_version%%.*}
 if [[ ! "$sdk_major" =~ ^[0-9]+$ ]] || (( 10#$sdk_major < 27 )); then
     echo "Builds require a macOS 27 or newer SDK (found $sdk_version at $sdk_path)" >&2; exit 2
 fi
-app_version=${BLANK_VERSION:-0.3.1}
+app_version=${BLANK_VERSION:-0.5.0}
 app_version=${app_version#v}
 if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
     echo 'BLANK_VERSION must be X.Y.Z or vX.Y.Z, optionally with a prerelease/build suffix' >&2; exit 2
@@ -48,6 +48,12 @@ rm -f "$app/Contents/MacOS/writer-helper"
 cp examples/Tutorial.typ Resources/AppIcon.icns "$app/Contents/Resources/"
 mkdir -p "$app/Contents/Resources/Templates"
 cp Resources/Templates/*.typ "$app/Contents/Resources/Templates/"
+# Mutate only fresh bundled copies, then sign the completed bundle below.
+for binary in blank_ libblank_syntax.dylib; do
+    if codesign -d "$app/Contents/MacOS/$binary" >/dev/null 2>&1; then
+        codesign --remove-signature "$app/Contents/MacOS/$binary"
+    fi
+done
 install_name_tool -id @rpath/libblank_syntax.dylib "$app/Contents/MacOS/libblank_syntax.dylib"
 parser_dependency=$(otool -L "$app/Contents/MacOS/blank_" | sed -n 's/^[[:space:]]*\(.*libblank_syntax\.dylib\) (compatibility.*$/\1/p')
 if [[ -z "$parser_dependency" ]]; then echo 'Missing Typst parser dependency in editor executable' >&2; exit 1; fi
@@ -62,7 +68,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>local.blank.swift-native</string>
 <key>CFBundleExecutable</key><string>blank_</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.3.1</string>
+<key>CFBundleShortVersionString</key><string>0.5.0</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>27.0</string>

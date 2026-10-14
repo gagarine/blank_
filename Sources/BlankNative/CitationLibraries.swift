@@ -32,7 +32,7 @@ struct CitationLibrary: Identifiable {
                         return (entries,groups.count)
                     }
                 }
-                DispatchQueue.main.async { [weak self] in
+                DispatchQueue.main.async { [weak self = self] in
                     guard let self, self.generation == current else { return }
                     switch parsed {
                     case let .failure(error): self.loading = false; self.error = error.localizedDescription

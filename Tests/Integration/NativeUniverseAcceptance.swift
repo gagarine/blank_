@@ -89,6 +89,10 @@ import BlankCore
             let readme = UniverseReadmeBlock.parse("# Title\n\nSome **bold**.\n\n- One\n- Two\n\n```typst\n#let x = 1\n```\n\n| Name | Value |\n| --- | --- |\n| Font | Roboto |")
             check(readme.first?.heading == 1 && readme.filter { $0.marker == "•" }.count == 2 && readme.contains { $0.code && String($0.text.characters).contains("#let x = 1") },"Inline Readme preserves Markdown headings, paragraphs, lists and literal code")
             check(readme.last?.rows.count == 2 && readme.last?.rows[1].cells.map { String($0.characters) } == ["Font","Roboto"],"Readme tables retain rows and cells for native Grid rendering")
+            let usageSource = "#let title = \"Café 日本 👩🏽‍💻\"\n#title"
+            let usage = UniverseReadmeBlock.parse("```typst\n"+usageSource+"\n```\n\n```sh\n# comment\n``` ")
+            check(usage.first?.text.characters.starts(with:usageSource) == true && usage.first?.text.runs.contains(where:{ $0.foregroundColor != nil }) == true,"Typst usage highlights syntax while preserving exact Unicode code")
+            check(usage.last?.codeLanguage == "sh" && usage.last?.text.runs.allSatisfy({ $0.foregroundColor == nil }) == true,"Other fenced languages remain literal instead of receiving Typst colours")
             let nested = UniverseReadmeBlock.parse("1. Parent\n   - Child\n     1. Grandchild\n   - Second child")
             check(nested.map(\.marker) == ["1.","•","1.","•"] && nested.map(\.indent) == [1,2,3,2],"Mixed nested Readme lists use their nearest item and list kind")
             let pagesDocument = PDFDocument()
@@ -116,6 +120,11 @@ import BlankCore
             chooser.query = "No matching Universe template"; chooser.source = .universe
             check(chooser.universe.selection == nil,"Changing shared search in Local clears an excluded Universe selection before returning")
             chooser.universe.cancelBrowsing(); chooser.query = ""
+            let timed = UniverseLibrary(previewTimeout:0.001)
+            timed.templates = library.templates; timed.selection = item.id
+            wait("Preview deadline stops an unfinished request") { !timed.previewing }
+            check(timed.previewError?.contains("too long") == true && timed.pdf(item) == nil,"Timed-out previews report retry without installing a late PDF")
+            timed.cancelBrowsing()
             library.selection = item.id
             library.requestPreview(); library.requestPreview()
             check(library.previewing,"Repeated details updates preserve the selected preview request")
@@ -126,6 +135,15 @@ import BlankCore
             library.create { first = $0 }
             wait("Create Document installs its prepared draft asynchronously") { first != nil }
             let draft = first!; sessions.append(draft)
+            let native = NativeDocument(session:draft)
+            check(draft.title == "Untitled" && native.displayName == "Untitled" && native.fileURL == nil && native.isDocumentEdited,"Universe starts an unsaved Untitled document with normal native change tracking")
+            let savePanel = NSSavePanel(); _ = native.prepareSavePanel(savePanel)
+            check(savePanel.nameFieldStringValue == "Untitled.typ","The first Save suggests Untitled rather than the template entry filename")
+            let retained = try JSONDecoder().decode(Recovery.self,from:JSONEncoder().encode(draft.recoverySnapshot()))
+            let restored = try DocumentSession.restoredDraft(retained); sessions.append(restored)
+            check(restored.title == "Untitled" && restored.entry == draft.entry && restored.buffer.source == source,"Draft restoration preserves Untitled independently of exact template paths and source")
+            try restored.renameEntry("Renamed")
+            check(restored.title == "Renamed" && restored.buffer.source == source,"Explicit native draft naming replaces Untitled without changing template source")
             check(draft.root == nil && draft.dirty && draft.entry == "chapters/main.typ" && draft.active == draft.entry && draft.buffer.source == source && !draft.buffer.canUndo,"Universe creates an exact independent draft at the declared nested entry")
             check(draft.buffers["unused.typ"]?.source == "// Not yet included\n= Later" && draft.assets["assets/unused.bin"] == unused && draft.assets["assets/icon.svg"] == icon,"All starter sources and binary assets survive, including unused files")
             var second: DocumentSession?

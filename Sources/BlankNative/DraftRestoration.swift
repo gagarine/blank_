@@ -6,7 +6,7 @@ extension DocumentSession {
     func recoverySnapshot() -> Recovery {
         Recovery(id:id,entry:entry,root:root?.path,files:buffers.mapValues(\.source),assets:assets,
                  retainedDraft:root == nil && hasDraftContents,active:active,
-                 selections:buffers.mapValues(\.selection),mode:mode.rawValue)
+                 selections:buffers.mapValues(\.selection),mode:mode.rawValue,draftName:draftName)
     }
     // AppKit can reopen the native UTF-8 snapshot itself. Rehydrate from the
     // authoritative project journal, keeping its identity and dependencies.
@@ -30,6 +30,7 @@ extension DocumentSession {
         let directory = AppController.dataDirectory.appendingPathComponent("drafts/"+payload.id+"/Drafts")
         for path in Set(payload.files.keys).union(payload.assets.keys) { _ = try dependencyTarget(path,root:directory) }
         session.entry = payload.entry; session.active = payload.active.flatMap { payload.files[$0] != nil ? $0 : nil } ?? payload.entry
+        session.draftName = payload.draftName
         session.buffers = payload.files.mapValues { DocumentBuffer($0) }; session.assets = payload.assets
         for (path,selection) in payload.selections ?? [:] {
             guard let buffer = session.buffers[path] else { continue }

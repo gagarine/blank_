@@ -69,6 +69,7 @@ final class UniverseProject: NSObject, @unchecked Sendable {
     }
     @MainActor func session(contents: (buffers: [String:DocumentBuffer], assets: [String:Data])) -> DocumentSession {
         let session = DocumentSession(); session.entry = entry; session.active = entry
+        session.draftName = "Untitled"
         session.buffers = contents.buffers; session.assets = contents.assets; session.dirty = true
         TemplateLibrary.prepareForWriting(session,selectTitle:true)
         return session
@@ -93,14 +94,17 @@ final class UniverseProject: NSObject, @unchecked Sendable {
     private var catalogueLoadedAt: Date?
     private var catalogueClient: TypstCompiler?
     private var previewClient: TypstCompiler?
+    private var previewDeadline: DispatchWorkItem?
+    private let previewTimeout: TimeInterval
     private var createClient: TypstCompiler?
     private var catalogueToken = UUID(), previewToken = UUID(), createToken = UUID()
     private let worker = DispatchQueue(label:"blank.universe.projects",qos:.userInitiated)
     private let projects = NSCache<NSString,UniverseProject>()
     private let pdfs = NSCache<NSString,NSData>()
     var selected: UniverseTemplate? { templates.first { $0.id == self.selection } }
-    init(now: @escaping () -> Date = { Date() }) {
+    init(now: @escaping () -> Date = { Date() },previewTimeout: TimeInterval = 30) {
         self.now = now
+        self.previewTimeout = previewTimeout
         projects.countLimit = 2; projects.totalCostLimit = 64*1024*1024
         pdfs.countLimit = 6; pdfs.totalCostLimit = 32*1024*1024
     }
@@ -135,6 +139,7 @@ final class UniverseProject: NSObject, @unchecked Sendable {
         cancelPreview(); cancelCreation(); thumbnails.cancelAll()
     }
     func cancelPreview() {
+        previewDeadline?.cancel(); previewDeadline = nil
         previewToken = UUID(); previewClient?.cancel(); previewClient = nil; previewing = false; requestedPreviewID = nil
     }
     private func fetch(_ item: UniverseTemplate, client: TypstCompiler, completion: @escaping (Result<UniverseProject,Error>) -> Void) {
@@ -162,6 +167,13 @@ final class UniverseProject: NSObject, @unchecked Sendable {
         previewing = true
         let token = UUID(); previewToken = token
         let client = TypstCompiler(); previewClient = client
+        let deadline = DispatchWorkItem { [weak self] in
+            guard let self, self.previewToken == token, self.previewing else { return }
+            self.cancelPreview()
+            self.previewError = "The preview took too long. Retry or create the document to open it in the editor."
+        }
+        previewDeadline = deadline
+        DispatchQueue.main.asyncAfter(deadline:.now()+previewTimeout,execute:deadline)
         fetch(item,client:client) { [weak self = self] result in
             guard let self, previewToken == token else { return }
             switch result {
@@ -210,6 +222,7 @@ final class UniverseProject: NSObject, @unchecked Sendable {
     }
     private func finishPreview(_ token: UUID,error: String?) {
         guard previewToken == token else { return }
+        previewDeadline?.cancel(); previewDeadline = nil
         previewing = false; previewClient = nil; previewError = error.map { String($0.prefix(4000)) }; generation += 1
     }
     func cancelCreation() {

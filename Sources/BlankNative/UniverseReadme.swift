@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import BlankCore
 
 // Foundation parses package Markdown on the project worker. Native Text renders
 // inline emphasis/links; block intents supply paragraph breaks and typography.
@@ -8,6 +9,7 @@ struct UniverseReadmeBlock: Identifiable {
     var text: AttributedString
     var heading: Int?
     var code = false
+    var codeLanguage: String?
     var marker: String?
     var indent = 0
     var rows: [TableRow] = []
@@ -46,12 +48,25 @@ struct UniverseReadmeBlock: Identifiable {
             for component in components {
                 switch component.kind {
                 case let .header(level): block.heading = level
-                case .codeBlock: block.code = true
+                case let .codeBlock(languageHint): block.code = true; block.codeLanguage = languageHint?.lowercased()
                 case .orderedList, .unorderedList: block.indent += 1
                 default: break
                 }
             }
             blocks.append(block)
+        }
+        for index in blocks.indices where blocks[index].code && (blocks[index].codeLanguage == nil || ["typst","typ"].contains(blocks[index].codeLanguage!)) {
+            let source = String(blocks[index].text.characters)
+            for style in ParsedSource.parse(source).styles {
+                guard let color = TypstSyntaxColors.color(style.tag), style.start < style.end,
+                      style.start >= 0, style.end <= source.utf8.count else { continue }
+                let start = source.utf8.index(source.utf8.startIndex,offsetBy:style.start)
+                let end = source.utf8.index(source.utf8.startIndex,offsetBy:style.end)
+                if let lower = AttributedString.Index(start,within:blocks[index].text),
+                   let upper = AttributedString.Index(end,within:blocks[index].text) {
+                    blocks[index].text[lower..<upper].foregroundColor = Color(nsColor:color)
+                }
+            }
         }
         return blocks
     }

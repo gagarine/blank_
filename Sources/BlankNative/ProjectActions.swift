@@ -155,7 +155,10 @@ import BlankCore
         guard !name.isEmpty, name != ".", name != "..", !name.contains(where:{ "/\\\0".contains($0) }) else { throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"Choose a filename without folders."]) }
         let leaf = name.lowercased().hasSuffix(".typ") ? name : name+".typ"
         let next = (entry as NSString).deletingLastPathComponent.isEmpty ? leaf : (entry as NSString).deletingLastPathComponent+"/"+leaf
-        guard next != entry else { return }
+        guard next != entry else {
+            if draftName != nil { draftName = nil; persistRecovery(); onTitle?() }
+            return
+        }
         guard buffers[next] == nil else { throw CocoaError(.fileWriteFileExists) }
         if let root {
             try saveToDisk()
@@ -167,7 +170,7 @@ import BlankCore
         }
         let old = entry; buffers[next] = buffers.removeValue(forKey:old); bases[next] = bases.removeValue(forKey:old)
         remapReferenceHistory(from:old,to:next)
-        if active == old { active = next }; entry = next; revision += 1; installWatchers(); persistRecovery(); onTitle?()
+        if active == old { active = next }; entry = next; draftName = nil; revision += 1; installWatchers(); persistRecovery(); onTitle?()
         if let root { ProjectSelection.remember(root:root,entry:next) }
         NotificationCenter.default.post(name:.blankDocumentSaved,object:self)
     }

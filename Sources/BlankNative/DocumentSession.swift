@@ -15,6 +15,7 @@ struct Recovery: Codable {
     var active: String? = nil
     var selections: [String:EditSelection]? = nil
     var mode: String? = nil
+    var draftName: String? = nil
 }
 @MainActor final class DocumentSession: ObservableObject {
     let id: String
@@ -108,7 +109,11 @@ struct Recovery: Codable {
     var conflictDisk: [String:String] = [:]
     var deletedFiles = Set<String>()
     var buffer: DocumentBuffer { buffers[active]! }
-    var title: String { ((entry as NSString).lastPathComponent as NSString).deletingPathExtension }
+    var draftName: String?
+    var title: String {
+        if root == nil, let draftName { return draftName }
+        return ((entry as NSString).lastPathComponent as NSString).deletingPathExtension
+    }
     var onTitle: (() -> Void)?
     weak var editor: NativeTextView?
     weak var pdfView: PDFView?

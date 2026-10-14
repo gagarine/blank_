@@ -35,38 +35,29 @@ struct UniverseDetails: View {
     @ObservedObject var library: UniverseLibrary
     let item: UniverseTemplate
     var body: some View {
-        VStack(alignment:.leading,spacing:12) {
-            HStack {
-                Text(item.name).font(.title2)
-                Spacer()
-                Link("Universe",destination:item.documentationURL)
-            }
-            Text(item.description).textSelection(.enabled).fixedSize(horizontal:false,vertical:true)
-            VSplitView {
-                VStack(spacing:8) {
-                    if let data = library.pdf(item) {
-                        UniversePDFPreview(data:data).id(item.id)
-                    } else if let error = library.previewError {
-                        ScrollView { Text(error).foregroundStyle(.secondary).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading) }
-                        Button("Retry Preview") { library.requestPreview() }
-                    } else {
-                        ProgressView("Preparing Preview…").frame(maxWidth:.infinity,maxHeight:.infinity)
-                    }
-                    if library.previewing {
-                        Button("Cancel Preview") { library.cancelPreview(); library.previewError = "Preview cancelled." }
-                    }
-                }.frame(minHeight:160,maxHeight:.infinity)
-                ScrollView {
-                    VStack(alignment:.leading,spacing:16) {
-                        if library.project(item)?.documentation != nil {
-                            Text("Readme").font(.headline)
-                            UniverseReadme(blocks:library.project(item)?.readmeBlocks ?? []).textSelection(.enabled)
-                        }
-                        UniverseAbout(item:item)
-                    }.frame(maxWidth:.infinity,alignment:.leading).padding(.top,12)
-                }.frame(minHeight:110,idealHeight:200,maxHeight:.infinity)
-            }
-        }.padding(18)
+        ScrollView {
+            VStack(alignment:.leading,spacing:16) {
+                HStack {
+                    Text(item.name).font(.title2)
+                    Spacer()
+                    Link("Universe",destination:item.documentationURL)
+                }
+                Text(item.description).textSelection(.enabled).fixedSize(horizontal:false,vertical:true)
+                if let data = library.pdf(item) {
+                    UniversePDFPreview(data:data).id(item.id)
+                } else if let error = library.previewError {
+                    Text(error).foregroundStyle(.secondary).textSelection(.enabled)
+                    Button("Retry Preview") { library.requestPreview() }
+                } else {
+                    ProgressView("Preparing Preview…").frame(maxWidth:.infinity,minHeight:400)
+                }
+                if library.project(item)?.documentation != nil {
+                    Text("Readme").font(.headline)
+                    UniverseReadme(blocks:library.project(item)?.readmeBlocks ?? []).textSelection(.enabled)
+                }
+                UniverseAbout(item:item)
+            }.frame(maxWidth:.infinity,alignment:.leading).padding(18)
+        }
         .task(id:item.id) { library.requestPreview() }
     }
 }
@@ -103,6 +94,13 @@ struct UniverseAbout: View {
     @Published var index = 0
     var count: Int { document?.pageCount ?? 0 }
     init(data: Data) { document = PDFDocument(data:data) }
+    var aspectRatio: CGFloat {
+        guard let page = document?.page(at:index) else { return 1 }
+        let bounds = page.bounds(for:.mediaBox)
+        let rotated = page.rotation % 180 != 0
+        let width = rotated ? bounds.height : bounds.width, height = rotated ? bounds.width : bounds.height
+        return height > 0 ? width/height : 1
+    }
     func move(_ offset: Int) { index = min(max(0,index+offset),max(0,count-1)) }
 }
 struct UniversePDFPreview: View {
@@ -110,7 +108,9 @@ struct UniversePDFPreview: View {
     init(data: Data) { _pages = StateObject(wrappedValue:UniversePreviewPages(data:data)) }
     var body: some View {
         VStack(spacing:8) {
-            UniversePageView(pages:pages).frame(maxWidth:.infinity,maxHeight:.infinity)
+            UniversePageView(pages:pages)
+                .aspectRatio(pages.aspectRatio,contentMode:.fit)
+                .frame(maxWidth:.infinity)
             HStack(spacing:16) {
                 Button { pages.move(-1) } label: { Image(systemName:"chevron.left") }.help("Previous page").accessibilityLabel("Previous page").disabled(pages.index == 0)
                 Text("\(pages.index+1) of \(pages.count)").monospacedDigit().foregroundStyle(.secondary).accessibilityLabel("Preview page \(pages.index+1) of \(pages.count)")
@@ -121,27 +121,23 @@ struct UniversePDFPreview: View {
 }
 struct UniversePageView: NSViewRepresentable {
     @ObservedObject var pages: UniversePreviewPages
-    final class Coordinator {
-        var observation: NSObjectProtocol?
-        deinit { if let observation { NotificationCenter.default.removeObserver(observation) } }
-    }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    func makeNSView(context: Context) -> PDFView {
-        let view = PDFView()
-        view.displayMode = .singlePage; view.autoScales = true; view.backgroundColor = .windowBackgroundColor
-        view.document = pages.document
-        context.coordinator.observation = NotificationCenter.default.addObserver(forName:.PDFViewPageChanged,object:view,queue:.main) { [weak view, weak pages] _ in
-            // PDFKit also handles native arrow navigation; keep the pager in sync.
-            DispatchQueue.main.async {
-                guard let view, let pages, let page = view.currentPage, let document = pages.document else { return }
-                let index = document.index(for:page)
-                if pages.index != index { pages.index = index }
-            }
+    final class Canvas: NSView {
+        var page: PDFPage? { didSet { needsDisplay = true } }
+        override func draw(_ dirtyRect: NSRect) {
+            NSColor.white.setFill(); bounds.fill()
+            guard let page = page?.pageRef, let context = NSGraphicsContext.current?.cgContext else { return }
+            context.saveGState()
+            context.concatenate(page.getDrawingTransform(.mediaBox,rect:bounds,rotate:0,preserveAspectRatio:true))
+            context.drawPDFPage(page)
+            context.restoreGState()
         }
-        return view
     }
-    func updateNSView(_ view: PDFView,context: Context) {
-        if let page = pages.document?.page(at:pages.index), view.currentPage !== page { view.go(to:page) }
+    func makeNSView(context: Context) -> Canvas { Canvas() }
+    func updateNSView(_ view: Canvas,context: Context) {
+        view.page = pages.document?.page(at:pages.index)
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.image)
+        view.setAccessibilityLabel("Preview page \(pages.index+1) of \(pages.count)")
     }
 }
 
