@@ -1,9 +1,12 @@
 import AppKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum BibliographyConversionAcceptance {
     static func run() {
-        let fm = FileManager.default, root = fm.temporaryDirectory.appendingPathComponent("blank-conversion-"+UUID().uuidString)
+        guard URLProtocol.registerClass(CitationAcceptanceProtocol.self) else { fatalError("Cannot isolate citation API") }
+        defer { URLProtocol.unregisterClass(CitationAcceptanceProtocol.self) }
+        let fm = FileManager.default, root = AppController.temporaryDirectory.appendingPathComponent("blank-conversion-"+UUID().uuidString)
         var sessions: [DocumentSession] = []
         let recents = NSDocumentController.shared.recentDocumentURLs
         defer {

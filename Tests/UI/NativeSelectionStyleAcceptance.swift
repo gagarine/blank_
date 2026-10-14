@@ -1,5 +1,7 @@
+@testable import BlankIntegrationTests
 import AppKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeSelectionStyleAcceptance {
     static func showFixture(controller: DocumentWindow) {
@@ -21,6 +23,17 @@ import BlankCore
         let session = controller.session, editor = session.editor!
         func check(_ value: @autoclosure () -> Bool,_ label: String) {
             guard value() else { fatalError("FAIL: \(label) | \(session.buffer.source) | \(editor.selectedRange())") }; print("PASS: \(label)")
+        }
+        func awaitNative(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(3)
+            while !condition() && Date() < deadline {
+                for _ in 0..<32 {
+                    guard let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    NSApp.sendEvent(event)
+                }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+                controller.window?.contentView?.layoutSubtreeIfNeeded()
+            }
         }
         func load(_ source: String) {
             session.buffer.loadExternal(""); session.buffer.loadExternal(source); session.revision += 1; editor.clearInsertionStyle(); editor.refresh()
@@ -87,6 +100,7 @@ import BlankCore
         editor.updateSelectionPanel(requireKeyWindow:false)
         let currentButtons = panelButtons(editor.selectionPanel)
         clickPadding(currentButtons[8],trailing:true)
+        awaitNative { editor.selectionPanel?.child?.isShown == true && editor.selectionPanel?.isShown == true && panelButtons(editor.selectionPanel?.child).count == 7 }
         check(editor.selectionPanel?.child?.isShown == true && editor.selectionPanel?.isShown == true,"More-button padding opens alignment options beside the toolbar")
         let moreButtons = panelButtons(editor.selectionPanel?.child)
         check(moreButtons.count == 7,"More styles exposes inline marks and supported alignment choices")
@@ -99,6 +113,7 @@ import BlankCore
         editor.keyDown(with:escape); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(editor.selectionPanel?.child?.isShown != true && editor.selectionPanel?.isShown == true,"Escape dismisses formatting options while preserving the main toolbar")
         clickPadding(panelButtons(editor.selectionPanel)[7])
+        awaitNative { editor.selectionPanel?.child?.isShown == true }
         check(editor.selectionPanel?.child?.isShown == true,"A secondary panel reopens with one click after Escape")
         clickPadding(panelButtons(editor.selectionPanel)[7],trailing:true)
         check(editor.selectionPanel?.child?.isShown != true && editor.selectionPanel?.isShown == true && controller.window?.firstResponder === editor,"The active toolbar button dismisses only the secondary panel and retains editing focus")
@@ -178,6 +193,14 @@ import BlankCore
             print("Link hover foreground: before=\(foregroundBefore) events=\(foregroundEvents) active=\(NSApp.isActive) key=\(controller.window?.isKeyWindow == true)")
             check(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor,"Link-hover fixture has an active app and key native editor window")
             check(editor.selectedRange() == caret && session.buffer.source == linkedSource,"Native foreground setup preserves the hover fixture's exact source and caret")
+            // This fixture injects native pointer events without moving the
+            // desktop mouse. Suspend automatic cursor-rectangle refresh for
+            // this window so display cycles cannot substitute its unrelated
+            // physical pointer position. Explicit mouseMoved/cursorUpdate paths
+            // and real native foreground/first-responder assertions remain.
+            let hoverWindow = controller.window!
+            hoverWindow.disableCursorRects()
+            defer { hoverWindow.enableCursorRects() }
             editor.ensureNativeLayout()
             let hoverHit = editor.documentGlyphRect(NSRange(location:linkedText.location+1,length:1)), hoverPoint = NSPoint(x:hoverHit.midX,y:hoverHit.midY)
             check(editor.linkTarget(at:hoverPoint) == target,"Native foreground setup retains the exact Unicode hover target")

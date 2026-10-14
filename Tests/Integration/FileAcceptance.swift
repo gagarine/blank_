@@ -1,5 +1,6 @@
 import AppKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum FileAcceptance {
     static func run() {

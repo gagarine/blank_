@@ -170,7 +170,7 @@ final class UniverseProject: NSObject, @unchecked Sendable {
                 selectedProject = (item.id,project); generation += 1
                 if pdf(item) != nil { finishPreview(token,error:nil); return }
                 worker.async { [self] in
-                    let folder = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("blank-universe-"+UUID().uuidString)
+                    let folder = AppController.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("blank-universe-"+UUID().uuidString)
                     let prepared = Result { () throws -> [String:String] in
                         try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
                         var sources: [String:String] = [:]

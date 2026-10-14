@@ -74,6 +74,17 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         super.viewDidMoveToWindow()
         selectionPanelObservers.forEach(NotificationCenter.default.removeObserver); selectionPanelObservers.removeAll()
         if let window {
+            // SwiftUI can attach a remounted editor after switchMode's queued
+            // focus request has run. Finish that transition on real attachment,
+            // while leaving Find, sheets and another window's focus alone.
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window, self.window === window,
+                      let session = self.session, session.editor === self,
+                      session.mode != .preview, !session.contactSheet,
+                      !session.searchVisible, session.sheet == nil, window.isKeyWindow,
+                      window.firstResponder == nil || window.firstResponder === window else { return }
+                window.makeFirstResponder(self)
+            }
             selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:NSWindow.willCloseNotification,object:window,queue:.main) { [weak self] _ in self?.selectionPanel?.orderOut(nil); self?.dismissLinkHover() })
             selectionPanelObservers.append(NotificationCenter.default.addObserver(forName:NSApplication.didResignActiveNotification,object:NSApp,queue:.main) { [weak self] _ in self?.selectionPanel?.orderOut(nil); self?.dismissLinkHover() })
             let focusNotifications: [(Notification.Name,Any?)] = [(NSWindow.didResignKeyNotification,window),(NSWindow.didBecomeKeyNotification,nil)]
@@ -853,7 +864,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
         if session.mode == .write, let image = NSImage(pasteboard:board), let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data:tiff), let data = bitmap.representation(using:.png,properties:[:]) {
             do {
-                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("blank-paste-"+UUID().uuidString)
+                let directory = AppController.temporaryDirectory.appendingPathComponent("blank-paste-"+UUID().uuidString)
                 try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
                 let url = directory.appendingPathComponent("pasted-image.png"); try data.write(to:url)
                 let path = try session.importImage(url); try? FileManager.default.removeItem(at:directory)

@@ -1,6 +1,8 @@
+@testable import BlankIntegrationTests
 import AppKit
 import SwiftUI
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeBlockSourceAcceptance {
     static func check(_ condition: @autoclosure () -> Bool,_ label: String) {

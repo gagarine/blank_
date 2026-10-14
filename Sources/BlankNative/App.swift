@@ -3,12 +3,15 @@ import SwiftUI
 import BlankCore
 import Combine
 
-@main enum BlankMain {
-    @MainActor static func main() {
+public enum BlankApplication {
+    @MainActor static var verification: (@MainActor (AnyObject) -> Void)?
+    @MainActor static var backgroundVerification = false
+    @MainActor static var restoresForVerification = false
+    @MainActor public static func run(background: Bool = false,restore: Bool = false,verification: (@MainActor (AnyObject) -> Void)? = nil) {
         if CommandLine.arguments.contains("--measure") { ResourceMetrics.run(); return }
-        if CommandLine.arguments.contains("--universe-self-test") || CommandLine.arguments.contains("--template-self-test") || CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--file-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") || CommandLine.arguments.contains("--selection-style-self-test") || CommandLine.arguments.contains("--find-self-test") || CommandLine.arguments.contains("--paragraph-space-self-test") {
-            setbuf(stdout,nil)
-        }
+        self.backgroundVerification = background
+        self.restoresForVerification = restore
+        self.verification = verification
         let app = NSApplication.shared
         let delegate = AppController(); app.delegate = delegate
         app.run()
@@ -20,6 +23,10 @@ import Combine
     static var dataDirectory: URL {
         if let custom = ProcessInfo.processInfo.environment["BLANK_DATA_DIR"] { return URL(fileURLWithPath:custom) }
         return FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("blank_-swift")
+    }
+    nonisolated static var temporaryDirectory: URL {
+        if let custom = ProcessInfo.processInfo.environment["BLANK_TEMP_DIR"] { return URL(fileURLWithPath:custom,isDirectory:true).resolvingSymlinksInPath() }
+        return FileManager.default.temporaryDirectory
     }
     var controllers: [DocumentWindow] = []
     var draftRestorationError: String?
@@ -42,12 +49,12 @@ import Combine
     }
     func applicationWillFinishLaunching(_ notification: Notification) {
         Self.shared = self
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(BlankApplication.backgroundVerification ? .prohibited : .regular)
         installMenus()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         let file = CommandLine.arguments.dropFirst().first.flatMap { $0.hasPrefix("-") ? nil : $0 }
-        let isolated = CommandLine.arguments.contains("--draft-lifecycle-prepare") || CommandLine.arguments.contains(where:{ $0.hasSuffix("self-test") || $0.hasSuffix("ui-test") })
+        let isolated = BlankApplication.verification != nil && !BlankApplication.restoresForVerification
         let restored = !isolated && restoreDrafts()
         if CommandLine.arguments.contains("--tutorial") { tutorial(nil) }
         else if let file { openURL(URL(fileURLWithPath:file)) }
@@ -55,54 +62,23 @@ import Combine
         if let draftRestorationError { current?.error = draftRestorationError }
         // Finish AppKit's launch/activation-policy transition before requesting
         // activation. The complete menu is already attached at this point.
-        DispatchQueue.main.async { if !CommandLine.arguments.contains("--selection-style-ui-test") { NSApp.activate() } }
-        if CommandLine.arguments.contains(where:{ $0.hasPrefix("--draft-lifecycle-") }) {
-            setbuf(stdout,nil)
-            // Avoid nesting inside AppKit's pending file-access completion batch.
-            let checks = Timer(timeInterval:0,repeats:false) { _ in
-                MainActor.assumeIsolated {
-                    if CommandLine.arguments.contains("--draft-lifecycle-prepare") { NativeDraftAcceptance.prepare() }
-                    else if CommandLine.arguments.contains("--draft-lifecycle-disabled-verify") { NativeDraftAcceptance.verifyDisabledLaunch() }
-                    else { NativeDraftAcceptance.verify() }
-                    exit(0)
-                }
+        if !BlankApplication.backgroundVerification && !CommandLine.arguments.contains("--selection-style-ui-test") {
+            DispatchQueue.main.async { NSApp.activate() }
+        }
+        if let verification = BlankApplication.verification {
+            // Enter outside AppKit's pending file-access completion batch and
+            // main-queue blocks, so nested native waits can service callbacks.
+            let checks = Timer(timeInterval:0.1,repeats:false) { _ in
+                MainActor.assumeIsolated { verification(self) }
             }
             RunLoop.main.add(checks,forMode:.default)
         }
-        if CommandLine.arguments.contains("--selection-style-ui-test"), let controller = controllers.first { NativeSelectionStyleAcceptance.showFixture(controller:controller) }
-        if CommandLine.arguments.contains("--figure-ui-test"), let controller = controllers.first { NativeFigureAcceptance.showFixture(controller:controller) }
-        if CommandLine.arguments.contains("--reference-ui-test"), let controller = controllers.first {
-            NativeReferenceAcceptance.showFixture(controller:controller)
-        }
-        if CommandLine.arguments.contains("--paragraph-space-ui-test"), let controller = controllers.first { NativeParagraphSpaceAcceptance.showFixture(controller:controller) }
-        if CommandLine.arguments.contains("--citation-ui-test"), let controller = controllers.first {
-            NativeCitationAcceptance.showFixture(controller:controller)
-        }
-        if CommandLine.arguments.contains("--universe-self-test") || CommandLine.arguments.contains("--template-self-test") || CommandLine.arguments.contains("--self-test") || CommandLine.arguments.contains("--document-self-test") || CommandLine.arguments.contains("--file-self-test") || CommandLine.arguments.contains("--figure-self-test") || CommandLine.arguments.contains("--label-self-test") || CommandLine.arguments.contains("--block-source-self-test") || CommandLine.arguments.contains("--selection-style-self-test") || CommandLine.arguments.contains("--find-self-test") || CommandLine.arguments.contains("--paragraph-space-self-test") {
-            // Run outside a main-queue block: the acceptance suite pumps the
-            // run loop while waiting for background compiler/file callbacks.
-            RunLoop.main.perform {
-                MainActor.assumeIsolated {
-                    guard let controller = self.controllers.first else { fatalError("Launch did not open an editor") }
-                    if CommandLine.arguments.contains("--universe-self-test") { NativeUniverseAcceptance.run(original:controller) }
-                    else if CommandLine.arguments.contains("--template-self-test") { NativeTemplateAcceptance.run(original:controller) }
-                    else if CommandLine.arguments.contains("--find-self-test") { NativeFindAcceptance.run(original:controller) }
-                    else if CommandLine.arguments.contains("--paragraph-space-self-test") { NativeParagraphSpaceAcceptance.run(original:controller) }
-                    else if CommandLine.arguments.contains("--selection-style-self-test") { NativeSelectionStyleAcceptance.run(controller:controller) }
-                    else if CommandLine.arguments.contains("--block-source-self-test") { NativeBlockSourceAcceptance.run(controller:controller) }
-                    else if CommandLine.arguments.contains("--label-self-test") { NativeLabelAcceptance.run(controller:controller) }
-                    else if CommandLine.arguments.contains("--figure-self-test") { NativeFigureAcceptance.run(controller:controller) }
-                    else if CommandLine.arguments.contains("--file-self-test") { FileAcceptance.run() }
-                    else if CommandLine.arguments.contains("--document-self-test") { NativeDocumentAcceptance.run() }
-                    else { NativeAcceptance.run(controller:controller) }
-                    exit(0)
-                }
-            }
-        }
     }
+
     func show(_ session: DocumentSession) {
         let controller = DocumentWindow(session:session); controllers.append(controller)
-        controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
+        if BlankApplication.backgroundVerification { controller.window?.contentView?.layoutSubtreeIfNeeded() }
+        else { controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil) }
     }
     @objc func newDocument(_ sender: Any?) { show(DocumentSession()) }
     @objc func newProject(_ sender: Any?) {
@@ -327,7 +303,9 @@ import Combine
     init(session: DocumentSession,nativeDocument: NativeDocument? = nil) {
         self.session = session
         self.nativeDocument = nativeDocument ?? NativeDocument(session:session)
-        let window = NSWindow(contentRect:NSRect(x:0,y:0,width:1060,height:780),styleMask:[.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView],backing:.buffered,defer:false)
+        let frame = NSRect(x:0,y:0,width:1060,height:780)
+        let style: NSWindow.StyleMask = [.titled,.closable,.miniaturizable,.resizable,.fullSizeContentView]
+        let window: NSWindow = BlankApplication.backgroundVerification ? BackgroundVerificationWindow(contentRect:frame,styleMask:style,backing:.buffered,defer:false) : NSWindow(contentRect:frame,styleMask:style,backing:.buffered,defer:false)
         super.init(window:window)
         window.titlebarAppearsTransparent = false
         if session.dark { window.appearance = NSAppearance(named:.darkAqua) }
@@ -359,5 +337,19 @@ import Combine
         nativeDocument.close()
         session.watchers.forEach { $0.cancel() }; session.saveWork?.cancel(); session.diskScanWork?.cancel()
         AppController.shared?.controllers.removeAll { $0 === self }
+    }
+}
+
+// Enforce the headless host contract even when an ordinary NSDocument hook
+// calls showWindows or makeKeyAndOrderFront during restoration.
+private final class BackgroundVerificationWindow: NSWindow {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+    override func makeKeyAndOrderFront(_ sender: Any?) {}
+    override func orderFront(_ sender: Any?) {}
+    override func orderBack(_ sender: Any?) {}
+    override func orderFrontRegardless() {}
+    override func order(_ place: NSWindow.OrderingMode,relativeTo otherWin: Int) {
+        if place == .out { super.order(place,relativeTo:otherWin) }
     }
 }

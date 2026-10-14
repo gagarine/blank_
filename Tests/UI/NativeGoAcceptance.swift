@@ -1,6 +1,8 @@
+@testable import BlankIntegrationTests
 import AppKit
 import PDFKit
 import BlankCore
+@testable import BlankNative
 
 @MainActor enum NativeGoAcceptance {
     private static func check(_ condition: @autoclosure () -> Bool,_ label: String) {
