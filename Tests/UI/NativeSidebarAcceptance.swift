@@ -208,8 +208,24 @@ import BlankCore
         let session = controller.session, source = session.buffer.source, originalMode = session.mode
         let editor = session.editor, pdfScale = session.pdfView?.scaleFactor
         let item = NSMenuItem(); item.representedObject = SidebarMode.contactSheet.rawValue
-        controller.chooseSidebar(item); RunLoop.main.run(until:Date().addingTimeInterval(0.4))
+        controller.chooseSidebar(item)
         func collections(_ view: NSView) -> [ContactPageCollection] { (view as? ContactPageCollection).map { [$0] } ?? view.subviews.flatMap(collections) }
+        func awaitNative(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(3)
+            while !condition() && Date() < deadline {
+                for _ in 0..<32 {
+                    guard let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    NSApp.sendEvent(event)
+                }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+                controller.window?.contentView?.layoutSubtreeIfNeeded()
+            }
+        }
+        awaitNative {
+            guard let window = controller.window, let root = window.contentView,
+                  let collection = collections(root).first else { return false }
+            return session.contactSheet && !session.sidebar && collection.bounds.width > window.frame.width-40 && collection.numberOfItems(inSection:0) > 0
+        }
         guard let collection = controller.window?.contentView.flatMap({ collections($0).first }), let layout = collection.collectionViewLayout as? NSCollectionViewFlowLayout else { fatalError("No native contact-sheet collection") }
         func check(_ condition: @autoclosure () -> Bool,_ label: String) { guard condition() else { fatalError("FAIL: \(label)") }; print("PASS: \(label)") }
         check(session.contactSheet && !session.sidebar && collection.bounds.width > controller.window!.frame.width-40,"Contact Sheet fills the document window with a native collection")
@@ -224,7 +240,8 @@ import BlankCore
         collection.delegate?.collectionView?(collection,didSelectItemsAt:[selected])
         check(session.contactSheet && session.buffer.source == source,"Selecting an overview page leaves the document and overview intact")
         let event = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.windowNumber,context:nil,characters:"\r",charactersIgnoringModifiers:"\r",isARepeat:false,keyCode:36)!
-        collection.keyDown(with:event); RunLoop.main.run(until:Date().addingTimeInterval(0.25))
+        collection.keyDown(with:event)
+        awaitNative { !session.contactSheet && controller.window?.firstResponder === (session.mode == .preview ? session.pdfView : session.editor) }
         check(!session.contactSheet && session.buffer.source == source && session.mode == originalMode,"Return opens the selected page in the original view without editing source")
         check(controller.window?.firstResponder === (session.mode == .preview ? session.pdfView : session.editor),"Leaving Contact Sheet restores the native editor or PDF keyboard responder")
     }
