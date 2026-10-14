@@ -20,8 +20,10 @@ import BlankCore
             if !condition() { print("Template UI diagnostic: controllers=\(AppController.shared.controllers.count) sheet=\(chooser.window?.attachedSheet != nil) chooserVisible=\(chooser.window?.isVisible == true) selected=\(library.selection as Any) source=\(chooser.source) key=\(NSApp.keyWindow?.title as Any)") }
             check(condition(),label)
         }
+        NSApp.activate(ignoringOtherApps:true)
         chooser.showWindow(nil); chooser.window?.makeKeyAndOrderFront(nil)
-        RunLoop.main.run(until:Date().addingTimeInterval(0.3))
+        waitForNativeUI("Template gallery fixture has an active app and key native window") { NSApp.isActive && chooser.window?.isKeyWindow == true && NSApp.keyWindow === chooser.window }
+        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         func descendant<T: NSView>(_ view: NSView?,as type: T.Type) -> T? {
             guard let view else { return nil }; if let result = view as? T { return result }
             return view.subviews.lazy.compactMap { descendant($0,as:type) }.first
@@ -44,10 +46,10 @@ import BlankCore
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         guard let sheet = chooser.window?.attachedSheet else { fatalError("Template Preview did not open") }
         check((descendant(sheet.contentView,as:PDFView.self)?.document?.pageCount ?? 0) > 1,"Space opens the complete multipage template in a native PDF preview sheet")
+        waitForNativeUI("Template Preview receives native key focus before Escape") { NSApp.isActive && sheet.isKeyWindow && NSApp.keyWindow === sheet }
         let escape = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:sheet.windowNumber,context:nil,characters:"\u{1b}",charactersIgnoringModifiers:"\u{1b}",isARepeat:false,keyCode:53)!
         _ = sheet.performKeyEquivalent(with:escape)
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
-        check(chooser.window?.attachedSheet == nil,"Escape dismisses template Preview and returns to the gallery")
+        waitForNativeUI("Escape dismisses template Preview and returns to the gallery") { chooser.window?.attachedSheet == nil && NSApp.isActive && chooser.window?.isKeyWindow == true && NSApp.keyWindow === chooser.window }
         grid.keyDown(with:key(49," "))
         RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         guard let createSheet = chooser.window?.attachedSheet else { fatalError("Preview did not reopen") }
