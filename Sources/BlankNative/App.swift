@@ -66,12 +66,18 @@ public enum BlankApplication {
             DispatchQueue.main.async { NSApp.activate() }
         }
         if let verification = BlankApplication.verification {
-            // A timer avoids nesting acceptance inside AppKit's file-access
-            // completion batch. Only explicit interactive hosts activate above.
-            let checks = Timer(timeInterval:0.1,repeats:false) { _ in
-                MainActor.assumeIsolated { verification(self) }
+            if BlankApplication.backgroundVerification || CommandLine.arguments.contains(where:{ $0.hasPrefix("--draft-") }) {
+                // File/restoration checks must not nest inside AppKit's pending
+                // file-access completion batch.
+                let checks = Timer(timeInterval:0.1,repeats:false) { _ in
+                    MainActor.assumeIsolated { verification(self) }
+                }
+                RunLoop.main.add(checks,forMode:.default)
+            } else {
+                // Preserve the native UI harness's original run-loop entry;
+                // nested waits must service normal AppKit/SwiftUI updates.
+                RunLoop.main.perform { MainActor.assumeIsolated { verification(self) } }
             }
-            RunLoop.main.add(checks,forMode:.default)
         }
     }
 
