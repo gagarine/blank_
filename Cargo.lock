@@ -2586,6 +2586,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tar",
+ "toml",
  "typst",
  "typst-kit",
  "typst-layout",

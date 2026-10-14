@@ -9,7 +9,7 @@ use typst_kit::files::FsRoot;
 use typst_kit::packages::{FsPackages, SystemPackages, UniversePackages};
 use typst_syntax::package::PackageSpec;
 
-fn cache_path() -> io::Result<PathBuf> {
+pub(crate) fn cache_path() -> io::Result<PathBuf> {
     if let Some(path) = std::env::var_os("BLANK_PACKAGE_CACHE") {
         return Ok(PathBuf::from(path));
     }
@@ -22,7 +22,7 @@ fn cache_path() -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::other("The user cache directory is unavailable."))
 }
 
-fn lock_file(cache: &Path) -> io::Result<File> {
+pub(crate) fn lock_file(cache: &Path) -> io::Result<File> {
     let parent = cache
         .parent()
         .ok_or_else(|| io::Error::other("Invalid cache path."))?;

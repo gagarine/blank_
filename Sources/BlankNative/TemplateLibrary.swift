@@ -64,7 +64,7 @@ struct DocumentTemplate: Identifiable, Equatable {
         savedObserver = NotificationCenter.default.addObserver(forName:.blankDocumentSaved,object:nil,queue:.main) { [weak self] notification in
             MainActor.assumeIsolated {
                 guard let self, let session = notification.object as? DocumentSession,
-                      session.root?.deletingLastPathComponent().standardizedFileURL == self.root.standardizedFileURL else { return }
+                      session.root?.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath().path == self.root.standardizedFileURL.resolvingSymlinksInPath().path else { return }
                 do { try self.reload() } catch { session.error = error.localizedDescription }
             }
         }
@@ -133,6 +133,22 @@ struct DocumentTemplate: Identifiable, Equatable {
         let session = DocumentSession(); try session.open(url(item))
         // Reading a snapshot must not leave per-file watchers running.
         session.watchers.forEach { $0.cancel() }; session.watchers.removeAll()
+        // Templates are complete projects: retain computed dependencies and
+        // unused starter files as well as literal includes and assets.
+        let root = folder(item.id)
+        let files = FileManager.default.enumerator(at:root,includingPropertiesForKeys:[.isRegularFileKey,.isSymbolicLinkKey])?.allObjects as? [URL] ?? []
+        for file in files {
+            let values = try file.resourceValues(forKeys:[.isRegularFileKey,.isSymbolicLinkKey])
+            guard values.isSymbolicLink != true else { throw Self.failure("The template contains a symbolic link.") }
+            guard values.isRegularFile == true else { continue }
+            let path = try ProjectSelection.relative(file,root:root)
+            guard session.buffers[path] == nil else { continue }
+            let data = try Data(contentsOf:DocumentSession.dependencyTarget(path,root:root))
+            if path.lowercased().hasSuffix(".typ") {
+                guard let source = String(data:data,encoding:.utf8) else { throw Self.failure("Template source is not UTF-8.") }
+                session.buffers[path] = DocumentBuffer(source)
+            } else { session.assets[path] = data }
+        }
         return session
     }
     func newDocument(from item: DocumentTemplate) throws -> DocumentSession {
@@ -140,6 +156,7 @@ struct DocumentTemplate: Identifiable, Equatable {
         let saved = templates.first { $0.id == item.id } ?? item
         let source = try read(saved), copy = DocumentSession()
         copy.entry = source.entry; copy.active = source.entry
+        copy.assets = source.assets
         copy.buffers = source.buffers.mapValues { DocumentBuffer($0.source) }
         for path in source.referencedAssets() where copy.buffers[path] == nil {
             copy.assets[path] = try Data(contentsOf:DocumentSession.dependencyTarget(path,root:source.root!))
@@ -153,7 +170,7 @@ struct DocumentTemplate: Identifiable, Equatable {
     }
     static func prepareForWriting(_ session: DocumentSession,selectTitle: Bool) {
         for buffer in session.buffers.values {
-            for index in buffer.projection.blocks.indices where buffer.projection.blocks[index].kind == "source" { buffer.setSourceCollapsed(index,true) }
+            for index in buffer.projection.blocks.indices where buffer.projection.blocks[index].kind == "source" && !buffer.projection.blocks[index].collapsed { buffer.setSourceCollapsed(index,true) }
         }
         if let first = session.buffer.projection.blocks.first(where:{ $0.kind != "source" && !$0.text.isEmpty }) {
             session.buffer.selection = EditSelection(first.body.start,selectTitle ? first.body.end : first.body.start)
