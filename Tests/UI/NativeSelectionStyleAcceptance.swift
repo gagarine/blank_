@@ -24,6 +24,17 @@ import BlankCore
         func check(_ value: @autoclosure () -> Bool,_ label: String) {
             guard value() else { fatalError("FAIL: \(label) | \(session.buffer.source) | \(editor.selectedRange())") }; print("PASS: \(label)")
         }
+        func awaitNative(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(3)
+            while !condition() && Date() < deadline {
+                for _ in 0..<32 {
+                    guard let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    NSApp.sendEvent(event)
+                }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+                controller.window?.contentView?.layoutSubtreeIfNeeded()
+            }
+        }
         func load(_ source: String) {
             session.buffer.loadExternal(""); session.buffer.loadExternal(source); session.revision += 1; editor.clearInsertionStyle(); editor.refresh()
             controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(editor); editor.scrollRangeToVisible(NSRange(location:0,length:0))
@@ -89,6 +100,7 @@ import BlankCore
         editor.updateSelectionPanel(requireKeyWindow:false)
         let currentButtons = panelButtons(editor.selectionPanel)
         clickPadding(currentButtons[8],trailing:true)
+        awaitNative { editor.selectionPanel?.child?.isShown == true && editor.selectionPanel?.isShown == true && panelButtons(editor.selectionPanel?.child).count == 7 }
         check(editor.selectionPanel?.child?.isShown == true && editor.selectionPanel?.isShown == true,"More-button padding opens alignment options beside the toolbar")
         let moreButtons = panelButtons(editor.selectionPanel?.child)
         check(moreButtons.count == 7,"More styles exposes inline marks and supported alignment choices")
@@ -101,6 +113,7 @@ import BlankCore
         editor.keyDown(with:escape); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         check(editor.selectionPanel?.child?.isShown != true && editor.selectionPanel?.isShown == true,"Escape dismisses formatting options while preserving the main toolbar")
         clickPadding(panelButtons(editor.selectionPanel)[7])
+        awaitNative { editor.selectionPanel?.child?.isShown == true }
         check(editor.selectionPanel?.child?.isShown == true,"A secondary panel reopens with one click after Escape")
         clickPadding(panelButtons(editor.selectionPanel)[7],trailing:true)
         check(editor.selectionPanel?.child?.isShown != true && editor.selectionPanel?.isShown == true && controller.window?.firstResponder === editor,"The active toolbar button dismisses only the secondary panel and retains editing focus")
