@@ -105,12 +105,17 @@ struct Recovery: Codable {
     var bases: [String:String] = [:]
     var assets: [String:Data] = [:]
     var root: URL?
+    var savesAsFolder = false
+    var containerURL: URL?
+    var containerBaseline: Data?
+    var preparedContainerWrite: PreparedContainerWrite?
     var entry = "Untitled.typ"
     var conflictDisk: [String:String] = [:]
     var deletedFiles = Set<String>()
     var buffer: DocumentBuffer { buffers[active]! }
     var draftName: String?
     var title: String {
+        if let containerURL { return containerURL.deletingPathExtension().lastPathComponent }
         if root == nil, let draftName { return draftName }
         return ((entry as NSString).lastPathComponent as NSString).deletingPathExtension
     }
@@ -216,7 +221,8 @@ struct Recovery: Codable {
         guard mode == .write, requestEditing() else { return }; synchronizeSelection()
         if let editor { buffer.format(editor.selectedRange(),mark:mark); changed() }
     }
-    func open(_ url: URL, selectedEntry: String? = nil) throws {
+    func open(_ url: URL, selectedEntry: String? = nil, rememberProject: Bool = true) throws {
+        if url.pathExtension.lowercased() == "typz" { try openContainer(url); return }
         let fm = FileManager.default
         var directory: ObjCBool = false
         guard fm.fileExists(atPath:url.path,isDirectory:&directory) else { throw CocoaError(.fileNoSuchFile) }
@@ -224,14 +230,16 @@ struct Recovery: Codable {
         let file = try directory.boolValue ? (selectedEntry ?? ProjectSelection.entry(in:project)) : ProjectSelection.relative(url,root:project)
         let target = try Self.dependencyTarget(file,root:project)
         let source = try String(contentsOf:target,encoding:.utf8)
+        savesAsFolder = directory.boolValue
         root = project; entry = file; active = file; buffers = [file:DocumentBuffer(source)]; bases = [file:source]; assets = [:]; dirty = false
         refreshIncludes(); loadBibliographies()
-        ProjectSelection.remember(root:project,entry:file,project:directory.boolValue)
+        if rememberProject { ProjectSelection.remember(root:project,entry:file,project:directory.boolValue) }
         revision += 1; installWatchers(); onTitle?()
     }
     func installWatchers() {
         watchers.forEach { $0.cancel() }; watchers.removeAll()
         guard let root else { return }
+        if containerURL != nil { return }
         for path in buffers.keys {
             let fd = Darwin.open(root.appendingPathComponent(path).path,O_EVTONLY)
             guard fd >= 0 else { continue }
@@ -259,6 +267,7 @@ struct Recovery: Codable {
         }
     }
     func checkDisk(_ path: String,reinstall: Bool = true) {
+        if containerURL != nil { do { try checkContainerUnchanged() } catch { self.error = error.localizedDescription }; return }
         guard let root, let local = buffers[path], let base = bases[path] else { return }
         let target = root.appendingPathComponent(path)
         guard let disk = try? String(contentsOf:target,encoding:.utf8) else {
@@ -276,7 +285,10 @@ struct Recovery: Codable {
     func autosave() {
         guard editor?.hasMarkedText() != true, editor?.composing != true else { return }
         persistRecovery()
-        if root != nil { do { try saveToDisk() } catch { self.error = error.localizedDescription } }
+        if containerURL != nil, let document = window?.windowController?.document as? NativeDocument {
+            document.autosave(withImplicitCancellability:true) { [weak self] error in if let error { self?.error = error.localizedDescription } }
+        }
+        else if root != nil { do { try saveToDisk() } catch { self.error = error.localizedDescription } }
         else if let controller = window?.windowController as? DocumentWindow {
             controller.nativeDocument.autosave(withImplicitCancellability:true) { [weak self] error in if let error { self?.error = error.localizedDescription } }
         }
@@ -320,18 +332,34 @@ struct Recovery: Codable {
     }
     func save(_ saveAs: Bool = false, completion: ((Bool)->Void)? = nil) {
         editor?.finishComposition()
-        if root != nil && !saveAs { do { try saveToDisk(); completion?(true) } catch { self.error = error.localizedDescription; completion?(false) }; return }
-        let panel = NSSavePanel(); panel.allowedContentTypes = [.init(filenameExtension:"typ")!]; panel.nameFieldStringValue = entry; panel.title = "Save Document"
+        if root != nil && !saveAs {
+            if let containerURL, let document = window?.windowController?.document as? NativeDocument {
+                document.save(to:containerURL,ofType:DocumentFormat.container.typeName,for:.saveOperation) { [weak self] error in
+                    if let error { self?.error = error.localizedDescription }; completion?(error == nil)
+                }
+            } else { do { try saveToDisk(); completion?(true) } catch { self.error = error.localizedDescription; completion?(false) } }
+            return
+        }
+        let panel = NSSavePanel(); panel.nameFieldStringValue = title; panel.title = "Save Document"
+        let accessory = SaveFormatAccessory(panel:panel,format:documentFormat)
         guard let window else { completion?(false); return }
-        panel.beginSheetModal(for:window) { [weak self] result in
+        panel.beginSheetModal(for:window) { [weak self, accessory] result in
             guard let self, result == .OK, let url = panel.url else { completion?(false); return }
             self.prepareProjectCopy { error in
                 if let error { self.error = error.localizedDescription; completion?(false); return }
-                do { try self.saveCopy(to:url); completion?(true) } catch { self.error = error.localizedDescription; completion?(false) }
+                if let document = window.windowController?.document as? NativeDocument {
+                    document.save(to:url,ofType:accessory.format.typeName,for:.saveAsOperation) { error in
+                        if let error { self.error = error.localizedDescription }
+                        completion?(error == nil)
+                    }
+                } else {
+                    do { try self.saveFormatted(to:url,format:accessory.format); completion?(true) }
+                    catch { self.error = error.localizedDescription; completion?(false) }
+                }
             }
         }
     }
-    static func writeDependency(_ data: Data,path: String,root: URL) throws {
+    nonisolated static func writeDependency(_ data: Data,path: String,root: URL) throws {
         let target = try dependencyTarget(path,root:root)
         if FileManager.default.fileExists(atPath:target.path) {
             if try Data(contentsOf:target) == data { return }
@@ -340,7 +368,7 @@ struct Recovery: Codable {
         try FileManager.default.createDirectory(at:target.deletingLastPathComponent(),withIntermediateDirectories:true)
         try data.write(to:target,options:.atomic)
     }
-    static func dependencyTarget(_ path: String,root: URL) throws -> URL {
+    nonisolated static func dependencyTarget(_ path: String,root: URL) throws -> URL {
         let target = root.appendingPathComponent(path).standardizedFileURL
         // Foundation does not reliably resolve aliases or parent symlinks when
         // the final file is new. Resolve the nearest existing ancestor first,
@@ -374,6 +402,7 @@ struct Recovery: Codable {
         return result
     }
     func saveToDisk() throws {
+        if let containerURL { try saveContainer(to:containerURL); return }
         guard let root else { return }
         guard conflictDisk.isEmpty else { throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"Resolve external changes before saving."]) }
         // Preflight every source before replacing any file.

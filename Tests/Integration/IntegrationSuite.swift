@@ -23,6 +23,7 @@ import BlankTestSupport
             else {
                 FileAcceptance.run()
                 ProjectAcceptance.run()
+                ContainerAcceptance.run()
                 BibliographyConversionAcceptance.run()
                 NativeDocumentAcceptance.run()
                 NativeUniverseAcceptance.run(original:original)
@@ -31,7 +32,10 @@ import BlankTestSupport
                 NativePDFIntegration.run()
             }
             guard !activated, !NSApp.isActive, NSApp.activationPolicy() == .prohibited,
-                  NSApp.windows.allSatisfy({ !$0.isVisible && !$0.isKeyWindow }) else { fatalError("Background verification took focus or displayed a window") }
+                  NSApp.windows.allSatisfy({ !$0.isVisible && !$0.isKeyWindow }) else {
+                print("Background diagnostic: activated=\(activated), active=\(NSApp.isActive), policy=\(NSApp.activationPolicy().rawValue), windows=\(NSApp.windows.map { "\(type(of:$0)) \( $0.title) visible=\($0.isVisible) key=\($0.isKeyWindow)" })")
+                fatalError("Background verification took focus or displayed a window")
+            }
             print("PASS: background integration never activates, displays a window or takes keyboard focus")
             print("Background foreground observation: \(foreground) → \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none")")
             NotificationCenter.default.removeObserver(observation)

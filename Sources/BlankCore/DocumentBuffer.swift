@@ -169,6 +169,42 @@ public final class DocumentBuffer {
         while undoSteps.count > 1 && (undoSteps.count > 200 || historyBytes > 8*1024*1024) { undoSteps.removeFirst() }
         assign(text,patch:patch); selection = after; return true
     }
+    // A file relocation changes path literals throughout the editing history.
+    // Keep the same history identities and user actions; Save As is not an edit
+    // that Undo should reverse into paths at the previous filesystem location.
+    public func relocateSource(using transform: (String, EditSelection) -> (String, EditSelection)) {
+        let current = transform(source,selection)
+        let relocatedFolds = Set(collapsedSourceStarts.map { transform(source,EditSelection($0,$0)).1.anchor })
+        var after = source
+        for index in undoSteps.indices.reversed() {
+            let step = undoSteps[index]
+            var before = after
+            for patch in step.patches.reversed() { before = before.replacingBytes(patch.newSpan,with:patch.removed) }
+            let a = transform(before,step.before), b = transform(after,step.after)
+            undoSteps[index].patches = SourcePatch.difference(a.0,b.0).map { [$0] } ?? []
+            undoSteps[index].before = a.1; undoSteps[index].after = b.1; undoSteps[index].group = ""
+            after = before
+        }
+        var before = source
+        for index in redoSteps.indices.reversed() {
+            let step = redoSteps[index]
+            var after = before
+            for patch in step.patches { after = after.replacingBytes(patch.oldSpan,with:patch.inserted) }
+            let a = transform(before,step.before), b = transform(after,step.after)
+            redoSteps[index].patches = SourcePatch.difference(a.0,b.0).map { [$0] } ?? []
+            redoSteps[index].before = a.1; redoSteps[index].after = b.1; redoSteps[index].group = ""
+            before = after
+        }
+        while undoSteps.count+redoSteps.count > 1 && historyBytes > 8*1024*1024 {
+            if !undoSteps.isEmpty { undoSteps.removeFirst() } else { redoSteps.removeFirst() }
+        }
+        if !current.0.utf8.elementsEqual(source.utf8) {
+            assign(current.0)
+            collapsedSourceStarts = relocatedFolds
+            projection = folded(Projection(source:source,parsed:parsed,references:referencePresentations))
+        }
+        selection = current.1
+    }
     public func loadExternal(_ text: String) {
         guard text != source else { return }; codeBlockShells.removeAll(); referencePresentations.removeAll(); collapsedSourceStarts.removeAll(); projection = Projection(source:source,parsed:parsed); undoSteps.removeAll(); redoSteps.removeAll(); assign(text)
         selection = EditSelection(min(selection.anchor, source.utf8.count), min(selection.focus, source.utf8.count))

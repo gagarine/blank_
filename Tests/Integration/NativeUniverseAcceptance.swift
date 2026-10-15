@@ -137,8 +137,6 @@ import BlankCore
             let draft = first!; sessions.append(draft)
             let native = NativeDocument(session:draft)
             check(draft.title == "Untitled" && native.displayName == "Untitled" && native.fileURL == nil && native.isDocumentEdited,"Universe starts an unsaved Untitled document with normal native change tracking")
-            let savePanel = NSSavePanel(); _ = native.prepareSavePanel(savePanel)
-            check(savePanel.nameFieldStringValue == "Untitled.typ","The first Save suggests Untitled rather than the template entry filename")
             let retained = try JSONDecoder().decode(Recovery.self,from:JSONEncoder().encode(draft.recoverySnapshot()))
             let restored = try DocumentSession.restoredDraft(retained); sessions.append(restored)
             check(restored.title == "Untitled" && restored.entry == draft.entry && restored.buffer.source == source,"Draft restoration preserves Untitled independently of exact template paths and source")

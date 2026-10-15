@@ -9,7 +9,7 @@ A quiet macOS editor for [Typst](https://typst.app), for writing documents and t
 - **An outline that helps you move around.** Navigate headings, collapse sections, and drag sections to reorganize your writing.
 - **Search and page navigation.** Find text in your writing or PDF, browse page thumbnails, and use Contact Sheet to see several pages at once.
 - **Templates with previews.** Browse your own templates and Typst Universe in **File → Templates…**. See large previews, flip through pages, and scroll through the documentation and author information together. Usage examples have syntax colours. Create a new unsaved Untitled document or save your own document as a reusable template.
-- **Local files and projects.** Keep your work in ordinary Typst files, with related documents and images together. Automatic draft saving and reopening help you pick up where you left off.
+- **Documents and portable bundles.** Open and edit `.typ` files, project folders and `.typz` document bundles. Save As lets you choose the format and explains where related files are kept. Automatic draft saving and reopening help you pick up where you left off.
 - **References with Zotero.** Search your personal and group libraries, insert and refresh citations, and choose a bibliography style.
 - **PDF export and sharing.** Preview your pages as you write, then export a PDF or share it from the app.
 - **Automatic package downloads.** Typst packages download when needed and stay available offline. Remove the app’s downloads through **Settings → Typst packages → Clear Package Cache**.
@@ -42,7 +42,7 @@ Quit and reopen after rebuilding. Default checks run without activation, visible
 
 | Category | Targets and files | Scope |
 | --- | --- | --- |
-| Unit | `BlankUnitTests`, `Tests/Unit` | Canonical model/source, Unicode mapping, history, editing transactions and structured clipboard data. All 38 existing model checks use Swift Testing. |
+| Unit | `BlankUnitTests`, `Tests/Unit` | Canonical model/source, Unicode mapping, history, editing transactions and structured clipboard data. All 39 model checks use Swift Testing. |
 | Integration | `BlankIntegrationTests` / `BlankIntegrationChecks`, `Tests/Integration` | Files, projects, recovery/relaunches, packages, compiler protocol, PDF/export/share revisions, template storage and previews, mocked citation APIs and AppKit attributed text/layout that need no foreground. |
 | UI | `BlankUITests` / `BlankUIChecks`, `Tests/UI` | Actual native key paths, shortcuts, selection, focus, navigation, sheets/windows, deletion across block boundaries, marked-text composition, tables and shared Undo/Redo. |
 
@@ -55,6 +55,14 @@ CLT 27's default Swift Build backend adds two nonexistent Xcode-style developer 
 UI scenarios that depend on app-wide focus run in separate processes. The harness waits for real AppKit field/sheet transitions; the injected hover fixture temporarily suspends automatic cursor-rectangle refresh in its window while exercising native mouse/cursor handlers and foreground focus. Native events exercise AppKit input paths, but real IME candidate panels, VoiceOver, bidirectional navigation, live Zotero and broader file/window/object scenarios remain unverified. Large-table editing and full Source reprojection still need performance work.
 
 Ordinary builds contain no acceptance fixtures. `BLANK_BUILD_CHECKS=1` adds verification targets and enables their `@testable` imports; scripts set it automatically. Verification executables run inside temporary app copies so native document APIs and bundled compiler lookup are real. Do not run their raw Swift executables against user data.
+
+### Document formats
+
+New Document starts empty. Save As offers **Typst document (.typ)**, **Typst document bundle (.typz)** and **Typst project folder**, with a short explanation beneath the selector. A `.typ` keeps dependencies in a matching `filename-assets` folder; literal file references are updated without regenerating the source. Projects with computed file paths should use a folder or bundle so those expressions and their original paths stay exact.
+
+A `.typz` opens as one editable document: Save, autosave, Rename, Move and Open Recent all refer to that file. Private working files stay in app-owned storage. Bundles follow the [Typst Project Container Format](https://codeberg.org/haydn/typesetter/src/branch/main/docs/typst-project-container-format.md): ZIP contents are the project root and the TOML ZIP comment specifies the authoritative entrypoint. Nested entrypoints, Unicode filenames and unreferenced project files are retained. Invalid entrypoints, unsafe paths, links, duplicate filenames and oversized projects are rejected. Limits are 10,000 members and 256 MiB compressed or expanded. ZIP preparation for native saves runs in the background with revision checks; the last file is retained if preparation fails. External replacements/deletion block saving over the bundle; Save As can keep local writing separately.
+
+A local release-helper sample with 10 MiB of incompressible asset data took 0.26 s to write (0.20 s user CPU, 48 MiB peak RSS) and 0.02 s to read (29 MiB peak RSS). These warm-cache helper measurements exclude editor memory, main-thread snapshot I/O and end-to-end save-panel latency; larger projects have not been profiled.
 
 ### Packages and templates
 

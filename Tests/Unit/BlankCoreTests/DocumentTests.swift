@@ -4,6 +4,34 @@ import BlankCore
 
 @Suite(.serialized)
 final class DocumentTests {
+    @Test("File relocation preserves typing, redo, Unicode selections and history identities")
+    func testRelocationHistory() {
+        let original = "#include \"chapter.typ\"\n\nCafé 👩🏽‍💻"
+        let buffer = DocumentBuffer(original)
+        buffer.selection = EditSelection(original.utf8.count,original.utf8.count)
+        buffer.editSource(NSRange(location:original.utf16.count,length:0),text:" 日本")
+        buffer.breakUndoGroup()
+        let first = buffer.undoID
+        buffer.editSource(NSRange(location:buffer.source.utf16.count,length:0),text:" Second")
+        let second = buffer.undoID
+        buffer.undo()
+        buffer.relocateSource { source,selection in
+            let range = (source as NSString).range(of:"chapter.typ")
+            guard range.location != NSNotFound else { return (source,selection) }
+            let start = source.byteOffset(utf16:range.location)
+            let text = source.replacingBytes(ByteSpan(start,start+"chapter.typ".utf8.count),with:"Paper-assets/chapter.typ")
+            let delta = "Paper-assets/".utf8.count
+            return (text,EditSelection(selection.anchor > start ? selection.anchor+delta : selection.anchor,selection.focus > start ? selection.focus+delta : selection.focus))
+        }
+        expectEqual(buffer.undoID,first); expectEqual(buffer.redoID,second)
+        let relocated = original.replacingOccurrences(of:"chapter.typ",with:"Paper-assets/chapter.typ")
+        expectEqual(buffer.source,relocated+" 日本")
+        expectEqual(buffer.selection,EditSelection(buffer.source.utf8.count,buffer.source.utf8.count))
+        buffer.redo(); expectEqual(buffer.source,relocated+" 日本 Second")
+        buffer.undo(); buffer.undo(); expectEqual(buffer.source,relocated)
+        expectEqual(buffer.selection,EditSelection(relocated.utf8.count,relocated.utf8.count))
+        buffer.redo(); buffer.redo(); expectEqual(buffer.source,relocated+" 日本 Second")
+    }
     @Test("Selection styles, raw code, alignment, tables and history")
     func testSelectionStyles() {
         let original = "// Keep\nBefore *café 👩🏽‍💻* after\n\n#let custom = 42"

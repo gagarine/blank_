@@ -19,6 +19,8 @@ hayagriva = "0.10.1"
 serde_yaml = "0.9"
 toml = "0.8"
 biblatex = "0.12"
+unicode-normalization = "0.1"
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 flate2 = "1"

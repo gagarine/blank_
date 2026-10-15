@@ -1,6 +1,7 @@
 mod conversion;
 mod packages;
 mod universe;
+mod container;
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
@@ -269,6 +270,10 @@ fn respond(output: &Arc<Mutex<io::Stdout>>, id: Value, result: Result<Value,Stri
 }
 
 fn main() {
+    if let Some(result) = container::command() {
+        match result { Ok(entry) => println!("{}", serde_json::json!({"entry":entry})), Err(error) => { eprintln!("{error}"); std::process::exit(1); } }
+        return;
+    }
     let output=Arc::new(Mutex::new(io::stdout()));
     let sources=Arc::new(Mutex::new(HashMap::<String,Source>::new()));
     for line in io::stdin().lock().lines() {
