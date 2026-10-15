@@ -6,7 +6,7 @@ A quiet macOS editor for [Typst](https://typst.app), for writing documents and t
 
 Get the [latest release](https://github.com/gagarine/blank_/releases) (require macOS 27 or newer).
 
-⚠️ On first launch macOS blocks blank_, click **Done** to close the message. Then **System Settings → Privacy & Security → Open Anyway**. This happens because I do not have a [developer ID certificate](https://developer.apple.com/developer-id/) that cost 99$/year.
+⚠️ MacOS blocks the app at first launch, click **Done** to close the message. Then **System Settings → Privacy & Security → Open Anyway**. This happens because I do not have a [developer ID certificate](https://developer.apple.com/developer-id/) that cost 99$/year.
 
 ## Features
 
