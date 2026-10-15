@@ -6,8 +6,10 @@ import BlankCore
 // dependencies, conflict checks, recovery and shared Write/Source history.
 @objc(BlankDocument) @MainActor final class NativeDocument: NSDocument {
     private(set) var session: DocumentSession
+    private var saveFormatAccessory: SaveFormatAccessory?
     private var synchronizing = false
     private var nativeSaveDepth = 0
+    private var closed = false
     private var draftURL: URL?
     private var draftRestorationAllowed = true
     private var synchronizedRevision = -1
@@ -42,9 +44,11 @@ import BlankCore
         hasUndoManager = false
         synchronize()
     }
+    override func writableTypes(for saveOperation: NSDocument.SaveOperationType) -> [String] { DocumentFormat.allCases.map(\.typeName) }
     override func prepareSavePanel(_ savePanel: NSSavePanel) -> Bool {
         let ready = super.prepareSavePanel(savePanel)
-        if session.root == nil, session.draftName != nil { savePanel.nameFieldStringValue = session.title+".typ" }
+        savePanel.nameFieldStringValue = session.title
+        saveFormatAccessory = SaveFormatAccessory(panel:savePanel,format:session.documentFormat)
         return ready
     }
     func synchronize() {
@@ -52,7 +56,9 @@ import BlankCore
         synchronizing = true
         defer { synchronizing = false }
         if session.root != nil { draftURL = nil; isDraft = false }
-        let url = session.root?.appendingPathComponent(session.entry) ?? draftURL
+        let url = session.documentURL ?? draftURL
+        let type = session.containerURL != nil ? DocumentFormat.container.typeName : DocumentFormat.document.typeName
+        if fileType != type { fileType = type }
         if fileURL != url { fileURL = url }
         if let url { fileModificationDate = try? url.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate }
         if session.dirty && synchronizedRevision != session.revision { updateChangeCount(.changeDone) }
@@ -61,17 +67,48 @@ import BlankCore
         windowControllers.forEach { $0.synchronizeWindowTitleWithDocumentName() }
     }
     override func save(to url: URL,ofType typeName: String,for saveOperation: NSDocument.SaveOperationType,completionHandler: @escaping ((any Error)?) -> Void) {
-        if session.root != nil, url.standardizedFileURL != session.root?.appendingPathComponent(session.entry).standardizedFileURL, session.dependencyRevision != session.revision {
+        guard !closed else { completionHandler(CocoaError(.userCancelled)); return }
+        let implicit = [.autosaveInPlaceOperation,.autosaveAsOperation,.autosaveElsewhereOperation].contains(saveOperation)
+        if implicit, session.editor?.hasMarkedText() == true || session.editor?.composing == true {
+            session.preparedContainerWrite = nil; completionHandler(nil); return
+        }
+        if !implicit { session.editor?.finishComposition() }
+        let chosenType: String
+        if let accessory = saveFormatAccessory, accessory.panel?.url?.standardizedFileURL == url.standardizedFileURL { chosenType = accessory.format.typeName }
+        else { chosenType = typeName }
+        saveFormatAccessory = nil
+        if session.root != nil, url.standardizedFileURL != session.documentURL?.standardizedFileURL, session.dependencyRevision != session.revision {
             session.prepareProjectCopy { [weak self] error in
                 if let error { completionHandler(error); return }
-                self?.save(to:url,ofType:typeName,for:saveOperation,completionHandler:completionHandler)
+                self?.save(to:url,ofType:chosenType,for:saveOperation,completionHandler:completionHandler)
+            }
+            return
+        }
+        if chosenType == DocumentFormat.container.typeName,
+           session.preparedContainerWrite?.url != url || session.preparedContainerWrite?.revision != session.revision {
+            session.prepareContainerWrite(to:url) { [weak self] error in
+                if implicit, error is ContainerWriteError {
+                    if let self, !self.closed {
+                        self.session.saveWork?.cancel()
+                        let retry = DispatchWorkItem { [weak self] in self?.session.autosave() }
+                        self.session.saveWork = retry
+                        DispatchQueue.main.asyncAfter(deadline:.now()+0.65,execute:retry)
+                    }
+                    completionHandler(nil); return
+                }
+                if let error { completionHandler(error); return }
+                self?.save(to:url,ofType:chosenType,for:saveOperation,completionHandler:completionHandler)
             }
             return
         }
         nativeSaveDepth += 1
-        super.save(to:url,ofType:typeName,for:saveOperation) { [weak self] error in
-            if let self { self.nativeSaveDepth -= 1; self.synchronize() }
-            completionHandler(error)
+        super.save(to:url,ofType:chosenType,for:saveOperation) { [weak self] error in
+            if let self {
+                self.nativeSaveDepth -= 1
+                if error != nil { self.session.preparedContainerWrite = nil }
+                self.synchronize()
+            }
+            completionHandler(implicit && (error as? CocoaError)?.code == .userCancelled ? nil : error)
         }
     }
     // NSDocument's default save implementation still supplies file coordination,
@@ -79,14 +116,22 @@ import BlankCore
     // and atomic source writes instead of regenerating a document from rich text.
     nonisolated override func writeSafely(to url: URL,ofType typeName: String,for saveOperation: NSDocument.SaveOperationType) throws {
         try MainActor.assumeIsolated {
-            session.editor?.finishComposition()
+            let implicit = [.autosaveInPlaceOperation,.autosaveAsOperation,.autosaveElsewhereOperation].contains(saveOperation)
+            if implicit, session.editor?.hasMarkedText() == true || session.editor?.composing == true {
+                throw CocoaError(.userCancelled)
+            }
+            if !implicit { session.editor?.finishComposition() }
             if saveOperation == .autosaveAsOperation || saveOperation == .autosaveElsewhereOperation || (session.root == nil && saveOperation == .autosaveInPlaceOperation) {
                 try session.saveCopy(to:url,adopt:false,overwritingSnapshot:url.deletingLastPathComponent().path == draftDirectory.path); draftURL = url; return
             }
-            if saveOperation == .saveToOperation { try session.saveCopy(to:url,adopt:false); return }
-            let current = session.root?.appendingPathComponent(session.entry)
+            if saveOperation == .saveToOperation {
+                if typeName == DocumentFormat.container.typeName { try session.saveContainer(to:url,adopt:false) }
+                else { try session.saveCopy(to:url,adopt:false) }
+                return
+            }
+            let current = session.documentURL
             if url.standardizedFileURL == current?.standardizedFileURL { try session.saveToDisk() }
-            else { try session.saveCopy(to:url) }
+            else { try session.saveFormatted(to:url,format:DocumentFormat.allCases.first { $0.typeName == typeName } ?? .document) }
         }
     }
     nonisolated override var backupFileURL: URL? { nil }
@@ -115,7 +160,10 @@ import BlankCore
         if session.editor?.hasMarkedText() == true || session.editor?.composing == true { completionHandler(nil); return }
         do {
             guard session.ensureRecovery() else { throw CocoaError(.fileWriteUnknown) }
-            if session.root != nil { try session.saveToDisk(); completionHandler(nil) }
+            if let url = session.containerURL {
+                save(to:url,ofType:DocumentFormat.container.typeName,for:.autosaveInPlaceOperation,completionHandler:completionHandler)
+            }
+            else if session.root != nil { try session.saveToDisk(); completionHandler(nil) }
             else {
                 guard hasUnautosavedChanges || draftURL == nil || !FileManager.default.fileExists(atPath:draftURL!.path) else { completionHandler(nil); return }
                 try FileManager.default.createDirectory(at:draftDirectory,withIntermediateDirectories:true)
@@ -128,10 +176,12 @@ import BlankCore
         } catch { completionHandler(error) }
     }
     override func close() {
+        closed = true
         session.editor?.finishComposition()
         let retained = AppController.shared?.retainingDraftsForTermination == true
         if session.root == nil { _ = session.ensureRecovery(retainingDraft:retained) }
         super.close()
+        try? FileManager.default.removeItem(at:session.containerDirectory)
         if !retained || session.root != nil || !session.hasDraftContents { try? FileManager.default.removeItem(at:draftContainer) }
     }
     override func canClose(withDelegate delegate: Any,shouldClose shouldCloseSelector: Selector?,contextInfo: UnsafeMutableRawPointer?) {
@@ -144,7 +194,16 @@ import BlankCore
         super.lock(completionHandler:completionHandler)
     }
     override func move(to url: URL,completionHandler: (((any Error)?) -> Void)? = nil) {
-        if session.root != nil, session.dependencyRevision != session.revision, url.deletingLastPathComponent().standardizedFileURL != session.root?.appendingPathComponent(session.entry).deletingLastPathComponent().standardizedFileURL {
+        guard !closed else { completionHandler?(CocoaError(.userCancelled)); return }
+        if let original = session.containerURL, session.dirty,
+           session.preparedContainerWrite?.url != original || session.preparedContainerWrite?.revision != session.revision {
+            session.prepareContainerWrite(to:original) { [weak self] error in
+                if let error { completionHandler?(error); return }
+                self?.move(to:url,completionHandler:completionHandler)
+            }
+            return
+        }
+        if session.containerURL == nil, session.root != nil, session.dependencyRevision != session.revision, url.deletingLastPathComponent().standardizedFileURL != session.documentURL?.deletingLastPathComponent().standardizedFileURL {
             session.prepareProjectCopy { [weak self] error in
                 if let error { completionHandler?(error); return }
                 self?.move(to:url,completionHandler:completionHandler)

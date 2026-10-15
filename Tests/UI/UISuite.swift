@@ -18,6 +18,7 @@ import BlankTestSupport
             guard let controller = app.controllers.first else { fatalError("Missing interactive native host") }
             if args.contains(where:{ $0.hasSuffix("ui-test") }) {
                 if args.contains("--selection-style-ui-test") { NativeSelectionStyleAcceptance.showFixture(controller:controller) }
+                if args.contains("--format-ui-test") { NativeSaveFormatAcceptance.showFixture(controller) }
                 if args.contains("--figure-ui-test") { NativeFigureAcceptance.showFixture(controller:controller) }
                 if args.contains("--reference-ui-test") { NativeReferenceAcceptance.showFixture(controller:controller) }
                 if args.contains("--paragraph-space-ui-test") { NativeParagraphSpaceAcceptance.showFixture(controller:controller) }
@@ -27,6 +28,7 @@ import BlankTestSupport
             if prepare { NativeDraftUIAcceptance.prepare() }
             else if verify { NativeDraftAcceptance.verify() }
             else if disabled { NativeDraftAcceptance.verifyDisabledLaunch() }
+            else if args.contains("--format-self-test") { NativeSaveFormatAcceptance.run(controller) }
             else if args.contains("--find-self-test") { NativeFindAcceptance.run(original:controller) }
             else if args.contains("--paragraph-space-self-test") { NativeParagraphSpaceAcceptance.run(original:controller) }
             else if args.contains("--selection-style-self-test") { NativeSelectionStyleAcceptance.run(controller:controller) }

@@ -81,13 +81,6 @@ public enum BlankApplication {
         else { controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil) }
     }
     @objc func newDocument(_ sender: Any?) { show(DocumentSession()) }
-    @objc func newProject(_ sender: Any?) {
-        let panel = NSSavePanel(); panel.title = "New Project"; panel.nameFieldStringValue = "Untitled Project"; panel.prompt = "Create Project"; panel.canCreateDirectories = true
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            do { self?.show(try ProjectSelection.create(at:url)) } catch { NSAlert(error:error).runModal() }
-        }
-    }
     @objc func renameDocument(_ sender: Any?) { current?.performDocumentAction { $0.rename(sender) } }
     @objc func moveDocument(_ sender: Any?) { current?.performDocumentAction { $0.move(sender) } }
     @objc func openRecent(_ sender: NSMenuItem) { if let url = sender.representedObject as? URL { openURL(url) } }
@@ -101,7 +94,7 @@ public enum BlankApplication {
         menu.addItem(.separator()); let clear = NSMenuItem(title:"Clear Menu",action:#selector(clearRecent(_:)),keyEquivalent:""); clear.target = self; menu.addItem(clear)
     }
     @objc func openDocument(_ sender: Any?) {
-        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.allowsMultipleSelection = false; panel.allowedContentTypes = [.init(filenameExtension:"typ")!]; panel.title = "Open a Typst document"
+        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = true; panel.allowsMultipleSelection = false; panel.allowedContentTypes = [.init(importedAs:"org.typst.source"), .init(importedAs:"org.typst.project-container")]; panel.title = "Open a Typst document"
         panel.begin { [weak self] result in if result == .OK, let url = panel.url { self?.openURL(url) } }
     }
     func openURL(_ url: URL) {
@@ -111,7 +104,7 @@ public enum BlankApplication {
             if let restored = try DocumentSession.restoredDraft(at:url) { session = restored }
             else { try session.open(url) }
             if let existing = controllers.first(where:{ $0.session.id == session.id }) { existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil); return }
-            if let entry = session.root?.appendingPathComponent(session.entry), let document = NSDocumentController.shared.document(for:entry) { document.showWindows(); return }
+            if let entry = session.documentURL, let document = NSDocumentController.shared.document(for:entry) { document.showWindows(); return }
             show(session); NSDocumentController.shared.noteNewRecentDocumentURL(url)
         }
         catch let choice as ProjectEntryChoice {
@@ -229,7 +222,7 @@ public enum BlankApplication {
         app.addItem(.separator()); add(app,"Hide blank_",#selector(NSApplication.hide(_:)),"h",target:NSApp); add(app,"Hide Others",#selector(NSApplication.hideOtherApplications(_:)),"h",[.command,.option],target:NSApp)
         app.addItem(.separator()); add(app,"Quit blank_",#selector(quit(_:)),"q",target:self)
         let file = menu("File")
-        add(file,"New Document",#selector(newDocument(_:)),"n",target:self); add(file,"New Project…",#selector(newProject(_:)),target:self); add(file,"Templates…",#selector(templates(_:)),target:self); add(file,"Open…",#selector(openDocument(_:)),"o",target:self)
+        add(file,"New Document",#selector(newDocument(_:)),"n",target:self); add(file,"Templates…",#selector(templates(_:)),target:self); add(file,"Open…",#selector(openDocument(_:)),"o",target:self)
         let recent = NSMenuItem(title:"Open Recent",action:nil,keyEquivalent:""); recent.submenu = NSMenu(title:"Open Recent"); recent.submenu?.delegate = self; file.addItem(recent)
         add(file,"Open Recovery Copy…",#selector(recover(_:)),target:self); file.addItem(.separator())
         add(file,"Close Window",#selector(NSWindow.performClose(_:)),"w"); add(file,"Save",#selector(save(_:)),"s",target:self); add(file,"Save As…",#selector(saveAs(_:)),"s",[.command,.shift],target:self)

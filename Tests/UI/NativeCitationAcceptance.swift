@@ -5,6 +5,21 @@ import BlankCore
 @testable import BlankNative
 
 @MainActor enum NativeCitationAcceptance {
+    private static func dismiss(_ controller: DocumentWindow) {
+        guard controller.session.sheet != nil || controller.window?.attachedSheet != nil else { return }
+        var dismissed = false
+        controller.session.pendingDocumentAction = { dismissed = true }
+        controller.session.sheet = nil
+        let deadline = Date().addingTimeInterval(5)
+        while (!dismissed || controller.window?.attachedSheet != nil) && Date() < deadline {
+            for _ in 0..<32 {
+                guard let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                NSApp.sendEvent(event)
+            }
+            RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+        }
+        precondition(dismissed && controller.window?.attachedSheet == nil,"Citation sheet finishes SwiftUI dismissal before reopening")
+    }
     static func showFixture(controller: DocumentWindow) {
         URLProtocol.registerClass(CitationAcceptanceProtocol.self)
         if CommandLine.arguments.contains("--citation-fixture-offline") { CitationAcceptanceProtocol.groupFixture = "offline"; CitationAcceptanceProtocol.itemFixtureOffline = true }
@@ -33,8 +48,7 @@ import BlankCore
         let url = requests[0]
         let query = URLComponents(url:url,resolvingAgainstBaseURL:false)?.queryItems ?? []
         check(url.path == "/api/users/0/items/top" && query.first(where:{ $0.name == "q" })?.value == "" && query.first(where:{ $0.name == "limit" })?.value == "40","Initial citation load uses the bounded empty-query personal library search")
-        session.sheet = nil
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        dismiss(controller)
         session.chooseInsertion("citation")
         waitForRequest(2)
         check(CitationAcceptanceProtocol.requests.count == 2,"Reopening Citation loads references for the new presentation")
@@ -49,15 +63,13 @@ import BlankCore
         input.insertText("typed",replacementRange:input.selectedRange())
         waitForRequest(3)
         check(CitationAcceptanceProtocol.requests.last?.query?.contains("q=typed") == true,"Typing in Citation searches without Return or a Search button")
-        session.sheet = nil
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        dismiss(controller)
         session.chooseInsertion("link")
         RunLoop.main.run(until:Date().addingTimeInterval(0.3))
         check(CitationAcceptanceProtocol.requests.count == 3 && session.buffer.source == original,"Other insertion sheets do not fetch Zotero or change source")
         libraryAndKeyboard(controller:controller)
         fieldsAndCommands(controller:controller)
-        session.sheet = nil
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        dismiss(controller)
     }
     static func libraryAndKeyboard(controller: DocumentWindow) {
         func check(_ condition: @autoclosure () -> Bool,_ label: String) {
@@ -69,7 +81,7 @@ import BlankCore
             RunLoop.main.run(until:Date().addingTimeInterval(0.1))
         }
         let session = controller.session
-        session.sheet = nil; RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        dismiss(controller)
         session.buffer.loadExternal("Before café 日本"); session.revision += 1; session.editor?.refresh()
         session.editor?.setSelectedRange(NSRange(location:session.editor!.string.utf16.count,length:0)); session.editor?.captureSelection()
         let original = session.buffer.source
@@ -84,6 +96,7 @@ import BlankCore
         func key(_ code: UInt16,_ characters: String,_ responder: NSResponder) {
             let event = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:table.window!.windowNumber,context:nil,characters:characters,charactersIgnoringModifiers:characters,isARepeat:false,keyCode:code)!
             responder.keyDown(with:event); RunLoop.main.run(until:Date().addingTimeInterval(0.1))
+            if session.sheet == nil { dismiss(controller) }
         }
         check(field.currentEditor() is NSTextView,"Opening Citation automatically focuses its native search field")
         guard let input = field.currentEditor() as? NSTextView else { fatalError("Native citation query is not focused") }
@@ -174,7 +187,7 @@ import BlankCore
             guard condition() else { fatalError("FAIL: \(label)") }; print("PASS: \(label)")
         }
         func load(_ text: String) {
-            session.sheet = nil; RunLoop.main.run(until:Date().addingTimeInterval(0.15))
+            dismiss(controller)
             session.buffer.loadExternal(text); session.revision += 1; editor.refresh()
             controller.window?.makeFirstResponder(editor)
         }

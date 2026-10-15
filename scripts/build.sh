@@ -15,7 +15,7 @@ sdk_major=${sdk_version%%.*}
 if [[ ! "$sdk_major" =~ ^[0-9]+$ ]] || (( 10#$sdk_major < 27 )); then
     echo "Builds require a macOS 27 or newer SDK (found $sdk_version at $sdk_path)" >&2; exit 2
 fi
-app_version=${BLANK_VERSION:-0.5.0}
+app_version=${BLANK_VERSION:-0.6.0}
 app_version=${app_version#v}
 if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
     echo 'BLANK_VERSION must be X.Y.Z or vX.Y.Z, optionally with a prerelease/build suffix' >&2; exit 2
@@ -68,13 +68,13 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>local.blank.swift-native</string>
 <key>CFBundleExecutable</key><string>blank_</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.5.0</string>
+<key>CFBundleShortVersionString</key><string>0.6.0</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>27.0</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
-<key>UTImportedTypeDeclarations</key><array><dict><key>UTTypeIdentifier</key><string>org.typst.source</string><key>UTTypeDescription</key><string>Typst document</string><key>UTTypeConformsTo</key><array><string>public.plain-text</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>typ</string></array><key>public.mime-type</key><string>text/x-typst</string></dict></dict></array>
-<key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Typst document</string><key>CFBundleTypeRole</key><string>Editor</string><key>NSDocumentClass</key><string>BlankDocument</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>org.typst.source</string></array></dict></array>
+<key>UTImportedTypeDeclarations</key><array><dict><key>UTTypeIdentifier</key><string>org.typst.source</string><key>UTTypeDescription</key><string>Typst document</string><key>UTTypeConformsTo</key><array><string>public.plain-text</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>typ</string></array><key>public.mime-type</key><string>text/x-typst</string></dict></dict><dict><key>UTTypeIdentifier</key><string>org.typst.project-container</string><key>UTTypeDescription</key><string>Typst document bundle</string><key>UTTypeConformsTo</key><array><string>public.zip-archive</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array><string>typz</string></array></dict></dict><dict><key>UTTypeIdentifier</key><string>local.blank.project-folder</string><key>UTTypeDescription</key><string>Typst project folder</string><key>UTTypeConformsTo</key><array><string>public.folder</string></array></dict></array>
+<key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Typst document</string><key>CFBundleTypeRole</key><string>Editor</string><key>NSDocumentClass</key><string>BlankDocument</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>org.typst.source</string><string>org.typst.project-container</string><string>local.blank.project-folder</string></array></dict></array>
 </dict></plist>
 PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $app_version" "$app/Contents/Info.plist"

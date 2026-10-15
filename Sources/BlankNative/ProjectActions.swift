@@ -11,7 +11,7 @@ import BlankCore
                     let target = try Self.dependencyTarget(path,root:root)
                     if FileManager.default.fileExists(atPath:target.path) {
                         let text = try String(contentsOf:target,encoding:.utf8)
-                        buffers[path] = DocumentBuffer(text); bases[path] = text; added = true
+                        buffers[path] = DocumentBuffer(text); bases[path] = text; assets.removeValue(forKey:path); added = true
                     }
                 } catch { self.error = "Could not open included chapter \(path): "+error.localizedDescription }
             }
@@ -126,6 +126,7 @@ import BlankCore
             buffers[newEntry] = buffers.removeValue(forKey:old); remapReferenceHistory(from:old,to:newEntry)
             if active == old { active = newEntry }
         }
+        containerURL = nil; containerBaseline = nil
         entry = newEntry; root = destination; bases = buffers.mapValues(\.source); dirty = false
         ProjectSelection.remember(root:destination,entry:newEntry,project:wasProject)
         if identityChanged { revision += 1 }
@@ -135,6 +136,15 @@ import BlankCore
     }
     func moveEntry(to url: URL) throws {
         editor?.finishComposition(); saveWork?.cancel()
+        if let original = containerURL {
+            guard original.standardizedFileURL != url.standardizedFileURL else { return }
+            guard url.pathExtension.lowercased() == "typz", !FileManager.default.fileExists(atPath:url.path) else { throw CocoaError(.fileWriteFileExists) }
+            if dirty { try saveContainer(to:original) } else { try checkContainerUnchanged() }
+            try FileManager.default.moveItem(at:original,to:url)
+            containerURL = url.standardizedFileURL; onTitle?(); persistRecovery()
+            NSDocumentController.shared.noteNewRecentDocumentURL(url)
+            return
+        }
         guard let root else { try saveCopy(to:url); return }
         let original = try Self.dependencyTarget(entry,root:root)
         if original.standardizedFileURL == url.standardizedFileURL { return }

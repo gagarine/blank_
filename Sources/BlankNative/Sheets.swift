@@ -59,7 +59,6 @@ struct CommandsSheet: View {
             ("Preview mode","⌘3",{ session.sheet = nil; session.switchMode(.preview) }),
             ("Find in document","⌘F",{ session.sheet = nil; session.showSearch() }),
             ("Templates…","",{ session.pendingDocumentAction = { AppController.shared.templates(nil) }; session.sheet = nil }),
-            ("New project","",{ session.sheet = nil; AppController.shared.newProject(nil) }),
             ("New document","⌘N",{ session.sheet = nil; AppController.shared.newDocument(nil) }),
             ("Rename document","",{ session.performDocumentAction { $0.rename(nil) } }),
             ("Move document","",{ session.performDocumentAction { $0.move(nil) } }),
@@ -183,7 +182,7 @@ struct StatisticsSheet: View {
                 if let date = dates?.creationDate { GridRow { Text("Created"); Text(date.formatted(date:.abbreviated,time:.shortened)) } }
                 if let date = dates?.contentModificationDate { GridRow { Text("Last saved"); Text(date.formatted(date:.abbreviated,time:.shortened)) } }
             }.font(.system(size:12))
-            if let root = session.root { Text(root.appendingPathComponent(session.entry).path).font(.system(size:11)).foregroundStyle(.secondary).textSelection(.enabled) }
+            if let root = session.root { Text((session.documentURL ?? root).path).font(.system(size:11)).foregroundStyle(.secondary).textSelection(.enabled) }
             Text("Text counts describe prose and table cells. Custom code is omitted. Project words include the open chapter files.").font(.system(size:11)).foregroundStyle(.secondary)
         }
     }

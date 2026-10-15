@@ -94,9 +94,13 @@ import BlankCore
             return box
         }
         func key(_ input: NSTextView,_ character: String,_ keyCode: UInt16) {
+            var dismissed = false
+            session.pendingDocumentAction = { dismissed = true }
             let event = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.attachedSheet!.windowNumber,context:nil,characters:character,charactersIgnoringModifiers:character,isARepeat:false,keyCode:keyCode)!
-            input.keyDown(with:event)
-            awaitNative { session.sheet == nil && controller.window?.attachedSheet == nil }
+            NSApp.sendEvent(event)
+            // AppKit can detach the window before SwiftUI completes onDismiss.
+            // Reusing the same sheet identity before that callback races it.
+            awaitNative { dismissed && session.sheet == nil && controller.window?.attachedSheet == nil }
         }
         let box = open()
         check(box.objectValues as? [String] == [target] && box.isEditable && !box.completes,"Cross reference offers a native editable list without forcing autocomplete")
@@ -126,8 +130,8 @@ import BlankCore
         session.buffer.loadExternal("No labels yet."); editor.refresh()
         let empty = open()
         check(empty.numberOfItems == 0 && empty.isEditable,"Documents without labels still accept a custom reference")
-        session.sheet = nil
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        guard let emptyInput = empty.currentEditor() as? NSTextView else { fatalError("Missing empty reference field editor") }
+        key(emptyInput,"\u{1b}",53)
         for (name,suffix) in [("sec:end.","after"),("sec:end:","日本"),("sec:cafe\u{301}","[brackets]after")] {
             let adjacent = "// Keep\n#set heading(numbering: \"1.\")\n= Target <"+name+">\n\nBefore|"+suffix
             session.buffer.loadExternal(adjacent)
