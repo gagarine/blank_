@@ -6,16 +6,19 @@ import BlankCore
 
 @MainActor enum NativeCitationAcceptance {
     private static func dismiss(_ controller: DocumentWindow) {
+        guard controller.session.sheet != nil || controller.window?.attachedSheet != nil else { return }
+        var dismissed = false
+        controller.session.pendingDocumentAction = { dismissed = true }
         controller.session.sheet = nil
         let deadline = Date().addingTimeInterval(5)
-        while controller.window?.attachedSheet != nil && Date() < deadline {
+        while (!dismissed || controller.window?.attachedSheet != nil) && Date() < deadline {
             for _ in 0..<32 {
                 guard let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
                 NSApp.sendEvent(event)
             }
             RunLoop.main.run(until:Date().addingTimeInterval(0.01))
         }
-        precondition(controller.window?.attachedSheet == nil,"Citation sheet finishes native dismissal before reopening")
+        precondition(dismissed && controller.window?.attachedSheet == nil,"Citation sheet finishes SwiftUI dismissal before reopening")
     }
     static func showFixture(controller: DocumentWindow) {
         URLProtocol.registerClass(CitationAcceptanceProtocol.self)

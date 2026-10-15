@@ -94,9 +94,13 @@ import BlankCore
             return box
         }
         func key(_ input: NSTextView,_ character: String,_ keyCode: UInt16) {
+            var dismissed = false
+            session.pendingDocumentAction = { dismissed = true }
             let event = NSEvent.keyEvent(with:.keyDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:controller.window!.attachedSheet!.windowNumber,context:nil,characters:character,charactersIgnoringModifiers:character,isARepeat:false,keyCode:keyCode)!
-            input.keyDown(with:event)
-            awaitNative { session.sheet == nil && controller.window?.attachedSheet == nil }
+            NSApp.sendEvent(event)
+            // AppKit can detach the window before SwiftUI completes onDismiss.
+            // Reusing the same sheet identity before that callback races it.
+            awaitNative { dismissed && session.sheet == nil && controller.window?.attachedSheet == nil }
         }
         let box = open()
         check(box.objectValues as? [String] == [target] && box.isEditable && !box.completes,"Cross reference offers a native editable list without forcing autocomplete")
