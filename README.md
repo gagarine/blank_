@@ -2,6 +2,12 @@
 
 A quiet macOS editor for [Typst](https://typst.app), for writing documents and turning them into polished PDFs. Edit formatted text, work directly with the source, or preview the finished pages—all in one app.
 
+## Install
+
+Get the [latest release](https://github.com/gagarine/blank_/releases) (require macOS 27 or newer).
+
+⚠️ On first launch macOS blocks blank_, click **Done** to close the message. Then **System Settings → Privacy & Security → Open Anyway**. This happens because I do not have a [developer ID certificate](https://developer.apple.com/developer-id/) that cost 99$/year.
+
 ## Features
 
 - **Three views, one document.** Switch between **Write**, **Source** and **Preview**, with shared editing history and Undo/Redo.
@@ -18,11 +24,6 @@ Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3**
 
 ![blank_ with a garden photograph, heading outline, inline formatting and color palettes](Resources/Screenshots/editor.jpg)
 
-## Download
-
-Get the [latest release](https://github.com/gagarine/blank_/releases) for Apple Silicon. Current development builds require macOS 27 or newer; earlier releases may support older versions. Automatic updates are not available yet.
-
-If macOS blocks blank_, click **Done**, then **System Settings → Privacy & Security → Open Anyway**. [Apple’s instructions](https://support.apple.com/en-us/102445).
 
 ## Development
 
