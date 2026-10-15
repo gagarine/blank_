@@ -39,7 +39,10 @@ import BlankCore
             session.buffer.loadExternal(""); session.buffer.loadExternal(source); session.revision += 1; editor.clearInsertionStyle(); editor.refresh()
             controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(editor); editor.scrollRangeToVisible(NSRange(location:0,length:0))
         }
-        NSApp.activate(ignoringOtherApps:true); RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        NSApp.activate(ignoringOtherApps:true)
+        controller.window?.makeKeyAndOrderFront(nil); controller.window?.makeFirstResponder(editor)
+        awaitNative { NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor }
+        check(NSApp.isActive && controller.window?.isKeyWindow == true && controller.window?.firstResponder === editor,"Selection-style fixture awaits real native activation before injecting keys")
         let original = "Before café 👩🏽‍💻 after\n\n#let custom = 42"
         load(original)
         let range = (editor.string as NSString).range(of:"café 👩🏽‍💻")

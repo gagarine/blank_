@@ -45,22 +45,30 @@ enum DocumentFormat: Int, CaseIterable {
         explanation.preferredMaxLayoutWidth = 440
         explanation.font = .systemFont(ofSize:NSFont.smallSystemFontSize); explanation.textColor = .secondaryLabelColor
         view.orientation = .vertical; view.alignment = .leading; view.spacing = 8
+        view.edgeInsets = NSEdgeInsets(top:12,left:0,bottom:12,right:0)
         view.addArrangedSubview(row); view.addArrangedSubview(explanation)
         view.translatesAutoresizingMaskIntoConstraints = false
         view.widthAnchor.constraint(equalToConstant:440).isActive = true
         explanation.widthAnchor.constraint(equalTo:view.widthAnchor).isActive = true
         panel.accessoryView = view
+        let name = panel.nameFieldStringValue as NSString
+        // Configuration-only property on macOS 27. Let currentContentType own
+        // extension changes once the remote panel has been presented.
+        panel.nameFieldStringValue = ["typ","typz"].contains(name.pathExtension.lowercased()) ? name.deletingPathExtension : name as String
         changed()
     }
     @objc func changed() {
         guard let panel else { return }
-        let old = panel.nameFieldStringValue as NSString
-        let stem = ["typ","typz"].contains(old.pathExtension.lowercased()) ? old.deletingPathExtension : old as String
-        panel.allowedContentTypes = format == .folder ? [] : [UTType(importedAs:format.typeName)]
-        panel.allowsOtherFileTypes = format == .folder
-        panel.nameFieldStringValue = stem + (format == .document ? ".typ" : format == .container ? ".typz" : "")
+        let type: UTType = format == .folder ? .directory : UTType(importedAs:format.typeName)
+        panel.allowedContentTypes = [type]; panel.currentContentType = type
+        panel.allowsOtherFileTypes = false
         explanation.stringValue = format.detail
     }
+}
+
+enum ContainerWriteError: LocalizedError {
+    case documentChanged
+    var errorDescription: String? { "The document changed while preparing its bundle. Save again." }
 }
 
 struct PreparedContainerWrite {
@@ -167,7 +175,7 @@ enum TypstContainer {
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { completion(CocoaError(.userCancelled)); return }
                     guard self.revision == current else {
-                        completion(NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"The document changed while preparing its bundle. Save again."])); return
+                        completion(ContainerWriteError.documentChanged); return
                     }
                     switch result {
                     case .failure(let error): completion(error)

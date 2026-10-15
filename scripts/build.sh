@@ -15,7 +15,7 @@ sdk_major=${sdk_version%%.*}
 if [[ ! "$sdk_major" =~ ^[0-9]+$ ]] || (( 10#$sdk_major < 27 )); then
     echo "Builds require a macOS 27 or newer SDK (found $sdk_version at $sdk_path)" >&2; exit 2
 fi
-app_version=${BLANK_VERSION:-0.5.0}
+app_version=${BLANK_VERSION:-0.6.0}
 app_version=${app_version#v}
 if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
     echo 'BLANK_VERSION must be X.Y.Z or vX.Y.Z, optionally with a prerelease/build suffix' >&2; exit 2
@@ -68,7 +68,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>local.blank.swift-native</string>
 <key>CFBundleExecutable</key><string>blank_</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.5.0</string>
+<key>CFBundleShortVersionString</key><string>0.6.0</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>27.0</string>

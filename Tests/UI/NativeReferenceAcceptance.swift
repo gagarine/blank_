@@ -126,8 +126,8 @@ import BlankCore
         session.buffer.loadExternal("No labels yet."); editor.refresh()
         let empty = open()
         check(empty.numberOfItems == 0 && empty.isEditable,"Documents without labels still accept a custom reference")
-        session.sheet = nil
-        RunLoop.main.run(until:Date().addingTimeInterval(0.2))
+        guard let emptyInput = empty.currentEditor() as? NSTextView else { fatalError("Missing empty reference field editor") }
+        key(emptyInput,"\u{1b}",53)
         for (name,suffix) in [("sec:end.","after"),("sec:end:","日本"),("sec:cafe\u{301}","[brackets]after")] {
             let adjacent = "// Keep\n#set heading(numbering: \"1.\")\n= Target <"+name+">\n\nBefore|"+suffix
             session.buffer.loadExternal(adjacent)

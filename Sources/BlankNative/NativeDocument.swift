@@ -57,7 +57,8 @@ import BlankCore
         defer { synchronizing = false }
         if session.root != nil { draftURL = nil; isDraft = false }
         let url = session.documentURL ?? draftURL
-        fileType = session.containerURL != nil ? DocumentFormat.container.typeName : DocumentFormat.document.typeName
+        let type = session.containerURL != nil ? DocumentFormat.container.typeName : DocumentFormat.document.typeName
+        if fileType != type { fileType = type }
         if fileURL != url { fileURL = url }
         if let url { fileModificationDate = try? url.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate }
         if session.dirty && synchronizedRevision != session.revision { updateChangeCount(.changeDone) }
@@ -67,10 +68,13 @@ import BlankCore
     }
     override func save(to url: URL,ofType typeName: String,for saveOperation: NSDocument.SaveOperationType,completionHandler: @escaping ((any Error)?) -> Void) {
         guard !closed else { completionHandler(CocoaError(.userCancelled)); return }
-        session.editor?.finishComposition()
+        let implicit = [.autosaveInPlaceOperation,.autosaveAsOperation,.autosaveElsewhereOperation].contains(saveOperation)
+        if implicit, session.editor?.hasMarkedText() == true || session.editor?.composing == true {
+            session.preparedContainerWrite = nil; completionHandler(nil); return
+        }
+        if !implicit { session.editor?.finishComposition() }
         let chosenType: String
         if let accessory = saveFormatAccessory, accessory.panel?.url?.standardizedFileURL == url.standardizedFileURL { chosenType = accessory.format.typeName }
-        else if url.pathExtension.lowercased() == "typz" { chosenType = DocumentFormat.container.typeName }
         else { chosenType = typeName }
         saveFormatAccessory = nil
         if session.root != nil, url.standardizedFileURL != session.documentURL?.standardizedFileURL, session.dependencyRevision != session.revision {
@@ -83,6 +87,15 @@ import BlankCore
         if chosenType == DocumentFormat.container.typeName,
            session.preparedContainerWrite?.url != url || session.preparedContainerWrite?.revision != session.revision {
             session.prepareContainerWrite(to:url) { [weak self] error in
+                if implicit, error is ContainerWriteError {
+                    if let self, !self.closed {
+                        self.session.saveWork?.cancel()
+                        let retry = DispatchWorkItem { [weak self] in self?.session.autosave() }
+                        self.session.saveWork = retry
+                        DispatchQueue.main.asyncAfter(deadline:.now()+0.65,execute:retry)
+                    }
+                    completionHandler(nil); return
+                }
                 if let error { completionHandler(error); return }
                 self?.save(to:url,ofType:chosenType,for:saveOperation,completionHandler:completionHandler)
             }
@@ -90,8 +103,12 @@ import BlankCore
         }
         nativeSaveDepth += 1
         super.save(to:url,ofType:chosenType,for:saveOperation) { [weak self] error in
-            if let self { self.nativeSaveDepth -= 1; self.synchronize() }
-            completionHandler(error)
+            if let self {
+                self.nativeSaveDepth -= 1
+                if error != nil { self.session.preparedContainerWrite = nil }
+                self.synchronize()
+            }
+            completionHandler(implicit && (error as? CocoaError)?.code == .userCancelled ? nil : error)
         }
     }
     // NSDocument's default save implementation still supplies file coordination,
@@ -99,7 +116,11 @@ import BlankCore
     // and atomic source writes instead of regenerating a document from rich text.
     nonisolated override func writeSafely(to url: URL,ofType typeName: String,for saveOperation: NSDocument.SaveOperationType) throws {
         try MainActor.assumeIsolated {
-            session.editor?.finishComposition()
+            let implicit = [.autosaveInPlaceOperation,.autosaveAsOperation,.autosaveElsewhereOperation].contains(saveOperation)
+            if implicit, session.editor?.hasMarkedText() == true || session.editor?.composing == true {
+                throw CocoaError(.userCancelled)
+            }
+            if !implicit { session.editor?.finishComposition() }
             if saveOperation == .autosaveAsOperation || saveOperation == .autosaveElsewhereOperation || (session.root == nil && saveOperation == .autosaveInPlaceOperation) {
                 try session.saveCopy(to:url,adopt:false,overwritingSnapshot:url.deletingLastPathComponent().path == draftDirectory.path); draftURL = url; return
             }

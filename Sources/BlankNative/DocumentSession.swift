@@ -222,10 +222,10 @@ struct Recovery: Codable {
         if let editor { buffer.format(editor.selectedRange(),mark:mark); changed() }
     }
     func open(_ url: URL, selectedEntry: String? = nil, rememberProject: Bool = true) throws {
-        if url.pathExtension.lowercased() == "typz" { try openContainer(url); return }
         let fm = FileManager.default
         var directory: ObjCBool = false
         guard fm.fileExists(atPath:url.path,isDirectory:&directory) else { throw CocoaError(.fileNoSuchFile) }
+        if !directory.boolValue, url.pathExtension.lowercased() == "typz" { try openContainer(url); return }
         let project = directory.boolValue ? url.standardizedFileURL : ProjectSelection.root(for:url)
         let file = try directory.boolValue ? (selectedEntry ?? ProjectSelection.entry(in:project)) : ProjectSelection.relative(url,root:project)
         let target = try Self.dependencyTarget(file,root:project)
@@ -341,6 +341,7 @@ struct Recovery: Codable {
             return
         }
         let panel = NSSavePanel(); panel.nameFieldStringValue = title; panel.title = "Save Document"
+        panel.directoryURL = documentURL?.deletingLastPathComponent()
         let accessory = SaveFormatAccessory(panel:panel,format:documentFormat)
         guard let window else { completion?(false); return }
         panel.beginSheetModal(for:window) { [weak self, accessory] result in
