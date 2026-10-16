@@ -227,10 +227,22 @@ final class DocumentTests {
             expectEqual(FigureFieldEdit(added)!.caption,"Caption"); expectEqual(FigureFieldEdit(added)!.alt,"Alternative")
             expectEqual(added.components(separatedBy:"/* keep */").count,bare.components(separatedBy:"/* keep */").count)
         }
+        for raw in ["#figure(image(\"a.svg\"))", "#figure(image(\"a.svg\", width: auto))", "#image(\"a.svg\")"] {
+            let automatic = FigureFieldEdit(raw)!
+            expectTrue(automatic.width == nil)
+            expectEqual(automatic.applying(path:automatic.path,caption:automatic.caption,alt:automatic.alt,width:nil),raw)
+            let sized = automatic.applying(path:automatic.path,caption:automatic.caption,alt:automatic.alt,width:37.5)
+            expectEqual(FigureFieldEdit(sized)!.width,37.5)
+            let restored = FigureFieldEdit(sized)!.applying(path:automatic.path,caption:automatic.caption,alt:automatic.alt,width:nil)
+            expectFalse(ParsedSource.parse(restored).erroneous)
+            expectTrue(FigureFieldEdit(restored)!.width == nil)
+        }
+        let automatic = edit.applying(path:edit.path,caption:edit.caption,alt:edit.alt,width:nil)
+        expectTrue(automatic.contains("/*w*/") && automatic.contains("/* keep */") && automatic.contains("/*c*/"))
+        expectFalse(ParsedSource.parse(automatic).erroneous)
         for unsupported in [
-            "#image(\"a.svg\", width: 85%)", "#figure(image(path, width: 85%))",
-            "#figure(image(\"a.svg\"))", "#figure(image(\"a.svg\", width: auto))",
-            "#figure(image(\"a.svg\", width: 85.5%))", "#figure(image(\"a.svg\", width: 101%))",
+            "#figure(image(path, width: 85%))",
+            "#figure(image(\"a.svg\", width: 101%))",
             "#figure(image(\"a.svg\", width: 85%, alt: text))",
             "#figure(image(\"a.svg\", width: 85%), caption: [*Rich*])",
             "#figure(image(\"a.svg\", width: 85%), caption: [A /* keep */ caption])",

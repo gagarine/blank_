@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import BlankCore
+import QuartzCore
 
 struct NativeEditor: NSViewRepresentable {
     @ObservedObject var session: DocumentSession
@@ -104,7 +105,29 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
     var slashIndex = 0
     var slashQuery = ""
     var plainSlashQuery = false
-    var hoverBlock: Int?
+    var hoverBlock: Int? { didSet { positionBlockHandle(animated:oldValue != nil && hoverBlock != nil) } }
+    private var blockHandleSuppressed = false
+    private lazy var blockHandle: BlockHandleIndicator = {
+        let view = BlockHandleIndicator(frame:.zero); view.isHidden = true; view.wantsLayer = true
+        addSubview(view); return view
+    }()
+    func hideBlockHandleForTyping() {
+        blockHandleSuppressed = true; hoverBlock = nil
+    }
+    func positionBlockHandle(animated: Bool = false) {
+        guard let session, session.mode == .write, !blockHandleSuppressed, !draggingBlock,
+              let index = grabbed ?? hoverBlock, session.buffer.projection.blocks.indices.contains(index) else { blockHandle.isHidden = true; return }
+        let center = tableBlockHandleRect(index)?.midY ?? rectFor(session.buffer.projection.blocks[index].display.location).midY
+        let target = NSRect(x:textContainerInset.width-32,y:center-14,width:28,height:28)
+        let visible = !blockHandle.isHidden
+        blockHandle.isHidden = false; blockHandle.ink = session.inkColor; blockHandle.needsDisplay = true
+        if visible && animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.12; context.timingFunction = CAMediaTimingFunction(name:.easeInEaseOut)
+                blockHandle.animator().frame = target
+            }
+        } else if blockHandle.frame != target { blockHandle.frame = target }
+    }
     var grabbed: Int?
     var pressPoint = NSPoint.zero
     var dragPoint = NSPoint.zero
@@ -453,6 +476,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         let local = session.mode == .write && lastMode == .write && lastPath == session.active && lastAppearance == appearance && lastRevision == session.buffer.revision-1 && session.buffer.lastEditWasLocal
         let localIndex = local ? session.buffer.projection.blockIndex(at:session.buffer.projection.displayOffset(at:session.buffer.selection.focus)) : nil
         if !local { objectViews.values.forEach { $0.removeFromSuperview() }; objectViews.removeAll() }
+        else if let localIndex, session.buffer.projection.blocks[localIndex].kind == "image" {
+            // Local source edits retain the rest of the text storage. Rebuild
+            // this figure's display children for changed width/caption/path.
+            objectViews.removeValue(forKey:localIndex)?.removeFromSuperview()
+        }
         let attributed = rendered(onlyBlock:localIndex), old = string
         let displayPatch = SourcePatch.difference(old,attributed.string)
         if let patch = displayPatch {
@@ -655,12 +683,14 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         }
     }
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        hideBlockHandleForTyping()
         if composing || hasMarkedText() {
             super.insertText(insertString,replacementRange:replacementRange); composing = false; commitComposition(); return
         }
         super.insertText(insertString,replacementRange:replacementRange)
     }
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        hideBlockHandleForTyping()
         guard session?.requestEditing() != false else { return }
         if !composing, let session, session.mode == .write,
            !session.buffer.canEditWrite(replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange) { return }
@@ -679,6 +709,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         session.changed()
     }
     override func keyDown(with event: NSEvent) {
+        hideBlockHandleForTyping()
         dismissLinkHover()
         if event.keyCode == 53, selectionPanel?.child?.isShown == true { selectionPanel?.child?.close(); return }
         if event.keyCode == 53, selectionPanel?.isVisible == true { selectionPanel?.orderOut(nil); return }
@@ -862,7 +893,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
                 let url = directory.appendingPathComponent("pasted-image.png"); try data.write(to:url)
                 let path = try session.importImage(url); try? FileManager.default.removeItem(at:directory)
                 captureSelection(); session.insertionAnchor = session.buffer.selection
-                session.insertSource("#figure(image(\(jsonString(path)), width: 85%))",block:true)
+                session.insertSource("#figure(image(\(jsonString(path))))",block:true)
             } catch { session.error = error.localizedDescription }
             return
         }
@@ -927,7 +958,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         return session.buffer.projection.blocks.indices.first { index in
             let rect = blockRect(index)
             if tableBlockHandleRect(index)?.contains(point) == true { return true }
-            return point.y >= rect.minY-5 && point.y < rect.maxY+5 && point.x >= textContainerInset.width-38 && point.x <= textContainerInset.width+14
+            return point.y >= rect.minY-5 && point.y < rect.maxY+5 && point.x >= textContainerInset.width-38 && point.x <= bounds.width-textContainerInset.width
         }
     }
     func tableBlockHandleRect(_ index: Int) -> NSRect? {
@@ -955,9 +986,11 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if updateSidebarResizeCursor(for:event) { return }
         if session?.mode != .write { super.cursorUpdate(with:event) }
         else if grabbed != nil { NSCursor.closedHand.set() }
-        else { mouseMoved(with:event) }
+        else { updatePointer(with:event,resumingHover:false) }
     }
-    override func mouseMoved(with event: NSEvent) {
+    override func mouseMoved(with event: NSEvent) { updatePointer(with:event,resumingHover:true) }
+    private func updatePointer(with event: NSEvent,resumingHover: Bool) {
+        if resumingHover { blockHandleSuppressed = false }
         if updateSelectionPanelCursor(for:event) { return }
         if updateSlashMenuCursor(for:event) { return }
         if updateToolbarCursor(for:event) { return }
@@ -970,7 +1003,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if let cell = session?.buffer.projection.tableCell(at:NSRange(location:offset,length:0)), tableCellRect(block:cell.block,cell:cell.cell)?.contains(point) == true { tableControlCell = (cell.block,cell.cell) }
         else if tableControlReachRect()?.contains(point) != true { tableControlCell = session?.buffer.projection.tableCell(at:selectedRange()).map { ($0.block,$0.cell) } }
         positionTableControls()
-        let next = bounds.contains(point) ? hoveredBlock(at:point) : nil
+        let next = !blockHandleSuppressed && bounds.contains(point) ? hoveredBlock(at:point) : nil
         if next != hoverBlock { hoverBlock = next; needsDisplay = true }
         if let next, isOverBlockHandle(point,index:next) { NSCursor.openHand.set() }
         else if inlineField(at:point) != nil { NSCursor.pointingHand.set() }
@@ -1179,12 +1212,8 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
             if let dragImage { dragImage.draw(in:NSRect(x:dragPoint.x+18,y:dragPoint.y+12,width:min(550,dragImage.size.width),height:dragImage.size.height),from:.zero,operation:.sourceOver,fraction:0.45,respectFlipped:true,hints:nil) }
             else { preview.draw(in:NSRect(x:dragPoint.x+18,y:dragPoint.y+12,width:350,height:150)) }
             if let line = dropIndicatorRect() { session.inkColor.withAlphaComponent(0.45).setFill(); line.fill() }
-        } else if let index = grabbed ?? hoverBlock {
-            let rect = rectFor(session.buffer.projection.blocks[index].display.location)
-            let centerY = tableBlockHandleRect(index)?.midY ?? rect.midY
-            session.inkColor.withAlphaComponent(0.45).setFill()
-            for row in 0..<3 { for column in 0..<2 { NSBezierPath(ovalIn:NSRect(x:textContainerInset.width-26+CGFloat(column*5),y:centerY-6+CGFloat(row*5),width:3,height:3)).fill() } }
         }
+        positionBlockHandle()
     }
     func listNumber(_ index: Int) -> Int {
         guard let blocks = session?.buffer.projection.blocks else { return 1 }
@@ -1204,7 +1233,7 @@ final class NativeTextView: NSTextView, NSTextViewDelegate {
         if let urls = sender.draggingPasteboard.readObjects(forClasses:[NSURL.self],options:[.urlReadingFileURLsOnly:true]) as? [URL] {
             do {
                 let imports = try urls.map { try session.importImage($0) }
-                session.insertSource(imports.map { "#figure(image(\(jsonString($0)), width: 85%))" }.joined(separator:"\n\n"),block:true)
+                session.insertSource(imports.map { "#figure(image(\(jsonString($0))))" }.joined(separator:"\n\n"),block:true)
                 return true
             } catch { session.error = error.localizedDescription; return false }
         }
@@ -1434,5 +1463,17 @@ extension NativeTextView {
               let row = tableCellRect(block:index,cell:cell/block.columns*block.columns),
               let column = tableCellRect(block:index,cell:cell%block.columns) else { return nil }
         return active.union(row).union(column).insetBy(dx:-36,dy:-36)
+    }
+}
+
+final class BlockHandleIndicator: NSView {
+    var ink = NSColor.secondaryLabelColor
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        ink.withAlphaComponent(0.45).setFill()
+        for row in 0..<3 { for column in 0..<2 {
+            NSBezierPath(ovalIn:NSRect(x:6+CGFloat(column*5),y:8+CGFloat(row*5),width:3,height:3)).fill()
+        } }
     }
 }

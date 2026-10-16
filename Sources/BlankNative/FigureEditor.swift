@@ -2,6 +2,27 @@ import AppKit
 import SwiftUI
 import BlankCore
 
+struct ImageWidthField: View {
+    @Binding var width: Double?
+    private var amount: Binding<Double> { Binding(get:{ width ?? 100 },set:{ width = min(100,max(1,$0)) }) }
+    var body: some View {
+        HStack {
+            Text("Width:")
+            Picker("Image width",selection:Binding(get:{ width != nil },set:{ width = $0 ? 100 : nil })) {
+                Text("Automatic").tag(false)
+                Text("Custom").tag(true)
+            }.labelsHidden().fixedSize()
+            if width != nil {
+                TextField("Percent",value:amount,format:.number.precision(.fractionLength(0...2)))
+                    .textFieldStyle(.roundedBorder).frame(width:70).accessibilityLabel("Image width percentage")
+                Text("%")
+                Stepper("Image width percentage",value:amount,in:1...100,step:5).labelsHidden().fixedSize()
+            }
+            Spacer()
+        }
+    }
+}
+
 struct FigureFieldEditor: View {
     @ObservedObject var session: DocumentSession
     let edit: FigureFieldEdit
@@ -9,7 +30,7 @@ struct FigureFieldEditor: View {
     @NativeState private var path = ""
     @NativeState private var caption = ""
     @NativeState private var alt = ""
-    @NativeState private var width = 85
+    @NativeState private var width: Double?
     @NativeState private var replacement: URL?
     @NativeState private var failure = ""
     var body: some View {
@@ -21,9 +42,9 @@ struct FigureFieldEditor: View {
                 if panel.runModal() == .OK, let url = panel.url { replacement = url }
             }
             if let replacement { Text("Replacement: "+replacement.lastPathComponent).font(.system(size:11)).foregroundStyle(.secondary) }
-            TextField("Caption",text:$caption).textFieldStyle(.roundedBorder)
+            if edit.supportsCaption { TextField("Caption",text:$caption).textFieldStyle(.roundedBorder) }
             TextField("Alternative text",text:$alt).textFieldStyle(.roundedBorder)
-            Stepper("Width: \(width)%",value:$width,in:5...100,step:5)
+            ImageWidthField(width:$width)
             if !failure.isEmpty { Text(failure).font(.system(size:11)).foregroundStyle(.red).textSelection(.enabled) }
             HStack {
                 Button("Edit source…",action:editSource)
@@ -39,7 +60,7 @@ struct FigureFieldEditor: View {
 }
 
 @MainActor extension DocumentSession {
-    @discardableResult func applyFigure(_ edit: FigureFieldEdit,path: String,caption: String,alt: String,width: Int,replacement: URL? = nil) throws -> Bool {
+    @discardableResult func applyFigure(_ edit: FigureFieldEdit,path: String,caption: String,alt: String,width: Double?,replacement: URL? = nil) throws -> Bool {
         guard requestEditing(), objectSnapshotIsCurrent(), edit.original.utf8.elementsEqual(objectOriginal.utf8) else { return false }
         // Choose only stages a URL. Cancel, stale edits and failed reads/writes
         // leave project assets alone. Keep both assets for source Undo/Redo.

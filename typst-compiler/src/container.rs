@@ -1,4 +1,5 @@
-//! Interoperable .typz ZIP containers. No app metadata is stored in the project.
+//! Interoperable .typz ZIP containers with optional, disposable Quick Look PDFs.
+use base64::Engine;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{Cursor, Read, Write};
@@ -6,17 +7,10 @@ use std::path::Path;
 use unicode_normalization::UnicodeNormalization;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-const MAX_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_FILES: usize = 10_000;
+use blank_container::{
+    MAX_BYTES, MAX_FILES, MAX_PREVIEW, cached_preview, preview_path, valid_path,
+};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-fn valid_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.contains(['\\', ':', '\0'])
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
-}
 
 fn key(path: &str) -> String {
     path.nfc().collect::<String>().to_lowercase()
@@ -95,10 +89,45 @@ fn decode(bytes: Vec<u8>) -> Result<(String, BTreeMap<String, Vec<u8>>)> {
             parent = path.parent();
         }
     }
+    if let Some(path) = preview_path(&metadata, &entry) {
+        if files
+            .get(path)
+            .is_some_and(|data| data.starts_with(b"%PDF-") && data.len() as u64 <= MAX_PREVIEW)
+        {
+            files.remove(path);
+        }
+    }
     Ok((entry, files))
 }
 
 fn encode(entry: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
+    encode_preview(entry, files, None)
+}
+
+fn rendered_preview(root: &Path, entry: &str) -> Option<Vec<u8>> {
+    let params = serde_json::json!({"root":root,"entry":entry,"files":{},"revision":0});
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let pdf = super::compile(params).ok().and_then(|value| {
+            value["pdf"]
+                .as_str()
+                .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
+        });
+        let _ = sender.send(pdf);
+    });
+    // A broken/slow document must still save. This short-lived CLI exits after
+    // encoding, stopping any unfinished render; browsing never calls this path.
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .ok()
+        .flatten()
+}
+
+fn encode_preview(
+    entry: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    preview: Option<&[u8]>,
+) -> Result<Vec<u8>> {
     if !valid_path(entry) || !entry.to_lowercase().ends_with(".typ") || !files.contains_key(entry) {
         return Err("Invalid .typz entrypoint.".into());
     }
@@ -108,11 +137,43 @@ fn encode(entry: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>> {
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     let mut metadata = toml::map::Map::new();
     metadata.insert("entrypoint".into(), toml::Value::String(entry.into()));
+    let preview = preview.filter(|data| {
+        data.starts_with(b"%PDF-")
+            && data.len() as u64 <= MAX_PREVIEW
+            && files.len() < MAX_FILES
+            && files.values().map(|d| d.len() as u64).sum::<u64>() + data.len() as u64 <= MAX_BYTES
+    });
+    let preview_name = preview.map(|_| {
+        (0..)
+            .map(|i| format!("blank-preview-{i}.pdf"))
+            .find(|name| {
+                !files
+                    .keys()
+                    .any(|path| key(path) == key(name) || key(path).starts_with(&(key(name) + "/")))
+            })
+            .unwrap()
+    });
+    if let Some(name) = &preview_name {
+        metadata.insert(
+            "blank_".into(),
+            toml::Value::Table(toml::map::Map::from_iter([
+                ("version".into(), toml::Value::Integer(1)),
+                ("preview".into(), toml::Value::String(name.clone())),
+            ])),
+        );
+    }
     writer.set_comment(toml::to_string(&metadata)?)?;
     for (name, data) in files {
         if !valid_path(name) {
             return Err("Unsafe project path.".into());
         }
+        writer.start_file(
+            name,
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
+        )?;
+        writer.write_all(data)?;
+    }
+    if let (Some(name), Some(data)) = (preview_name, preview) {
         writer.start_file(
             name,
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
@@ -159,8 +220,8 @@ pub fn command() -> Option<Result<String>> {
     let args: Vec<_> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("--typz-read") => Some((|| {
-            if args.len() != 4 {
-                return Err("Usage: --typz-read archive destination".into());
+            if args.len() != 4 && args.len() != 5 {
+                return Err("Usage: --typz-read archive destination [preview-output]".into());
             }
             let source = Path::new(&args[2]);
             if fs::metadata(source)?.len() > MAX_BYTES {
@@ -174,16 +235,39 @@ pub fn command() -> Option<Result<String>> {
                 fs::create_dir_all(target.parent().unwrap())?;
                 fs::write(target, data)?;
             }
+            if let Some(output) = args.get(4) {
+                if let Ok(data) = cached_preview(source) {
+                    fs::write(output, data)?;
+                }
+            }
             Ok(entry)
         })()),
+        Some("--typz-preview") => Some((|| {
+            if args.len() != 4 {
+                return Err("Usage: --typz-preview archive output".into());
+            }
+            fs::write(&args[3], cached_preview(Path::new(&args[2]))?)?;
+            Ok("preview".into())
+        })()),
         Some("--typz-write") => Some((|| {
-            if args.len() != 5 {
-                return Err("Usage: --typz-write root entry archive".into());
+            if args.len() != 5 && args.len() != 6 {
+                return Err(
+                    "Usage: --typz-write root entry archive [preview-pdf|--render-preview]".into(),
+                );
             }
             let mut files = BTreeMap::new();
             let root = Path::new(&args[2]);
             collect(root, root, &mut files, &mut 0)?;
-            let data = encode(&args[3], &files)?;
+            let preview = match args.get(5).map(String::as_str) {
+                Some("--render-preview") => rendered_preview(root, &args[3]),
+                Some(file) => Some(fs::read(file)?),
+                None => None,
+            };
+            let data = if preview.is_some() {
+                encode_preview(&args[3], &files, preview.as_deref())?
+            } else {
+                encode(&args[3], &files)?
+            };
             fs::write(&args[4], data)?;
             Ok(args[3].clone())
         })()),
@@ -194,6 +278,35 @@ pub fn command() -> Option<Result<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_preview_is_optional_disposable_and_never_compiles() {
+        let files = BTreeMap::from([
+            ("main.typ".into(), b"#intentionally-invalid(".to_vec()),
+            ("blank-preview-0.pdf".into(), b"User project file".to_vec()),
+        ]);
+        let preview = b"%PDF-1.7\nCached render";
+        let bytes = encode_preview("main.typ", &files, Some(preview)).unwrap();
+        assert_eq!(decode(bytes.clone()).unwrap().1, files);
+        let path = std::env::temp_dir().join(format!(
+            "blank-preview-{}-{}.typz",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(cached_preview(&path).unwrap(), preview);
+        fs::write(&path, encode("main.typ", &files).unwrap()).unwrap();
+        assert!(cached_preview(&path).is_err());
+        fs::write(
+            &path,
+            encode_preview("main.typ", &files, Some(b"not a PDF")).unwrap(),
+        )
+        .unwrap();
+        assert!(cached_preview(&path).is_err());
+        fs::remove_file(path).unwrap();
+    }
     fn fixture(comment: &str, members: &[(&str, &[u8])]) -> Vec<u8> {
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
         writer.set_comment(comment).unwrap();

@@ -45,7 +45,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: native-workspace-${{ matrix.runner }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.toml', 'Cargo.lock', 'typst-compiler/Cargo.toml', 'typst-syntax-bridge/Cargo.toml') }}
+          key: native-workspace-${{ matrix.runner }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.toml', 'Cargo.lock', 'typst-compiler/Cargo.toml', 'typst-syntax-bridge/Cargo.toml', 'typst-container/Cargo.toml') }}
           restore-keys: native-workspace-${{ matrix.runner }}-${{ runner.arch }}-
       - name: Build release and run checks
         run: bash scripts/check-all.sh release

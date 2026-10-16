@@ -165,7 +165,15 @@ struct EditorRoot: View {
         VStack(spacing:0) {
             ZStack {
                 Group {
-                    if session.mode == .preview { PreviewView(session:session) }
+                    if session.mode == .preview {
+                        ZStack {
+                            PreviewView(session:session)
+                            if session.pdf == nil && session.compiling {
+                                HStack(spacing:8) { ProgressView().controlSize(.small); Text("Generating preview…").font(.system(size:12)).foregroundStyle(.secondary) }
+                                    .padding(12).accessibilityElement(children:.combine)
+                            }
+                        }
+                    }
                     else { NativeEditor(session:session) }
                 }.opacity(session.contactSheet ? 0 : 1).allowsHitTesting(!session.contactSheet).accessibilityHidden(session.contactSheet)
                 if session.contactSheet { ContactSheetView(session:session,thumbnails:session.thumbnails) }
@@ -284,6 +292,18 @@ struct PreviewView: NSViewRepresentable {
 }
 final class NavigablePDFView: PDFView {
     weak var session: DocumentSession?
+    private var fittedSize = NSSize.zero
+    override func layout() {
+        super.layout()
+        // A cached/fast compilation can install its PDF before SwiftUI gives
+        // PDFKit a viewport. Fit after real layout rather than to a zero frame.
+        if document != nil, autoScales, bounds.width > 0, bounds.height > 0, fittedSize != bounds.size {
+            fittedSize = bounds.size
+            layoutDocumentView()
+            let fit = scaleFactorForSizeToFit
+            if fit.isFinite && fit > 0 { scaleFactor = fit }
+        }
+    }
     override init(frame: NSRect) {
         super.init(frame:frame)
         observePageChanges()

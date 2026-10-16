@@ -192,7 +192,7 @@ struct InsertionSheet: View {
     @NativeState var text = ""
     @NativeState var extra = ""
     @NativeState var alt = ""
-    @NativeState var imageWidth = 85
+    @NativeState var imageWidth: Double?
     @NativeState var columns = 2
     @NativeState var rows = 3
     @StateObject private var citationSearch = CitationSearch()
@@ -226,7 +226,7 @@ struct InsertionSheet: View {
                     }
                     TextField("Caption",text:$extra).textFieldStyle(.roundedBorder)
                     TextField("Alternative text",text:$alt).textFieldStyle(.roundedBorder)
-                    Stepper("Width: \(imageWidth)%",value:$imageWidth,in:5...100,step:5)
+                    ImageWidthField(width:$imageWidth)
                 } else if session.insertionKind == "reference" {
                     ReferenceLabelField(text:$text,labels:referenceLabels,submit:{ insert() },cancel:{ session.sheet = nil }).frame(height:26)
                     Text("Choose an existing label or enter a new target.").font(.system(size:11)).foregroundStyle(.secondary)
@@ -311,7 +311,9 @@ struct InsertionSheet: View {
         case "table":
             let cells = (0..<rows*columns).map { "  [\($0 < columns ? "Column \($0+1)" : "")]," }.joined(separator:"\n")
             session.insertSource("#table(columns: \(columns),\n\(cells)\n)",block:true)
-        case "image": session.insertSource("#figure(image(\(jsonString(text)), width: \(imageWidth)%, alt: \(jsonString(alt))), caption: [\(escapeTypst(extra))])",block:true)
+        case "image":
+            let width = imageWidth.map { ", width: "+FigureFieldEdit.widthLiteral($0) } ?? ""
+            session.insertSource("#figure(image(\(jsonString(text))\(width), alt: \(jsonString(alt))), caption: [\(escapeTypst(extra))])",block:true)
         case "equation": session.insertSource("$ \(text) $",block:true)
         case "footnote": session.insertSource("#footnote[\(escapeTypst(text))]")
         case "link": session.insertSource("#link(\(jsonString(text)))[\(escapeTypst(extra.isEmpty ? text : extra))]")

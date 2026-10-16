@@ -15,7 +15,7 @@ sdk_major=${sdk_version%%.*}
 if [[ ! "$sdk_major" =~ ^[0-9]+$ ]] || (( 10#$sdk_major < 27 )); then
     echo "Builds require a macOS 27 or newer SDK (found $sdk_version at $sdk_path)" >&2; exit 2
 fi
-app_version=${BLANK_VERSION:-0.6.0}
+app_version=${BLANK_VERSION:-0.7.0}
 app_version=${app_version#v}
 if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?$ ]]; then
     echo 'BLANK_VERSION must be X.Y.Z or vX.Y.Z, optionally with a prerelease/build suffix' >&2; exit 2
@@ -68,7 +68,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>local.blank.swift-native</string>
 <key>CFBundleExecutable</key><string>blank_</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.6.0</string>
+<key>CFBundleShortVersionString</key><string>0.7.0</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>27.0</string>
@@ -77,9 +77,24 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Typst document</string><key>CFBundleTypeRole</key><string>Editor</string><key>NSDocumentClass</key><string>BlankDocument</string><key>LSHandlerRank</key><string>Alternate</string><key>LSItemContentTypes</key><array><string>org.typst.source</string><string>org.typst.project-container</string><string>local.blank.project-folder</string></array></dict></array>
 </dict></plist>
 PLIST
+# A project container is a document in Finder. Its storage representation must
+# not give it the generic ZIP icon or ZIP Quick Look provider.
+python3 - "$app/Contents/Info.plist" <<'PYINFO'
+import plistlib,sys
+path=sys.argv[1]
+with open(path,'rb') as f: info=plistlib.load(f)
+for declaration in info['UTImportedTypeDeclarations']:
+    if declaration['UTTypeIdentifier']=='org.typst.project-container':
+        declaration['UTTypeConformsTo']=['public.data','public.content']
+        declaration['UTTypeIcons']={'UTTypeIconText':'TYPZ','UTTypeSymbolName':'doc.richtext'}
+info['CFBundleDocumentTypes']=[dict(CFBundleTypeName=name,CFBundleTypeRole='Editor',NSDocumentClass='BlankDocument',LSHandlerRank='Alternate',LSItemContentTypes=[uti]) for name,uti in [('Typst document','org.typst.source'),('Typst document bundle','org.typst.project-container'),('Typst project folder','local.blank.project-folder')]]
+with open(path,'wb') as f: plistlib.dump(info,f)
+PYINFO
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $app_version" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $app_version" "$app/Contents/Info.plist"
 codesign --force --deep --sign - "$app"
+bash scripts/build-quicklook.sh "$app" "$sdk_path" "$app_version"
+codesign --force --sign - "$app"
 codesign --verify --deep --strict "$app"
 # Refresh the bundle's Finder date only after packaging succeeds.
 touch "$app"

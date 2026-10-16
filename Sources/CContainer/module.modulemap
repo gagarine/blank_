@@ -1,0 +1,1 @@
+module CContainer { header "blank_container.h" export * }

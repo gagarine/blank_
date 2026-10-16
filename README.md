@@ -11,13 +11,13 @@ Get the [latest release](https://github.com/gagarine/blank_/releases) (require m
 ## Features
 
 - **Three views, one document.** Switch between **Write**, **Source** and **Preview**, with shared editing history and Undo/Redo.
-- **Comfortable writing.** Format text, add headings and lists, insert images, and edit tables directly in your document. Collapse code blocks when you want to concentrate on the prose.
+- **Comfortable writing.** Format text, add headings and lists, insert images, and edit tables directly in your document. Images keep their natural size by default; choose Automatic or enter a width percentage directly. Hover a block to reveal its sliding handle, which hides while typing. Collapse code blocks when you want to concentrate on the prose.
 - **An outline that helps you move around.** Navigate headings, collapse sections, and drag sections to reorganize your writing.
 - **Search and page navigation.** Find text in your writing or PDF, browse page thumbnails, and use Contact Sheet to see several pages at once.
 - **Templates with previews.** Browse your own templates and Typst Universe in **File → Templates…**. See large previews, flip through pages, and scroll through the documentation and author information together. Usage examples have syntax colours. Create a new unsaved Untitled document or save your own document as a reusable template.
 - **Documents and portable bundles.** Open and edit `.typ` files, project folders and `.typz` document bundles. Save As lets you choose the format and explains where related files are kept. Automatic draft saving and reopening help you pick up where you left off.
 - **References with Zotero.** Search your personal and group libraries, insert and refresh citations, and choose a bibliography style.
-- **PDF export and sharing.** Preview your pages as you write, then export a PDF or share it from the app.
+- **PDF export and sharing.** Preview your pages as you write, then export a PDF or share it from the app. A quiet progress indicator appears while the first preview is generated.
 - **Automatic package downloads.** Typst packages download when needed and stay available offline. Remove the app’s downloads through **Settings → Typst packages → Clear Package Cache**.
 
 Use `/` for blocks and objects, **⌘K** for commands and **⌘1 / ⌘2 / ⌘3** to switch views. For a guided tour, open **Help → Tutorial**.
@@ -62,6 +62,12 @@ Ordinary builds contain no acceptance fixtures. `BLANK_BUILD_CHECKS=1` adds veri
 New Document starts empty. Save As offers **Typst document (.typ)**, **Typst document bundle (.typz)** and **Typst project folder**, with a short explanation beneath the selector. A `.typ` keeps dependencies in a matching `filename-assets` folder; literal file references are updated without regenerating the source. Projects with computed file paths should use a folder or bundle so those expressions and their original paths stay exact.
 
 A `.typz` opens as one editable document: Save, autosave, Rename, Move and Open Recent all refer to that file. Private working files stay in app-owned storage. Bundles follow the [Typst Project Container Format](https://codeberg.org/haydn/typesetter/src/branch/main/docs/typst-project-container-format.md): ZIP contents are the project root and the TOML ZIP comment specifies the authoritative entrypoint. Nested entrypoints, Unicode filenames and unreferenced project files are retained. Invalid entrypoints, unsafe paths, links, duplicate filenames and oversized projects are rejected. Limits are 10,000 members and 256 MiB compressed or expanded. ZIP preparation for native saves runs in the background with revision checks; the last file is retained if preparation fails. External replacements/deletion block saving over the bundle; Save As can keep local writing separately.
+
+Finder uses a native document icon for `.typz`. Saving a bundle includes an optional cached PDF for Finder thumbnails and full, multipage Quick Look; browsing reads that cache without compiling, extracting the project or accessing the network. Existing bundles need to be opened and saved to gain a cache. Opening a cached bundle displays its last saved PDF immediately while the current source compiles. Failed compilation keeps the last successful in-app preview.
+
+Caches are disposable: they are capped at 32 MiB and omitted if the project or cache exceeds the bundle limits. Saves reuse an already current render; otherwise cache generation runs in the background with a two-second budget. A missing cache never prevents saving or editing. Cache metadata lives in a versioned `blank_` table in the ZIP comment and names a collision-free PDF member, excluded from the editable project when reopened. Sandboxed Quick Look extensions use the small `typst-container` Rust library through `Sources/CContainer`; they do not launch the compiler.
+
+A small warm-cache cached-PDF helper sample took a median 6.2 ms over five reads, with 6.5 MiB peak child RSS. This excludes extension launch, PDF drawing and editor memory; larger preview performance has not been measured. The native thumbnail API and full Quick Look are checked separately from source/compiler tests.
 
 A local release-helper sample with 10 MiB of incompressible asset data took 0.26 s to write (0.20 s user CPU, 48 MiB peak RSS) and 0.02 s to read (29 MiB peak RSS). These warm-cache helper measurements exclude editor memory, main-thread snapshot I/O and end-to-end save-panel latency; larger projects have not been profiled.
 

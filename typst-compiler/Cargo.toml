@@ -5,6 +5,7 @@ edition = "2024"
 build = "../scripts/macos-build.rs"
 
 [dependencies]
+blank-container = { path = "../typst-container" }
 typst.workspace = true
 typst-syntax.workspace = true
 typst-pdf.workspace = true

@@ -35,6 +35,9 @@ finish() {
 trap finish EXIT
 mkdir -p "$(dirname "$app")"
 ditto "$repo/build/blank_.app" "$app"
+# Verification hosts have a separate bundle identity. Leave production Quick
+# Look registration to the real app, verified by check-bundle.sh.
+rm -rf "$app/Contents/PlugIns"
 cp "$repo/.build/$configuration/$host" "$app/Contents/MacOS/blank_.next"
 mv "$app/Contents/MacOS/blank_.next" "$app/Contents/MacOS/blank_"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $identifier" "$app/Contents/Info.plist"
@@ -54,7 +57,7 @@ if [[ "$mode" == background ]]; then
     for phase in prepare verify disabled-verify; do run "--draft-integration-$phase"; done
 else
     echo 'Running explicit interactive UI checks; the disposable test app will take focus.'
-    for suite in format selection-style find paragraph-space template reference; do
+    for suite in preview image-sizing format selection-style find paragraph-space template reference; do
         export BLANK_DATA_DIR="$portable/$suite-data"; mkdir -p "$BLANK_DATA_DIR"
         run "--$suite-self-test"
     done

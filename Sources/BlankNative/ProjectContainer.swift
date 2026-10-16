@@ -1,6 +1,7 @@
 import AppKit
 import BlankCore
 import UniformTypeIdentifiers
+import PDFKit
 
 // The archive URL is the document identity. Extracted files are private working
 // state, used only by the existing source model and official compiler.
@@ -79,13 +80,18 @@ struct PreparedContainerWrite {
 }
 
 enum TypstContainer {
-    static func encode(_ files: [String:Data],entry: String) throws -> Data {
+    static func encode(_ files: [String:Data],entry: String,preview: Data? = nil,renderPreview: Bool = false) throws -> Data {
         let stage = AppController.temporaryDirectory.appendingPathComponent("blank-typz-"+UUID().uuidString)
         let contents = stage.appendingPathComponent("project"), output = stage.appendingPathComponent("project.typz")
         try FileManager.default.createDirectory(at:contents,withIntermediateDirectories:true)
         defer { try? FileManager.default.removeItem(at:stage) }
         for (path,data) in files { try DocumentSession.writeDependency(data,path:path,root:contents) }
-        _ = try run(["--typz-write",contents.path,entry,output.path])
+        var arguments = ["--typz-write",contents.path,entry,output.path]
+        if let preview {
+            let cached = stage.appendingPathComponent("Preview.pdf")
+            try preview.write(to:cached); arguments.append(cached.path)
+        } else if renderPreview { arguments.append("--render-preview") }
+        _ = try run(arguments)
         return try Data(contentsOf:output)
     }
     static func run(_ arguments: [String]) throws -> String {
@@ -113,15 +119,20 @@ enum TypstContainer {
     var containerDirectory: URL { AppController.dataDirectory.appendingPathComponent("containers/"+id) }
     func openContainer(_ url: URL) throws {
         let workspace = containerDirectory.appendingPathComponent(UUID().uuidString)
+        let cachedPreview = containerDirectory.appendingPathComponent(UUID().uuidString+".pdf")
+        defer { try? FileManager.default.removeItem(at:cachedPreview) }
         try FileManager.default.createDirectory(at:containerDirectory,withIntermediateDirectories:true)
         do {
             guard (try url.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? Int.max) <= 256*1024*1024 else { throw CocoaError(.fileReadTooLarge) }
             let baseline = try Data(contentsOf:url)
-            let file = try TypstContainer.run(["--typz-read",url.path,workspace.path])
+            let file = try TypstContainer.run(["--typz-read",url.path,workspace.path,cachedPreview.path])
             guard try Data(contentsOf:url) == baseline else { throw CocoaError(.fileReadUnknown) }
             try open(workspace,selectedEntry:file,rememberProject:false)
             containerURL = url.standardizedFileURL; containerBaseline = baseline
             assets = try projectSnapshot().filter { buffers[$0.key] == nil }
+            if let data = try? Data(contentsOf:cachedPreview), let document = PDFDocument(data:data) {
+                pdfData = data; pdf = document
+            }
             installWatchers(); onTitle?()
         } catch { try? FileManager.default.removeItem(at:workspace); throw error }
     }
@@ -170,8 +181,9 @@ enum TypstContainer {
             editor?.finishComposition()
             if containerURL?.standardizedFileURL == url.standardizedFileURL { try checkContainerUnchanged() }
             let files = try projectSnapshot(), current = revision, entry = entry
+            let preview = compileRevision == current ? pdfData : nil
             DispatchQueue.global(qos:.userInitiated).async { [weak self] in
-                let result = Result { try TypstContainer.encode(files,entry:entry) }
+                let result = Result { try TypstContainer.encode(files,entry:entry,preview:preview,renderPreview:preview == nil) }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { completion(CocoaError(.userCancelled)); return }
                     guard self.revision == current else {
@@ -193,7 +205,7 @@ enum TypstContainer {
         if let prepared = preparedContainerWrite, prepared.url == url, prepared.revision == revision {
             files = prepared.files; data = prepared.data
         } else {
-            files = try projectSnapshot(); data = try TypstContainer.encode(files,entry:entry)
+            files = try projectSnapshot(); data = try TypstContainer.encode(files,entry:entry,preview:compileRevision == revision ? pdfData : nil)
         }
         preparedContainerWrite = nil
         // New containers adopt a private working copy before replacing the target.

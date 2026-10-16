@@ -1,4 +1,5 @@
 import AppKit
+import PDFKit
 import BlankCore
 @testable import BlankNative
 
@@ -68,6 +69,11 @@ import BlankCore
             check(complete { native.move(to:renamed,completionHandler:$0) } == nil && native.fileURL == renamed && !fm.fileExists(atPath:url.path),"Native Rename/Move acts on the .typz file")
             let export = folder.appendingPathComponent("Export.typz")
             check(complete { native.save(to:export,ofType:DocumentFormat.container.typeName,for:.saveToOperation,completionHandler:$0) } == nil && r.containerURL == renamed,"Native Save To exports a bundle without adopting its identity")
+            let preview = folder.appendingPathComponent("Preview.pdf")
+            _ = try TypstContainer.run(["--typz-preview",export.path,preview.path])
+            check(PDFDocument(data:try Data(contentsOf:preview))?.page(at:0)?.string?.contains("New writing") == true,"A native bundle save contains its current rendered Quick Look PDF")
+            let cached = session(); try cached.open(export)
+            check(cached.pdf != nil && cached.assets.keys.allSatisfy { !$0.hasPrefix("blank-preview-") },"Opening a saved bundle shows its cached PDF without exposing cache files as project assets")
             let folderModel = r.buffer
             let folderCopy = folder.appendingPathComponent("Folder copy")
             try r.saveFormatted(to:folderCopy,format:.folder)
