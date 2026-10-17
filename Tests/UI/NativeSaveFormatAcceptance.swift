@@ -4,7 +4,8 @@ import BlankCore
 
 @MainActor enum NativeSaveFormatAcceptance {
     static func showFixture(_ controller: DocumentWindow) {
-        controller.session.buffer.loadExternal("= A portable document\n\nText, images and chapters stay together.\n")
+        controller.session.assets["assets/photo.png"] = NativeFigureAcceptance.imageData(.systemBlue)
+        controller.session.buffer.loadExternal("= A portable document\n\nText, images and chapters stay together.\n\n#figure(image(\"assets/photo.png\"), caption: [A project image])\n")
         controller.session.changed(); controller.session.saveWork?.cancel()
         try! controller.session.saveFormatted(to:AppController.temporaryDirectory.appendingPathComponent("Portable document.typz"),format:.container)
         controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
@@ -38,7 +39,9 @@ import BlankCore
         }
         NSApp.activate(ignoringOtherApps:true); controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
         wait("Save format fixture has native focus") { NSApp.isActive && controller.window?.isKeyWindow == true }
-        controller.session.buffer.loadExternal("= Café 日本\n\nNative save format test")
+        let image = NativeFigureAcceptance.imageData(.systemBlue)
+        controller.session.assets["assets/photo.png"] = image
+        controller.session.buffer.loadExternal("= Café 日本\n\nNative save format test\n\n#figure(image(\"assets/photo.png\"), caption: [Keep this image])")
         controller.session.changed(); controller.session.saveWork?.cancel()
         // Inspect the real remote sheet, then verify its selected format through
         // the same NSDocument backend. Remote panel confirmation is checked with
@@ -61,6 +64,7 @@ import BlankCore
             wait("Native Save As adopts \(format.label)") { controller.window?.attachedSheet == nil && controller.session.documentFormat == format && !controller.session.dirty }
             check(controller.session.documentURL?.path.hasPrefix(root.path+"/") == true,"Save As writes only into disposable test data")
             check(controller.nativeDocument.fileURL == controller.session.documentURL,"Native file identity follows the selected save format")
+            check(controller.session.buffer.source.contains("image(\"assets/photo.png\")") && (try? Data(contentsOf:controller.session.root!.appendingPathComponent("assets/photo.png"))) == image,"Native Save As keeps the image and its assets path in every format")
             if format == .container, let editor = controller.session.editor {
                 let original = controller.session.buffer.source
                 let disk = try! Data(contentsOf:controller.session.documentURL!)

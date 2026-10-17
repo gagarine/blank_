@@ -914,6 +914,25 @@ final class DocumentTests {
         expectEqual(b.imports.map(\.path),["tools.typ"])
         expectEqual(literalAssetPaths(source,b.parsed),["a\"b.png","table.csv","refs.bib","custom.csl"])
     }
+    @Test("Nested file references are discovered without changing outermost traversal")
+    func testNestedFileReferences() {
+        let source = "// #figure(image(\"example.png\"))\n`#image(\"code.png\")`\n#figure(image(\"assets/café 日本.png\"), caption: [Keep *this*])\n#align(center, image(\"assets/other.png\"))\n#table(columns: 1, [#image(\"assets/cell.png\")])\n#text(read(\"data/note.txt\"))\n#align(center)[#bibliography(\"refs.bib\", style: \"styles/custom.csl\")]"
+        let parsed = ParsedSource.parse(source)
+        expectEqual(literalFileReferences(source,parsed).map(\.path),["assets/café 日本.png","assets/other.png","assets/cell.png","data/note.txt","refs.bib","styles/custom.csl"])
+        let figure = parsed.tree.descendants("FuncCall").first!
+        expectEqual(figure.descendants("FuncCall").count,1)
+        expectEqual(figure.allDescendants("FuncCall").count,2)
+        for reference in literalFileReferences(source,parsed) {
+            expectEqual(source.bytes(reference.source),typstStringLiteral(reference.path))
+        }
+        expectFalse(hasComputedFileReferences(source,parsed))
+        for computed in ["#figure(image(\"assets/\" + name))","#align(center)[#image(path)]","#table(columns: 1, [#read(path)])","#align(center)[#bibliography(path)]"] {
+            expectTrue(hasComputedFileReferences(computed,ParsedSource.parse(computed)))
+        }
+        let decoded = "#figure(image.decode(bytes(\"image bytes\")))"
+        expectFalse(hasComputedFileReferences(decoded,ParsedSource.parse(decoded)))
+        expectTrue(literalFileReferences(decoded,ParsedSource.parse(decoded)).isEmpty)
+    }
     @Test("Unicode patch round trips")
     func testRandomUnicodePatchRoundtrip() {
         let pool = ["a","é","😀","中","e\u{301}","\n","*","\\"]

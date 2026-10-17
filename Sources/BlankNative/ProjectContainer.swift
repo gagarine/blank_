@@ -16,7 +16,7 @@ enum DocumentFormat: Int, CaseIterable {
     }
     var detail: String {
         switch self {
-        case .document: return "A Typst source file, with related files in a matching “-assets” folder."
+        case .document: return "A Typst source file, with imported images in an adjacent “assets” folder."
         case .folder: return "An ordinary folder containing your Typst source and related files."
         case .container: return "Keeps your document and related files together in one file. Open and edit it directly."
         }
@@ -258,14 +258,29 @@ enum TypstContainer {
         }
     }
     func saveSingleDocument(to url: URL) throws {
-        let files = try projectSnapshot(), prefix = url.deletingPathExtension().lastPathComponent+"-assets"
-        let names = Dictionary(uniqueKeysWithValues:files.keys.map { ($0,$0 == entry ? url.lastPathComponent : prefix+"/"+$0) })
+        let files = try projectSnapshot()
+        // All formats share the same project-relative hierarchy. Only the entry
+        // adopts the selected filename; assets/, chapters/ and custom folders
+        // keep their names instead of acquiring a filename-derived prefix.
+        let names = Dictionary(uniqueKeysWithValues:files.keys.map { ($0,$0 == entry ? url.lastPathComponent : $0) })
+        let destinations = names.values.map { $0.precomposedStringWithCanonicalMapping.lowercased() }
+        let unique = Set(destinations)
+        guard unique.count == names.count,
+              !destinations.contains(where:{ name in
+                  var parent = (name as NSString).deletingLastPathComponent
+                  while !parent.isEmpty {
+                      if unique.contains(parent) { return true }
+                      parent = (parent as NSString).deletingLastPathComponent
+                  }
+                  return false
+              }) else { throw CocoaError(.fileWriteFileExists) }
         var output = files
         func relocated(_ source: String,_ initial: EditSelection,_ path: String) -> (String,EditSelection) {
             var text = source, selection = initial
             for reference in literalFileReferences(source,ParsedSource.parse(source)).sorted(by:{ $0.source.start > $1.source.start }) {
                 guard !reference.path.hasPrefix("@"), let original = projectAssetPath(reference.path,file:path), let mapped = names[original], let newFile = names[path] else { continue }
-                let replacement = typstStringLiteral(relativeAssetPath(mapped,file:newFile))
+                if original == mapped && (reference.path.hasPrefix("/") || (path as NSString).deletingLastPathComponent == (newFile as NSString).deletingLastPathComponent) { continue }
+                let replacement = typstStringLiteral(reference.path.hasPrefix("/") ? "/"+mapped : relativeAssetPath(mapped,file:newFile))
                 if replacement == source.bytes(reference.source) { continue }
                 func position(_ value: Int) -> Int {
                     value <= reference.source.start ? value : value >= reference.source.end ? value+replacement.utf8.count-reference.source.count : reference.source.start+replacement.utf8.count
@@ -275,11 +290,12 @@ enum TypstContainer {
             }
             return (text,selection)
         }
-        // Computed paths cannot be rewritten safely when moving dependencies.
-        // Folder and .typz saves preserve their original root and all expressions.
+        // A .typ export can rename/relocate the entry itself. Computed paths
+        // may refer to that file too, so retain conservative preflight rather
+        // than guessing at expression rewrites. Folder/bundle saves keep it.
         for (path,data) in files where path.lowercased().hasSuffix(".typ") {
             guard let source = String(data:data,encoding:.utf8) else { throw CocoaError(.fileReadInapplicableStringEncoding) }
-            if files.count > 1 && Self.hasComputedFileReferences(source,ParsedSource.parse(source)) {
+            if files.count > 1 && hasComputedFileReferences(source,ParsedSource.parse(source)) {
                 throw NSError(domain:"blank_",code:1,userInfo:[NSLocalizedDescriptionKey:"This project uses computed file paths. Choose Typst project folder or Typst document bundle (.typz) to preserve them."])
             }
             output[path] = Data(relocated(source,buffers[path]?.selection ?? EditSelection(0,0),path).0.utf8)
@@ -304,12 +320,5 @@ enum TypstContainer {
         bases = buffers.mapValues(\.source); dirty = false; revision += 1
         installWatchers(); onTitle?(); persistRecovery(); NSDocumentController.shared.noteNewRecentDocumentURL(url)
         NotificationCenter.default.post(name:.blankDocumentSaved,object:self)
-    }
-    static func hasComputedFileReferences(_ source: String,_ parsed: ParsedSource) -> Bool {
-        let consumers = Set(["image","read","csv","json","yaml","xml","cbor"])
-        return parsed.tree.descendants("FuncCall").contains { call in
-            guard let name = call.children.first, consumers.contains(source.bytes(name.span)), let args = call.children.first(where:{ $0.kind == "Args" }), let argument = args.children.first(where:{ !["Space","LeftParen","RightParen","Comma","LineComment","BlockComment","Named"].contains($0.kind) }) else { return false }
-            return argument.kind != "Str"
-        } || ["ModuleInclude","ModuleImport"].contains { kind in parsed.tree.descendants(kind).contains { !$0.children.contains(where:{ $0.kind == "Str" }) } } || bibliographyCalls(source,parsed).contains { $0.inputs.contains { $0.format == "computed" } }
     }
 }

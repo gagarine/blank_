@@ -16,8 +16,15 @@ public struct SyntaxNode: Codable {
     public var rawText: String? = nil
     public var span: ByteSpan { ByteSpan(start, end) }
     public var markup: SyntaxNode? { children.first { $0.kind == "Markup" } }
+    // Outermost matches only: callers projecting/editing a construct must not
+    // accidentally process its nested instances a second time.
     public func descendants(_ kind: String) -> [SyntaxNode] {
         self.kind == kind ? [self] : children.flatMap { $0.descendants(kind) }
+    }
+    // Dependency discovery needs every match, including calls nested in other
+    // calls (for example figure(image(...)) and table cells).
+    public func allDescendants(_ kind: String) -> [SyntaxNode] {
+        (self.kind == kind ? [self] : []) + children.flatMap { $0.allDescendants(kind) }
     }
 }
 public struct SyntaxStyle: Codable {

@@ -34,7 +34,7 @@ public func literalAssetPaths(_ source: String,_ parsed: ParsedSource) -> [Strin
 public func literalFileReferences(_ source: String,_ parsed: ParsedSource) -> [LiteralFileReference] {
     var paths = literalAssetReferences(source,parsed)
     for kind in ["ModuleInclude","ModuleImport"] {
-        for node in parsed.tree.descendants(kind) {
+        for node in parsed.tree.allDescendants(kind) {
             if let argument = node.children.first(where:{ $0.kind == "Str" }), let path = argument.stringValue { paths.append(LiteralFileReference(path:path,source:argument.span)) }
         }
     }
@@ -44,13 +44,26 @@ public func literalFileReferences(_ source: String,_ parsed: ParsedSource) -> [L
 private func literalAssetReferences(_ source: String,_ parsed: ParsedSource) -> [LiteralFileReference] {
     var paths: [LiteralFileReference] = []
     func string(_ node: SyntaxNode) -> String? { node.stringValue }
-    for call in parsed.tree.descendants("FuncCall") {
-        guard let name = call.children.first, ["image","read","csv","json","yaml","xml","cbor"].contains(source.bytes(name.span)), let args = call.children.first(where:{ $0.kind == "Args" }) else { continue }
-        if let literal = args.children.first(where:{ $0.kind == "Str" }), let path = string(literal) { paths.append(LiteralFileReference(path:path,source:literal.span)) }
+    for call in parsed.tree.allDescendants("FuncCall") {
+        if let literal = fileArgument(call,source:source), literal.kind == "Str", let path = string(literal) { paths.append(LiteralFileReference(path:path,source:literal.span)) }
     }
     for call in bibliographyCalls(source,parsed) {
         for input in call.inputs { if let path = input.path { paths.append(LiteralFileReference(path:path,source:input.span)) } }
         if let span = call.style, let value = parsed.tree.descendants("Str").first(where:{ $0.span == span })?.stringValue, value.lowercased().hasSuffix(".csl") { paths.append(LiteralFileReference(path:value,source:span)) }
     }
     return paths
+}
+
+private func fileArgument(_ call: SyntaxNode,source: String) -> SyntaxNode? {
+    guard let name = call.children.first, ["image","read","csv","json","yaml","xml","cbor"].contains(source.bytes(name.span)),
+          let args = call.children.first(where:{ $0.kind == "Args" }) else { return nil }
+    return args.children.first { !["Space","Parbreak","LeftParen","RightParen","Comma","LineComment","BlockComment","Named"].contains($0.kind) }
+}
+
+public func hasComputedFileReferences(_ source: String,_ parsed: ParsedSource) -> Bool {
+    parsed.tree.allDescendants("FuncCall").contains { call in
+        fileArgument(call,source:source).map { $0.kind != "Str" } ?? false
+    } || ["ModuleInclude","ModuleImport"].contains { kind in
+        parsed.tree.allDescendants(kind).contains { !$0.children.contains(where:{ $0.kind == "Str" }) }
+    } || bibliographyCalls(source,parsed).contains { $0.inputs.contains { $0.format == "computed" } }
 }

@@ -42,7 +42,7 @@ public func bibliographyCalls(_ source: String,_ parsed: ParsedSource) -> [Bibli
         }
         return nil
     }
-    return parsed.tree.descendants("FuncCall").compactMap { call in
+    return parsed.tree.allDescendants("FuncCall").compactMap { call in
         guard call.children.first.map({ source.bytes($0.span) }) == "bibliography", let args = call.children.first(where:{ $0.kind == "Args" }) else { return nil }
         let values = args.children.filter { !trivia.contains($0.kind) && $0.kind != "Named" }
         let inputs = values.flatMap { node -> [BibliographyInput] in

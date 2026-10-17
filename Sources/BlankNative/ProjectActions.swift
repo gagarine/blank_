@@ -61,11 +61,7 @@ import BlankCore
         let entryModel = buffers[entry]!
         var entrySource = entryModel.source, entrySelection = entryModel.selection
         let nested = !(entry as NSString).deletingLastPathComponent.isEmpty
-        let consumers = Set(["image","read","csv","json","yaml","xml","cbor"])
-        let computed = entryModel.parsed.tree.descendants("FuncCall").contains { call in
-            guard let name = call.children.first, consumers.contains(entryModel.source.bytes(name.span)), let args = call.children.first(where:{ $0.kind == "Args" }), let argument = args.children.first(where:{ !["Space","LeftParen","RightParen","Comma","LineComment","BlockComment","Named"].contains($0.kind) }) else { return false }
-            return argument.kind != "Str"
-        } || ["ModuleInclude","ModuleImport"].contains { kind in entryModel.parsed.tree.descendants(kind).contains { !$0.children.contains(where:{ $0.kind == "Str" }) } } || bibliographyCalls(entryModel.source,entryModel.parsed).contains { $0.inputs.contains { $0.format == "computed" } }
+        let computed = hasComputedFileReferences(entryModel.source,entryModel.parsed)
         let retainNestedEntry = nested && computed
         if retainNestedEntry {
             // An ordinary include wrapper keeps computed relative paths rooted

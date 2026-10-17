@@ -24,6 +24,7 @@ import BlankTestSupport
                 FileAcceptance.run()
                 ProjectAcceptance.run()
                 ContainerAcceptance.run()
+                AssetFormatAcceptance.run()
                 BibliographyConversionAcceptance.run()
                 NativeDocumentAcceptance.run()
                 NativeUniverseAcceptance.run(original:original)

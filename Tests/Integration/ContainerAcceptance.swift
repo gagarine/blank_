@@ -100,20 +100,20 @@ import BlankCore
             let typingID = plain.buffer.undoID
             plain.buffer.selection = EditSelection(plain.buffer.source.utf8.count,plain.buffer.source.utf8.count)
             try plain.saveFormatted(to:folder.appendingPathComponent("Single.typ"),format:.document)
-            check(plain.buffer === plainModel && plain.buffer.source.contains("Single-assets/chapter.typ") && plain.buffer.source.hasPrefix("// Keep comments"),"Single .typ save rebases literal dependencies and keeps canonical buffers")
-            check(fm.fileExists(atPath:folder.appendingPathComponent("Single-assets/note.txt").path),"Single .typ dependencies use the filename-assets folder")
+            check(plain.buffer === plainModel && plain.buffer.source.contains("\"chapter.typ\"") && plain.buffer.source.hasPrefix("// Keep comments"),"Single .typ save keeps dependency paths and canonical buffers")
+            check(fm.fileExists(atPath:folder.appendingPathComponent("note.txt").path) && !fm.fileExists(atPath:folder.appendingPathComponent("Single-assets").path),"Single .typ dependencies retain the project hierarchy without a filename prefix")
             let savedSingle = plain.buffer.source, savedSelection = plain.buffer.selection
             check(plain.buffer.undoID == typingID,"Single-file Save As preserves the identity of the last user edit")
             plain.undo(); plain.saveWork?.cancel()
-            check(!plain.buffer.source.hasSuffix("日本👩🏽‍💻") && plain.buffer.source.contains("Single-assets/chapter.typ"),"Undo after single-file Save As reverses typing and keeps relocated paths")
+            check(!plain.buffer.source.hasSuffix("日本👩🏽‍💻") && plain.buffer.source.contains("\"chapter.typ\""),"Undo after single-file Save As reverses typing and keeps project paths")
             compile(plain)
             plain.undo(true); plain.saveWork?.cancel()
             check(plain.buffer.source == savedSingle && plain.buffer.selection == savedSelection,"Redo after relocation restores Unicode source and selection exactly")
             let reopened = session(); try reopened.open(folder.appendingPathComponent("Single.typ")); compile(reopened)
-            let collision = folder.appendingPathComponent("Collision-assets/note.txt")
+            let collision = folder.appendingPathComponent("assets/note.txt")
             try fm.createDirectory(at:collision.deletingLastPathComponent(),withIntermediateDirectories:true)
             try external.write(to:collision)
-            let draft = session(); draft.assets["note.txt"] = Data("Local".utf8)
+            let draft = session(); draft.assets["assets/note.txt"] = Data("Local".utf8)
             do { try draft.saveFormatted(to:folder.appendingPathComponent("Collision.typ"),format:.document); fatalError("Dependency overwritten") } catch {}
             check(try !fm.fileExists(atPath:folder.appendingPathComponent("Collision.typ").path) && Data(contentsOf:collision) == external,"Single-file save preflights dependency collisions")
 
