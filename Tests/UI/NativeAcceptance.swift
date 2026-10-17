@@ -48,13 +48,11 @@ import BlankCore
         NativeDeleteAcceptance.run(controller:controller)
         NativeFigureAcceptance.run(controller:controller)
         NativeBlockSourceAcceptance.run(controller:controller)
-        NativeLabelAcceptance.run(controller:controller)
         NativeSidebarAcceptance.run(controller:controller)
         NativeFormattingAcceptance.run(controller:controller)
-        // Foreground/pointer fixtures run once in their own acceptance process.
-        // scripts/check-native.sh ui invokes --selection-style-self-test separately.
+        // Foreground, decoration and repeated-sheet fixtures run once in their
+        // own acceptance processes through scripts/check-native.sh ui.
         NativeGoAcceptance.text(original:controller)
-        NativeCitationAcceptance.run(controller:controller)
         func pumpNativeEvents(until deadline: Date) {
             for _ in 0..<32 {
                 guard Date() < deadline, let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }

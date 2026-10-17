@@ -39,6 +39,7 @@ import BlankTestSupport
             else if args.contains("--block-source-self-test") { NativeBlockSourceAcceptance.run(controller:controller) }
             else if args.contains("--label-self-test") { NativeLabelAcceptance.run(controller:controller) }
             else if args.contains("--reference-self-test") { NativeReferenceAcceptance.run(controller:controller) }
+            else if args.contains("--citation-self-test") { NativeCitationAcceptance.run(controller:controller) }
             else if args.contains("--figure-self-test") { NativeFigureAcceptance.run(controller:controller) }
             else if args.contains("--template-self-test") {
                 NativeTemplateAcceptance.run(original:controller) { library,chooser,starters in try NativeTemplateUIAcceptance.run(original:controller,library:library,chooser:chooser,starters:starters) }

@@ -32,7 +32,21 @@ import BlankCore
             check(range.location != NSNotFound,"Fixture retains visible \(text)"); return range
         }
         func color(_ text: String,_ offset: Int = 0) -> NSColor? {
-            editor.layoutManager?.temporaryAttribute(.backgroundColor,atCharacterIndex:range(text).location+offset,effectiveRange:nil) as? NSColor
+            guard let current = session.editor else { return nil }
+            let location = (current.string as NSString).range(of:text).location
+            guard location != NSNotFound else { return nil }
+            return current.layoutManager?.temporaryAttribute(.backgroundColor,atCharacterIndex:location+offset,effectiveRange:nil) as? NSColor
+        }
+        func awaitDecoration(_ label: String,_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while (session.editor == nil || !condition()) && Date() < deadline {
+                for _ in 0..<32 {
+                    guard let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    NSApp.sendEvent(event)
+                }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
+            }
+            check(session.editor != nil && condition(),label)
         }
         for label in ["<intro>","<note>","<strong-tag>","<list-tag>","<cell-tag>","<next-cell>"] {
             check(color(label) == .quaternaryLabelColor,"Write distinguishes literal \(label) with a display-only tag background")
@@ -56,25 +70,23 @@ import BlankCore
             check(!session.searchController.searching,"Native label search completes")
         }
         search("note")
-        check(color("<note>") == .quaternaryLabelColor && color("<note>",1) == NSColor.systemYellow.withAlphaComponent(0.8),"Find overlays only the matched part of a label")
+        awaitDecoration("Find overlays only the matched part of a label") { color("<note>") == .quaternaryLabelColor && color("<note>",1) == NSColor.systemYellow.withAlphaComponent(0.8) }
         search("")
-        check(color("<note>",1) == .quaternaryLabelColor,"Empty Find restores the tag background")
+        awaitDecoration("Empty Find restores the tag background") { color("<note>",1) == .quaternaryLabelColor }
         search("absent-label")
-        check(color("<note>") == .quaternaryLabelColor,"Zero-result Find retains tag decoration")
+        awaitDecoration("Zero-result Find retains tag decoration") { color("<note>") == .quaternaryLabelColor }
         session.searchQuery = "intro"; session.searchQuery = "note"
         let deadline = Date().addingTimeInterval(5)
         while session.searchController.searching && Date() < deadline { RunLoop.main.run(until:Date().addingTimeInterval(0.01)) }
-        check(color("<intro>",1) == .quaternaryLabelColor && color("<note>",1) == NSColor.systemYellow.withAlphaComponent(0.8),"Rapid Find queries reject stale highlights")
+        awaitDecoration("Rapid Find queries reject stale highlights") { color("<intro>",1) == .quaternaryLabelColor && color("<note>",1) == NSColor.systemYellow.withAlphaComponent(0.8) }
         session.hideSearch()
-        check(color("<note>",1) == .quaternaryLabelColor && editor.layoutManager?.temporaryAttribute(.foregroundColor,atCharacterIndex:range("<note>").location+1,effectiveRange:nil) == nil,"Closing Find restores the background and clears search text color")
+        awaitDecoration("Closing Find restores the background and clears search text color") { color("<note>",1) == .quaternaryLabelColor && editor.layoutManager?.temporaryAttribute(.foregroundColor,atCharacterIndex:range("<note>").location+1,effectiveRange:nil) == nil }
         session.switchMode(.source)
-        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
-        check(editor.string.utf8.elementsEqual(fixture.utf8) && color("<note>") == nil,"Source retains exact characters without Write tag backgrounds")
+        awaitDecoration("Source retains exact characters without Write tag backgrounds") { editor.string.utf8.elementsEqual(fixture.utf8) && color("<note>") == nil }
         editor.selectAll(nil); editor.copy(nil)
         check(board.string(forType:.string)?.utf8.elementsEqual(fixture.utf8) == true,"Source clipboard remains byte-exact")
         session.switchMode(.write)
-        RunLoop.main.run(until:Date().addingTimeInterval(0.1))
-        check(color("<note>") == .quaternaryLabelColor,"Returning to Write restores tag decoration")
+        awaitDecoration("Returning to Write restores tag decoration") { color("<note>") == .quaternaryLabelColor }
 
         let local = "Café <first>\n\n日本 <later>\n\n#table(columns: 1, [Cell <cell>], [Other])"
         session.buffer.loadExternal(local); editor.refresh(reveal:true)

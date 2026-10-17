@@ -35,7 +35,11 @@ import BlankCore
         func waitForRequest(_ count: Int) {
             let deadline = Date().addingTimeInterval(3)
             while CitationAcceptanceProtocol.requests.count < count && Date() < deadline {
-                RunLoop.main.run(until:Date().addingTimeInterval(0.05))
+                for _ in 0..<32 {
+                    guard let event = NSApp.nextEvent(matching:.any,until:Date(),inMode:.default,dequeue:true) else { break }
+                    NSApp.sendEvent(event)
+                }
+                RunLoop.main.run(until:Date().addingTimeInterval(0.01))
             }
             RunLoop.main.run(until:Date().addingTimeInterval(0.2))
         }
